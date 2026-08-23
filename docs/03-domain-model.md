@@ -31,6 +31,15 @@ The `bookings` table carries `(practitioner_id, starts_at)` and the partial uniq
 columns is what makes a computed slot exclusive. That index *is* the slot table, in effect — it just
 only has rows for slots someone actually wanted.
 
+**A clarification on "never update," since it is easy to over-read.** `01-architecture.md`'s "nothing
+is ever updated" describes the `events` table — that one truly is insert-only, forever. The `bookings`
+projection is different: the same row's `status` column changes via ordinary SQL `UPDATE` as the
+booking moves through its lifecycle (held → confirmed → cancelled, etc.), because the partial unique
+index needs a single stable row per booking to apply against. The rule is not "no SQL `UPDATE`
+anywhere" — it is "the projection is never the thing you write *to* without a causing event; every
+such `UPDATE` happens in the same transaction as the event `INSERT` that derived it, so the two can
+never be observed out of sync."
+
 ---
 
 ## 2. Policy — the authority
@@ -193,6 +202,7 @@ The append-only log. Every row is immutable.
 | `ALTERNATIVES_OFFERED` | — | Replacement slots computed and pushed |
 | `NO_SHOW_ELIGIBLE` | — | Start + grace elapsed |
 | `NO_SHOW_CHARGED` | **in** | Debit against mandate succeeded |
+| `BOOKING_COMPLETED` | — | Merchant marks attendance; booking finishes normally |
 | `ACTION_REFUSED` | — | A gate or bound rejected a command ★★ |
 
 ★ the B5 failure path.
