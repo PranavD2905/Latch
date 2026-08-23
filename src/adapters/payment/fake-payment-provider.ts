@@ -6,6 +6,8 @@ import {
   type CaptureDepositParams,
   type CaptureDepositResult,
   type PaymentProvider,
+  type RefundDepositParams,
+  type RefundDepositResult,
 } from '../../ports/payment-provider.js'
 
 export type PaymentScenario = 'success' | 'decline' | 'timeout' | 'mandate_ceiling_exceeded'
@@ -26,6 +28,7 @@ export type PaymentScenario = 'success' | 'decline' | 'timeout' | 'mandate_ceili
 export class FakePaymentProvider implements PaymentProvider {
   private readonly scenarios = new Map<string, PaymentScenario>()
   private readonly captured = new Map<string, CaptureDepositResult>()
+  private readonly refunded = new Map<string, RefundDepositResult>()
 
   setScenario(idempotencyKey: string, scenario: PaymentScenario): void {
     this.scenarios.set(idempotencyKey, scenario)
@@ -46,10 +49,21 @@ export class FakePaymentProvider implements PaymentProvider {
       case 'mandate_ceiling_exceeded':
         throw new MandateCeilingExceededError(params.reference)
       case 'success': {
-        const result: CaptureDepositResult = { paymentId: `pay_${ulid()}`, amountPaise: params.amountPaise }
+        const result: CaptureDepositResult = { paymentId: `pay_${ulid()}`, amountPaise: params.amountPaise, instrument: 'upi' }
         this.captured.set(params.idempotencyKey, result)
         return result
       }
     }
+  }
+
+  async refundDeposit(params: RefundDepositParams): Promise<RefundDepositResult> {
+    const existing = this.refunded.get(params.idempotencyKey)
+    if (existing) {
+      return existing
+    }
+
+    const result: RefundDepositResult = { refundId: `rfnd_${ulid()}`, amountPaise: params.amountPaise }
+    this.refunded.set(params.idempotencyKey, result)
+    return result
   }
 }

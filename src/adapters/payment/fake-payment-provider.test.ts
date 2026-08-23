@@ -41,4 +41,12 @@ describe('FakePaymentProvider', () => {
     const second = await provider.captureDeposit({ amountPaise: toPaise(30000), idempotencyKey: 'k5', reference: 'bkg_5' })
     expect(second.paymentId).toBe(first.paymentId)
   })
+
+  it('refunds, and replays the stored refund result for a repeated idempotency key', async () => {
+    const provider = new FakePaymentProvider()
+    const first = await provider.refundDeposit({ paymentId: 'pay_x', amountPaise: toPaise(30000), idempotencyKey: 'k6', reference: 'bkg_6' })
+    expect(first.refundId).toMatch(/^rfnd_/)
+    const second = await provider.refundDeposit({ paymentId: 'pay_x', amountPaise: toPaise(30000), idempotencyKey: 'k6', reference: 'bkg_6' })
+    expect(second.refundId).toBe(first.refundId)
+  })
 })

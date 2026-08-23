@@ -127,7 +127,7 @@ export async function confirmWithDeposit(cmd: ConfirmWithDepositCommand, deps: A
       policyVersion: policy.policyVersion,
     })
     const depositEvent = createDepositCapturedEvent(snapshot.bookingId, ++sequence, deps.clock, {
-      action: { direction: 'credit', amountPaise: captured.amountPaise, instrument: 'upi' },
+      action: { direction: 'credit', amountPaise: captured.amountPaise, instrument: captured.instrument },
       gate: {
         cleared: ['live_hold', 'policy_acked'],
         evidence: { holdExpiresAt: snapshot.holdExpiresAt?.toISOString(), policyVersion: policy.policyVersion },
