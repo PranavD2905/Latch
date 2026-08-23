@@ -117,6 +117,33 @@ remains closed. The conclusion in 001 and 005 stands; only the specificity impro
 
 ---
 
+## Every "authorise once, spend later" primitive in India is gated
+
+Asked directly: *could the customer verify OTP once, then let the agent spend up to a limit with no
+further authorisation?* That is an **e-mandate / recurring token**, and it is exactly the right
+production design. Checked whether it is available. It is not — and neither is any sibling.
+
+| Mechanism | What it would give us | Status |
+|---|---|---|
+| **UPI Reserve Pay** | Pre-approved limit, zero-tap | Closed pilot, select users only |
+| **UPI Autopay mandate** | OTP once → debit to `max_amount` | Test-mode cancellation returns success regardless, so release cannot be proven (dev-log 005) |
+| **Card e-mandate / recurring** | OTP once → debit to `max_amount`, revocable token | **On-demand activation** ("raise a request with Support"), granted *"at the discretion of the payment gateway and partner banks"* and dependent on line of business. And in test mode, **card tokens are valid for 3 days only** — shorter than the 5-day manual-capture window we already have |
+| **S2S / TPV direct payment** | Server submits payments outright | 404, needs Support activation (dev-log 006) |
+| **Card manual capture** | Authorise now, capture later | ✅ **in use** — the only self-serve option, 5-day window |
+
+**The pattern is the finding.** Every mechanism granting delegated, bounded spending authority is
+gated behind manual approval. That is not accidental: under RBI's AFA framework these are regulated
+instruments, and gateways gate them by business category to control fraud and chargeback exposure.
+
+It is also precisely *why* NPCI is building **UAP** — to standardise agent delegation rather than leave
+it to per-merchant approval. Track 01's "why now" cites UAP for exactly this reason. The primitive the
+track asks for exists, is regulated, and is not yet generally available. Latch is built against that
+reality rather than around it.
+
+**If recurring were activated it would be architecturally better than manual capture** — a real ceiling
+with headroom, and a genuine token-cancel API replacing release-by-lapse. Worth requesting. Not worth
+blocking on.
+
 ## Action open
 
 Request TPV / S2S activation from Razorpay Support for the test account. Free, and if granted before
