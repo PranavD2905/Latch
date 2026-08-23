@@ -1,11 +1,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
+import { cancelBooking } from '../../app/cancel-booking.js'
 import { chargeNoShow } from '../../app/charge-no-show.js'
 import { confirmWithDeposit } from '../../app/confirm-with-deposit.js'
 import { findSlots } from '../../app/find-slots.js'
 import { getPolicy } from '../../app/get-policy.js'
 import { holdSlot } from '../../app/hold-slot.js'
+import { rescheduleBooking } from '../../app/reschedule-booking.js'
 import type { AppDeps } from '../../app/types.js'
 import { Refusal } from '../../domain/refusals.js'
 
@@ -129,6 +131,47 @@ export function createServer(deps: AppDeps): McpServer {
     async (args) => {
       try {
         return jsonResult(await chargeNoShow(args, deps))
+      } catch (err) {
+        if (err instanceof Refusal) return refusalResult(err)
+        return errorResult(err)
+      }
+    },
+  )
+
+  server.registerTool(
+    'cancel',
+    {
+      description:
+        'Cancel a confirmed booking as the customer. The cancellation ladder applies: how much of the deposit is retained vs. refunded is computed from how far ahead of the appointment the cancellation happens, at the server clock — never a time the caller claims. Releases the no-show authorisation; leaves no live authority against the booking.',
+      inputSchema: {
+        bookingId: z.string().describe('bookingId returned by hold_slot'),
+        idempotencyKey: z.string(),
+      },
+    },
+    async (args) => {
+      try {
+        return jsonResult(await cancelBooking(args, deps))
+      } catch (err) {
+        if (err instanceof Refusal) return refusalResult(err)
+        return errorResult(err)
+      }
+    },
+  )
+
+  server.registerTool(
+    'reschedule',
+    {
+      description:
+        'Move a confirmed booking to a new start time — the same booking, deposit, and no-show authorisation, not a cancel-and-rebook. Requires the target slot to be free and the cancellation ladder to permit a move at the current time-to-appointment, evaluated against the booking\'s existing start time; refused with LADDER_FORBIDS_MOVE if too close in (cancel instead, accepting the ladder), or SLOT_TAKEN if the target is already occupied.',
+      inputSchema: {
+        bookingId: z.string().describe('bookingId returned by hold_slot'),
+        newStartsAt: z.string().datetime().describe('The new slot start time, as returned by find_slots (ISO 8601).'),
+        idempotencyKey: z.string(),
+      },
+    },
+    async (args) => {
+      try {
+        return jsonResult(await rescheduleBooking({ ...args, newStartsAt: new Date(args.newStartsAt) }, deps))
       } catch (err) {
         if (err instanceof Refusal) return refusalResult(err)
         return errorResult(err)

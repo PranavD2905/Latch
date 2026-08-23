@@ -148,6 +148,7 @@ describe('decline_booking against real Razorpay test mode', () => {
         authorizationExpiresAt,
         authorizationLapsedAt: undefined,
         nonAttendanceMarkedAt: undefined,
+        noShowEligibleMarkedAt: undefined,
         agentId: 'agent_live_decline_seed',
         holdExpiresAt: undefined,
         lastEventSequence: 5,

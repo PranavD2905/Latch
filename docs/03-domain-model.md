@@ -174,6 +174,17 @@ It never makes one *happen*. The transition between them requires an explicit me
 agent can forge. This is bar clause **B4** at its sharpest: the most dangerous money action in the
 system requires two independent facts, from two different authorities.
 
+**A note on where `NO_SHOW_ELIGIBLE` actually lives, added in Slice 5.** This diagram (and a pure
+`fold()` replay of the event log) shows it as a real intermediate state between `CONFIRMED` and
+`charge_no_show`. The live Postgres projection every command handler actually gates against
+deliberately does not track it that way: the no-show-eligibility background worker
+(`src/app/no-show-eligibility-worker.ts`) appends `NO_SHOW_ELIGIBLE` without changing the projection's
+`status` column, which stays `confirmed`. This matches `charge_no_show`'s own gate (dev-logs/009, which
+re-derives eligibility from the clock directly rather than depending on this event) and means `cancel`
+and `reschedule` never have to special-case a booking that's practically still confirmed but
+technically past its no-show window. The event still lands in the trail, in order, exactly where the
+diagram shows it — only the projected `status` field stays put.
+
 ### Reschedule deserves a note
 
 Reschedule is a **self-transition**, not a cancel-and-rebook. `CONFIRMED → CONFIRMED`, same booking id,
@@ -188,6 +199,13 @@ The gate is a conjunction: the target slot must be free **and** the ladder must 
 current time-to-appointment. A customer cannot dodge a 100% cancellation penalty by rescheduling into
 next month and cancelling for free from there — the ladder is evaluated at the moment of the
 reschedule request, against the *original* appointment time.
+
+**What "permits a move" means, pinned down in Slice 5** (`src/app/reschedule-booking.ts`): the ladder
+tier at the current time-to-appointment must retain 0%. Any tier that would retain something on a
+cancellation also forbids a move — a customer inside the 50% or the 100% tier must cancel and accept
+that tier, not move. This is what closes the dodge structurally: a booking can never reach "next
+month" while it sits inside a retention tier, because the move itself is refused (`LADDER_FORBIDS_MOVE`)
+before the ladder is ever re-evaluated against a new date.
 
 ---
 

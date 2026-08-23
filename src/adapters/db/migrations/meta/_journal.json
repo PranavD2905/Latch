@@ -50,6 +50,13 @@
       "when": 1787552400000,
       "tag": "0006_drop_mandate_ceiling",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787556000000,
+      "tag": "0007_spicy_xavin",
+      "breakpoints": true
     }
   ]
 }

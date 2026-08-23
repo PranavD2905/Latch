@@ -51,6 +51,7 @@ function rowToSnapshot(row: typeof bookings.$inferSelect): BookingSnapshot {
     authorizationExpiresAt: row.authorizationExpiresAt ?? undefined,
     authorizationLapsedAt: row.authorizationLapsedAt ?? undefined,
     nonAttendanceMarkedAt: row.nonAttendanceMarkedAt ?? undefined,
+    noShowEligibleMarkedAt: row.noShowEligibleMarkedAt ?? undefined,
     agentId: row.agentId ?? undefined,
     holdExpiresAt: row.holdExpiresAt ?? undefined,
     lastEventSequence: row.lastEventSequence,
@@ -103,6 +104,7 @@ async function appendFor(db: Queryable, evts: readonly BookingEvent[], projectio
       authorizationExpiresAt: projection.authorizationExpiresAt ?? null,
       authorizationLapsedAt: projection.authorizationLapsedAt ?? null,
       nonAttendanceMarkedAt: projection.nonAttendanceMarkedAt ?? null,
+      noShowEligibleMarkedAt: projection.noShowEligibleMarkedAt ?? null,
       agentId: projection.agentId ?? null,
       holdExpiresAt: projection.holdExpiresAt ?? null,
       lastEventSequence: projection.lastEventSequence,
@@ -112,6 +114,11 @@ async function appendFor(db: Queryable, evts: readonly BookingEvent[], projectio
     .onConflictDoUpdate({
       target: bookings.bookingId,
       set: {
+        // startsAt: Slice 5 fix — `reschedule` moves a booking's slot on the
+        // *same* row (update, not a new booking), and this field was missing
+        // from the update set entirely: every prior slice only ever wrote
+        // startsAt once, at insert, so nothing had exercised the gap before.
+        startsAt: projection.startsAt,
         status: toDbStatus(projection.status),
         policyVersion: projection.policyVersion ?? null,
         authorizationId: projection.authorizationId ?? null,
@@ -119,6 +126,7 @@ async function appendFor(db: Queryable, evts: readonly BookingEvent[], projectio
         authorizationExpiresAt: projection.authorizationExpiresAt ?? null,
         authorizationLapsedAt: projection.authorizationLapsedAt ?? null,
         nonAttendanceMarkedAt: projection.nonAttendanceMarkedAt ?? null,
+        noShowEligibleMarkedAt: projection.noShowEligibleMarkedAt ?? null,
         agentId: projection.agentId ?? null,
         holdExpiresAt: projection.holdExpiresAt ?? null,
         lastEventSequence: projection.lastEventSequence,
@@ -143,6 +151,8 @@ export class PostgresEventStore implements EventStore {
         },
         append: (evts, projection) => appendFor(trxDb, evts, projection),
         countLiveHoldsForAgent: (agentId) => countLiveHoldsFor(trxDb, agentId),
+        claimHeldBookingsWithExpiredHold: (now, limit) => claimHeldBookingsWithExpiredHoldFor(trxDb, now, limit),
+        claimConfirmedBookingsPastStart: (now, limit) => claimConfirmedBookingsPastStartFor(trxDb, now, limit),
         lockAgent: async (agentId) => {
           // pg_advisory_xact_lock: held until this transaction commits or
           // rolls back, and serializes against any other transaction taking
@@ -203,6 +213,39 @@ export class PostgresEventStore implements EventStore {
       )
     return rows.map(rowToSnapshot)
   }
+}
+
+/**
+ * The background worker's claim query — docs/02-tech-stack.md §9 / §9 of
+ * 01-architecture.md: "claim rows with FOR UPDATE SKIP LOCKED." A row
+ * currently locked by a concurrent `confirm_with_deposit` gate transaction
+ * (Race 2, docs/03-domain-model.md §7) is simply absent from the result this
+ * tick, not blocked on — the worker picks it up next tick once it's free.
+ */
+async function claimHeldBookingsWithExpiredHoldFor(db: Queryable, now: Date, limit: number): Promise<readonly BookingSnapshot[]> {
+  const rows = await db
+    .select()
+    .from(bookings)
+    .where(and(eq(bookings.status, 'held'), isNotNull(bookings.holdExpiresAt), lt(bookings.holdExpiresAt, now)))
+    .limit(limit)
+    .for('update', { skipLocked: true })
+  return rows.map(rowToSnapshot)
+}
+
+/**
+ * A superset of the truly no-show-eligible set — grace minutes vary by the
+ * booking's own recorded `policyVersion`, so the caller re-checks
+ * `startsAt + graceMinutes` per candidate under this same row lock before
+ * deciding to append `NO_SHOW_ELIGIBLE`. See `EventStoreTx.claimConfirmedBookingsPastStart`.
+ */
+async function claimConfirmedBookingsPastStartFor(db: Queryable, now: Date, limit: number): Promise<readonly BookingSnapshot[]> {
+  const rows = await db
+    .select()
+    .from(bookings)
+    .where(and(eq(bookings.status, 'confirmed'), lt(bookings.startsAt, now), isNull(bookings.noShowEligibleMarkedAt)))
+    .limit(limit)
+    .for('update', { skipLocked: true })
+  return rows.map(rowToSnapshot)
 }
 
 async function countLiveHoldsFor(db: Queryable, agentId: string): Promise<number> {

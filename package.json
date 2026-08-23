@@ -20,6 +20,8 @@
     "merchant-api:dev:razorpay": "PAYMENT_PROVIDER=razorpay tsx src/adapters/merchant-api/http.ts",
     "worker:dev": "tsx src/adapters/worker/authorization-lapse.ts",
     "worker:dev:razorpay": "PAYMENT_PROVIDER=razorpay tsx src/adapters/worker/authorization-lapse.ts",
+    "worker:background:dev": "tsx src/adapters/worker/background.ts",
+    "worker:background:dev:razorpay": "PAYMENT_PROVIDER=razorpay tsx src/adapters/worker/background.ts",
     "demo:ceiling-refusal": "tsx src/adapters/demo/ceiling-refusal.ts",
     "demo:ceiling-refusal:razorpay": "PAYMENT_PROVIDER=razorpay tsx src/adapters/demo/ceiling-refusal.ts"
   },

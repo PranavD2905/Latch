@@ -1,4 +1,5 @@
 import { ulid } from 'ulid'
+import { isUniqueViolation } from '../adapters/db/postgres-errors.js'
 import { createHoldCreatedEvent } from '../domain/event-factory.js'
 import type { RefusalCode } from '../domain/refusals.js'
 import { Refusal } from '../domain/refusals.js'
@@ -28,18 +29,6 @@ export interface HoldSlotResult {
 }
 
 type HoldOutcome = { kind: 'ok'; result: HoldSlotResult } | { kind: 'refused'; code: RefusalCode; reason: string }
-
-/** True for a Postgres unique-violation on the named constraint. postgres.js's PostgresError shape. */
-function isUniqueViolation(err: unknown, constraintName: string): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    'code' in err &&
-    (err as { code?: unknown }).code === '23505' &&
-    'constraint_name' in err &&
-    (err as { constraint_name?: unknown }).constraint_name === constraintName
-  )
-}
 
 /**
  * `hold_slot` — docs/01-architecture.md §3: moves NO money.
@@ -92,6 +81,7 @@ export async function holdSlot(cmd: HoldSlotCommand, deps: AppDeps): Promise<Hol
     authorizationExpiresAt: undefined,
     authorizationLapsedAt: undefined,
     nonAttendanceMarkedAt: undefined,
+    noShowEligibleMarkedAt: undefined,
     agentId: cmd.agentId,
     holdExpiresAt,
     lastEventSequence: 1,

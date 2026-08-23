@@ -95,6 +95,16 @@ export const bookings = pgTable('bookings', {
   /** Set by the merchant API's mark-no-show route — `charge_no_show`'s second independent fact. */
   nonAttendanceMarkedAt: timestamp('non_attendance_marked_at', { withTimezone: true }),
   /**
+   * Slice 5: set once the no-show-eligibility worker has recorded
+   * `NO_SHOW_ELIGIBLE` for this booking — the idempotency marker that stops
+   * it firing twice, same role `authorizationLapsedAt` plays for the
+   * authorisation-lapse worker. Deliberately does NOT gate `charge_no_show`
+   * (dev-logs/009: its gate re-derives eligibility from the clock directly)
+   * and setting it never changes `status` away from `confirmed` — see
+   * `src/app/no-show-eligibility-worker.ts`.
+   */
+  noShowEligibleMarkedAt: timestamp('no_show_eligible_marked_at', { withTimezone: true }),
+  /**
    * Slice 1 addition: which agent holds/confirmed this booking, and (while
    * status is 'held') when that hold's TTL expires. Both are needed for
    * gates that are otherwise untestable from the events table alone without

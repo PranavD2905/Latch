@@ -32,6 +32,8 @@ export interface BookingSnapshot {
   authorizationLapsedAt: Date | undefined
   /** Set by the merchant API's mark-no-show route — the second of `charge_no_show`'s two independent facts (docs/03-domain-model.md §3 Rule 3). */
   nonAttendanceMarkedAt: Date | undefined
+  /** Set once the no-show-eligibility worker has recorded `NO_SHOW_ELIGIBLE` — an idempotency marker only, never gates `charge_no_show`. */
+  noShowEligibleMarkedAt: Date | undefined
   agentId: string | undefined
   /** Set only while status is HELD — when the hold's TTL expires. */
   holdExpiresAt: Date | undefined
@@ -80,6 +82,29 @@ export interface EventStoreTx {
    * exactly the DB-level guarantee the docs claim. See dev-logs/004.
    */
   lockAgent(agentId: string): Promise<void>
+  /**
+   * `SELECT ... FOR UPDATE SKIP LOCKED` — held bookings whose `holdExpiresAt`
+   * has passed. docs/01-architecture.md §9 / prompts/slice-5.md item 3: the
+   * background worker claims a batch this way rather than a plain unlocked
+   * read followed by a per-row re-check, so a row a concurrent
+   * `confirm_with_deposit` is already holding is simply skipped this tick,
+   * not blocked on. The WHERE clause plus the row lock together *are* the
+   * "still expirable" check — Race 2 (docs/03-domain-model.md §7): whichever
+   * transaction locks the row first wins, the other observes the committed
+   * result.
+   */
+  claimHeldBookingsWithExpiredHold(now: Date, limit: number): Promise<readonly BookingSnapshot[]>
+  /**
+   * `SELECT ... FOR UPDATE SKIP LOCKED` — confirmed bookings whose
+   * appointment `startsAt` has passed and `noShowEligibleMarkedAt` is not yet
+   * set. A superset of the truly-eligible set (grace period still varies by
+   * the booking's own recorded `policyVersion` — docs/03-domain-model.md §2 —
+   * so the caller must still compute `startsAt + graceMinutes` per candidate
+   * before deciding to append `NO_SHOW_ELIGIBLE`); the row lock is what makes
+   * that per-candidate check-then-append atomic against a concurrent
+   * `reschedule`/`cancel` on the same booking.
+   */
+  claimConfirmedBookingsPastStart(now: Date, limit: number): Promise<readonly BookingSnapshot[]>
 }
 
 /**

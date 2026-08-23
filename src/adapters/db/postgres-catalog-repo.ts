@@ -1,4 +1,4 @@
-import { desc, eq } from 'drizzle-orm'
+import { and, desc, eq } from 'drizzle-orm'
 import { toPaise } from '../../domain/money.js'
 import type { LadderTier } from '../../domain/policy.js'
 import type { CatalogRepo, PractitionerRecord, ServiceRecord } from '../../ports/catalog-repo.js'
@@ -42,14 +42,29 @@ export class PostgresCatalogRepo implements CatalogRepo {
       .limit(1)
     const row = rows[0]
     if (!row) return undefined
-    return {
-      policyVersion: row.version,
-      depositAmountPaise: toPaise(row.depositAmountPaise),
-      cancellationLadder: row.cancellationLadder as readonly LadderTier[],
-      noShowFeePaise: toPaise(row.noShowFeePaise),
-      noShowGraceMinutes: row.noShowGraceMinutes,
-      holdTtlSeconds: row.holdTtlSeconds,
-      maxConcurrentHoldsPerAgent: row.maxConcurrentHoldsPerAgent,
-    }
+    return rowToPolicy(row)
+  }
+
+  async getPolicyVersion(merchantId: string, version: number) {
+    const rows = await this.db
+      .select()
+      .from(policies)
+      .where(and(eq(policies.merchantId, merchantId), eq(policies.version, version)))
+      .limit(1)
+    const row = rows[0]
+    if (!row) return undefined
+    return rowToPolicy(row)
+  }
+}
+
+function rowToPolicy(row: typeof policies.$inferSelect) {
+  return {
+    policyVersion: row.version,
+    depositAmountPaise: toPaise(row.depositAmountPaise),
+    cancellationLadder: row.cancellationLadder as readonly LadderTier[],
+    noShowFeePaise: toPaise(row.noShowFeePaise),
+    noShowGraceMinutes: row.noShowGraceMinutes,
+    holdTtlSeconds: row.holdTtlSeconds,
+    maxConcurrentHoldsPerAgent: row.maxConcurrentHoldsPerAgent,
   }
 }
