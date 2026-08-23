@@ -12,12 +12,16 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/adapters/db/migrate.ts"
+    "db:migrate": "tsx src/adapters/db/migrate.ts",
+    "db:seed": "tsx src/adapters/db/seed.ts",
+    "mcp:dev": "tsx src/adapters/mcp/stdio.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "drizzle-orm": "^0.36.4",
     "postgres": "^3.4.5",
-    "ulid": "^2.3.0"
+    "ulid": "^2.3.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

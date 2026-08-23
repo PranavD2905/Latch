@@ -84,8 +84,20 @@ evaluateLadder(ladder, appointmentStart, now) → { tier, retain_pct }
 
   hoursUntil = (appointmentStart - now) / 3_600_000        // now comes from the Clock port
 
-  return the FIRST tier (descending hours_before) where hoursUntil >= tier.hours_before
+  return the FIRST tier (descending hours_before) where hoursUntil >= tier.hours_before,
+  OR the last tier (smallest hours_before) if none matched — see the note below.
 ```
+
+**Docs correction made in Slice 1 (dev-logs/004).** The original phrasing — "the first tier where
+`hoursUntil >= tier.hours_before`" — is ambiguous for an already-started or past-dated appointment.
+With the ladder above, `hoursUntil = -2.0` fails `-2 >= 0`, so a strict reading matches **no** tier at
+all, even though this document's own worked-example table (below) lists `hoursUntil = -2.0` as
+matching the `hours_before: 0` tier at 100% retention. The fix: the ladder's last tier in descending
+order — by convention `hours_before: 0`, the floor — is a **catch-all**. It matches not just
+`hoursUntil >= 0`, but everything below that too, because there is no lower tier left to hand the case
+to. The ladder must be total over all of `(-infinity, +infinity)`, not just `[0, +infinity)`. This
+reproduces every row of the table exactly, including the negative one, and is what
+`src/domain/ladder.ts` implements.
 
 Worked examples against the ladder above:
 

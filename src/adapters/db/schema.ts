@@ -78,6 +78,15 @@ export const bookings = pgTable('bookings', {
   status: bookingStatusEnum('status').notNull(),
   policyVersion: integer('policy_version'),
   mandateId: text('mandate_id'),
+  /**
+   * Slice 1 addition: which agent holds/confirmed this booking, and (while
+   * status is 'held') when that hold's TTL expires. Both are needed for
+   * gates that are otherwise untestable from the events table alone without
+   * a full replay: `hold_slot`'s concurrent-hold-per-agent limit, and
+   * `confirm_with_deposit`'s live-unexpired-hold check. See dev-logs/004.
+   */
+  agentId: text('agent_id'),
+  holdExpiresAt: timestamp('hold_expires_at', { withTimezone: true }),
   lastEventSequence: integer('last_event_sequence').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
@@ -137,6 +146,25 @@ export const policies = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   },
   (table) => [unique('policies_merchant_version_unique').on(table.merchantId, table.version)],
+)
+
+// ---------------------------------------------------------------------------
+// idempotency_keys — docs/01-architecture.md §6. `scope` is the tool name
+// (`hold_slot`, `confirm_with_deposit`, ...); `key` is the caller-supplied
+// idempotency key. A repeat of (scope, key) replays `response` rather than
+// re-running the command. Only successful outcomes are stored — see
+// src/ports/idempotency-store.ts.
+// ---------------------------------------------------------------------------
+
+export const idempotencyKeys = pgTable(
+  'idempotency_keys',
+  {
+    scope: text('scope').notNull(),
+    key: text('key').notNull(),
+    response: jsonb('response').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  },
+  (table) => [unique('idempotency_keys_scope_key_unique').on(table.scope, table.key)],
 )
 
 export const practitionersRelations = relations(practitioners, ({ one }) => ({

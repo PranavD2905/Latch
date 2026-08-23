@@ -1,0 +1,24 @@
+import type { CatalogRepo } from '../ports/catalog-repo.js'
+import type { Clock } from '../ports/clock.js'
+import type { EventStore } from '../ports/event-store.js'
+import type { IdempotencyStore } from '../ports/idempotency-store.js'
+import type { PaymentProvider } from '../ports/payment-provider.js'
+
+/**
+ * Everything a command handler needs, injected. This is the seam the
+ * hexagonal architecture is for: handlers here depend only on ports
+ * (interfaces), never on Drizzle, MCP, or the Razorpay SDK directly. The
+ * inbound adapter (MCP server) constructs one of these with real Postgres
+ * adapters; tests construct one with fakes/in-memory adapters.
+ *
+ * `merchantId` is here rather than threaded through every command because
+ * this is deliberately not multi-tenant (docs/01-architecture.md §10).
+ */
+export interface AppDeps {
+  clock: Clock
+  eventStore: EventStore
+  catalogRepo: CatalogRepo
+  paymentProvider: PaymentProvider
+  idempotencyStore: IdempotencyStore
+  merchantId: string
+}

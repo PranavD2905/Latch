@@ -15,6 +15,13 @@
       "when": 1787472678648,
       "tag": "0001_partial_unique_index_one_live_booking_per_slot",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787473562590,
+      "tag": "0002_slim_vulture",
+      "breakpoints": true
     }
   ]
 }

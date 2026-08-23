@@ -1,0 +1,85 @@
+import type { BookingEvent } from '../domain/events.js'
+import type { BookingStatus } from '../domain/fold.js'
+
+/**
+ * The `bookings` projection row, as read/written by the store. Mirrors
+ * `src/adapters/db/schema.ts`'s `bookings` table plus the two columns this
+ * slice adds (`agentId`, `holdExpiresAt`) — see the Slice 1 migration.
+ */
+export interface BookingSnapshot {
+  bookingId: string
+  practitionerId: string
+  serviceId: string
+  startsAt: Date
+  status: BookingStatus
+  policyVersion: number | undefined
+  mandateId: string | undefined
+  agentId: string | undefined
+  /** Set only while status is HELD — when the hold's TTL expires. */
+  holdExpiresAt: Date | undefined
+  lastEventSequence: number
+}
+
+export interface BusyInterval {
+  startsAt: Date
+  endsAt: Date
+}
+
+/**
+ * Everything a command handler can do to a single booking's history and
+ * projection row *inside one database transaction*. docs/03-domain-model.md
+ * §7: "when correctness depends on a check and an action being one thing,
+ * they must be inside a database transaction, not adjacent lines of
+ * TypeScript." `loadSnapshotForUpdate` takes the row lock; `append` is the
+ * only way to write, and it always writes the event(s) and the projection
+ * together — there is no method that updates the projection without a
+ * causing event, by construction (docs/03-domain-model.md §1).
+ */
+export interface EventStoreTx {
+  loadEvents(bookingId: string): Promise<readonly BookingEvent[]>
+  /** `SELECT ... FOR UPDATE` on the booking row — undefined if it doesn't exist yet. */
+  loadSnapshotForUpdate(bookingId: string): Promise<BookingSnapshot | undefined>
+  /**
+   * Appends one or more events for a single booking and writes the resulting
+   * projection row, atomically. `projection` is `undefined` for a pure
+   * refusal that never became a live booking (e.g. `SLOT_TAKEN` on a fresh
+   * `hold_slot` attempt) — the event is still recorded, just with no
+   * corresponding `bookings` row.
+   */
+  append(events: readonly BookingEvent[], projection: BookingSnapshot | undefined): Promise<void>
+  /** How many bookings this agent currently has HELD — read inside the transaction, after `lockAgent`. */
+  countLiveHoldsForAgent(agentId: string): Promise<number>
+  /**
+   * A Postgres advisory lock (`pg_advisory_xact_lock`), scoped to `key` and
+   * held for the lifetime of this transaction — released automatically on
+   * commit or rollback. docs/01-architecture.md §1 Idea 3 claims the
+   * concurrent-holds-per-agent bound is enforced by "Latch + DB constraint,"
+   * not just app logic (the "No — DB constraint" column). A plain
+   * count-then-insert has a race: two concurrent `hold_slot` calls from the
+   * same agent can both read a count under the limit before either inserts.
+   * Calling `lockAgent(agentId)` first serializes every `hold_slot` attempt
+   * from the same agent through this transaction, closing that race —
+   * exactly the DB-level guarantee the docs claim. See dev-logs/004.
+   */
+  lockAgent(agentId: string): Promise<void>
+}
+
+/**
+ * Outbound port over the event log + booking projection. docs/01-architecture.md
+ * system diagram calls this `EventStore`; it also owns projection reads
+ * that don't need a transaction (slot search, hold-count gate) since those
+ * are the same underlying table.
+ */
+export interface EventStore {
+  /** Runs `fn` inside one DB transaction; the same as docs §7's `SELECT ... FOR UPDATE` unit of work. */
+  transaction<T>(fn: (tx: EventStoreTx) => Promise<T>): Promise<T>
+
+  /** Read-only, unlocked. For display / non-gating reads. */
+  loadSnapshot(bookingId: string): Promise<BookingSnapshot | undefined>
+
+  /** Live (held/confirmed) booking intervals for a practitioner in `[from, to)` — slot computation input. */
+  listLiveIntervals(practitionerId: string, from: Date, to: Date): Promise<readonly BusyInterval[]>
+
+  /** How many bookings this agent currently has HELD — the concurrent-hold gate. */
+  countLiveHoldsForAgent(agentId: string): Promise<number>
+}
