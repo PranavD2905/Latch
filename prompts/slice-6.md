@@ -6,7 +6,7 @@ Latch exposes an Indian dermatology clinic to any third-party AI agent over MCP.
 Buildathon 2026, Track 01.
 
 **Slices 0–5 are complete**: all seven MCP tools work against real Razorpay test mode, the
-merchant-decline failure path works, mandates carry real ceilings, and background workers run.
+merchant-decline failure path works, authorisations carry real ceilings, and background workers run.
 
 ## What this slice is for
 
@@ -47,7 +47,7 @@ strength:
 ```
 latch_policy      — our own code. A bug could defeat it.
 db_constraint     — a Postgres unique index. Cannot be raced.
-razorpay_mandate  — enforced at the rail. Cannot be defeated even by a compromised Latch server.
+payment_rail  — enforced at the rail. Cannot be defeated even by a compromised Latch server.
 ```
 
 A judge should be able to see *at a glance* which bounds we merely assert and which are structurally
@@ -64,7 +64,7 @@ account for every rupee without opening the database — that is the literal tes
 **5. Running totals**
 - net customer cost
 - net merchant retention
-- mandate headroom remaining
+- authorisation headroom remaining
 
 For the failure path these must land on **customer cost ₹0**, which is the punchline of the demo.
 
@@ -88,7 +88,7 @@ of the video. It should be impossible to miss.
 
 - Opening the viewer and driving an agent through a booking shows events appearing **live**
 - The full failure path renders legibly end to end
-- `enforced_by: razorpay_mandate` is unmistakably distinct from `latch_policy`
+- `enforced_by: payment_rail` is unmistakably distinct from `latch_policy`
 - Refusals are visually prominent
 - Running totals show ₹0 customer cost after a merchant decline
 - Reconnecting after a dropped connection replays correctly

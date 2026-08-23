@@ -72,7 +72,7 @@ type MoneyEvent = {
   action:    MoneyAction   // B1 — which rupee moved, and in which direction
   gate:      GateCleared   // B4 — the precondition that was satisfied to permit it
   bound:     BoundApplied  // B3 — the ceiling it ran against, and who enforces that ceiling
-  authority: AuthorityRef  // B2 — the policy version / mandate id that granted permission
+  authority: AuthorityRef  // B2 — the policy version / authorisation id that granted permission
   // ...amount, timestamps, ids
 }
 ```
@@ -86,12 +86,18 @@ worth saying in the pitch video.
 
 ### Idea 3 — Bounds are enforced outside our own trust boundary
 
-Covered in full in `dev-logs/001`. In summary:
+Covered in full in `dev-logs/005` (which supersedes the rail choice in `dev-logs/001`). In summary:
 
 A no-show charge is a debit against a customer who received nothing. That is the most abusable action
-in the entire system, so it gets the strongest possible bound. At booking time we register a **UPI
-Autopay mandate** carrying a `max_amount`. Any later debit above that number is rejected by
-**Razorpay**, not by us.
+in the entire system, so it gets the strongest possible bound.
+
+At booking we place a **card authorisation** (`capture: "manual"`) for **exactly** the no-show fee. It
+sits in `authorized` — the customer is not charged. Later, `charge_no_show` captures it.
+
+The bound is the authorised amount itself, and Razorpay enforces it: the Capture API rejects any
+capture that is not equal to the amount authorised (*"Capture amount must be equal to the amount
+authorized"*). We cannot capture a rupee more, and because the authorisation is taken at exactly the
+fee, **there is no headroom to abuse at all.**
 
 | Bound | Value | Enforced by | Can a Latch bug defeat it? |
 |---|---|---|---|
@@ -99,10 +105,15 @@ Autopay mandate** carrying a `max_amount`. Any later debit above that number is 
 | Ladder retention % | From merchant policy record | Latch policy engine | Yes, in principle |
 | Concurrent holds per agent | Configured per agent | Latch + DB constraint | No — DB constraint |
 | Double-booking a slot | One booking per (practitioner, start) | **Postgres partial unique index** | **No** |
-| **No-show debit ceiling** | `max_amount` on the mandate | **Razorpay, at the rail** | **No** |
+| **No-show debit ceiling** | The authorised amount, taken at exactly the fee | **Razorpay, at the rail** | **No** |
 
 The bottom three rows are the ones that matter. B3 demands the breach be *"impossible, not merely
 caught."* For those three, it genuinely is.
+
+**The rail is named in the trail.** Every money event carries `rail: 'manual_capture' | 'reserve_pay'`.
+Manual capture is the **test-mode stand-in**; UPI Reserve Pay is the **production rail** and is not
+built (`dev-logs/005`). Since the trail is a judged deliverable under B5, it must never imply the
+production rail was exercised when it was not.
 
 ---
 
@@ -165,7 +176,7 @@ caught."* For those three, it genuinely is.
             │
             ▼
    Razorpay test mode
-   Orders · Payments · Refunds · UPI Autopay mandates
+   Orders · Payments · Refunds · card manual-capture authorisations
 ```
 
 ### Why the domain core is isolated
@@ -195,10 +206,10 @@ From brief §6.2, with the enforcement point named for each.
 | `find_slots` | none | — | — | — |
 | `get_policy` | none | — | — | — |
 | `hold_slot` | **none** | Slot free at request time | Max concurrent holds/agent; TTL | DB constraint + Latch |
-| `confirm_with_deposit` | deposit capture | Live unexpired hold **and** policy acknowledged | Policy deposit amount; mandate ceiling | Latch + **Razorpay** |
+| `confirm_with_deposit` | deposit capture | Live unexpired hold **and** policy acknowledged | Policy deposit amount; authorisation ceiling | Latch + **Razorpay** |
 | `reschedule` | price delta only | Target free; ladder permits move now | Delta ≤ original booking value | Latch |
 | `cancel` | refund / retention | Booking exists; tier from **server clock** | Retention ≤ ladder tier for true timestamp | Latch |
-| `charge_no_show` | debit | Start time elapsed **and** merchant marked non-attendance | Mandate `max_amount` | **Razorpay** |
+| `charge_no_show` | debit | Start time elapsed **and** merchant marked non-attendance | The authorised amount | **Razorpay** |
 
 Note the shape of the risk curve. `hold_slot` is the most frequently called tool and carries **zero**
 money exposure — that is deliberate (brief §6.3: *"All risk is pushed into the cheap, reversible
@@ -258,7 +269,7 @@ stored response on a repeat, rather than re-executing.
 
 This is not defensive politeness. Agents retry on timeout by default, and a timeout is
 indistinguishable from a failure to the caller. Without this, a network blip during
-`confirm_with_deposit` produces two deposits and two mandates against one customer. The brief calls
+`confirm_with_deposit` produces two deposits and two authorisations against one customer. The brief calls
 this out explicitly in §6.3.
 
 ---
@@ -279,7 +290,7 @@ already-confirmed, already-paid slot because the practitioner called in sick.
                                         │ DOMAIN CORE decides:            │
                                         │  cause = MERCHANT               │
                                         │  ⇒ ladder does NOT apply        │
-                                        │  ⇒ full refund, mandate revoked │
+                                        │  ⇒ full refund, authorisation released │
                                         └────────────────┬────────────────┘
                                                          ▼
               emits, atomically, as one transaction:
@@ -287,7 +298,7 @@ already-confirmed, already-paid slot because the practitioner called in sick.
               │ MERCHANT_DECLINED   reason=practitioner_unavailable        │
               │ SLOT_RELEASED       slot returns to inventory              │
               │ REFUND_ISSUED       ₹300 → original instrument             │
-              │ MANDATE_REVOKED     ceiling returned, no orphan authority  │
+              │ AUTHORIZATION_RELEASED  left to lapse, never captured             │
               │ ALTERNATIVES_OFFERED 3 slots matching original constraints │
               └───────────────────────────────────────────────────────────┘
                                                          ▼
@@ -315,6 +326,7 @@ Two things happen without anyone calling a tool:
 |---|---|---|
 | Hold expiry | TTL elapsed | Append `HOLD_EXPIRED`, release slot |
 | No-show window | Appointment start elapsed + grace | Append `NO_SHOW_ELIGIBLE` — **does not charge** |
+| Authorisation lapse | 5-day `manual_expiry_period` passed | Append `AUTHORIZATION_LAPSED` — records that authority was lost |
 
 Note the second carefully. Elapsed time makes a booking *eligible* for a no-show charge. It does not
 execute one. The charge still requires the merchant to affirmatively mark non-attendance. Time alone
@@ -326,13 +338,13 @@ never moves money — that would be a money action firing on inference, which B4
 
 | Actor | Can | Cannot |
 |---|---|---|
-| Third-party agent | Search, read policy, hold, confirm, reschedule, cancel | Set policy, decline, mark no-show, exceed mandate ceiling, assert a timestamp |
-| Merchant | Set policy, decline, mark non-attendance | Debit above the registered mandate ceiling |
-| Latch server | Orchestrate all of the above | Debit above the registered mandate ceiling |
+| Third-party agent | Search, read policy, hold, confirm, reschedule, cancel | Set policy, decline, mark no-show, exceed authorisation ceiling, assert a timestamp |
+| Merchant | Set policy, decline, mark non-attendance | Debit above the registered authorisation ceiling |
+| Latch server | Orchestrate all of the above | Debit above the registered authorisation ceiling |
 | Razorpay | Enforce the ceiling | — |
 
 The last two rows are the interesting ones: **Latch is not fully trusted by its own design.** The
-mandate ceiling constrains us as much as it constrains the agent.
+authorisation ceiling constrains us as much as it constrains the agent.
 
 ---
 

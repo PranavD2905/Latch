@@ -77,7 +77,7 @@ and rejected.
 
 ## Out of scope — do not build
 
-Mandates (Slice 4), the merchant decline flow (Slice 3), `cancel`, `reschedule`, `charge_no_show`.
+Authorisations (Slice 4), the merchant decline flow (Slice 3), `cancel`, `reschedule`, `charge_no_show`.
 
 ## Before you finish
 

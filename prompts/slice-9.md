@@ -42,13 +42,13 @@ Candidates are tracked in `dev-logs/002` and accumulated through every later log
 - **Architectural** — it changed a decision, not just a line of code
 - **The recovery is interesting** — ideally the outcome was *better* than the original plan
 
-The leading candidate from design: the **UPI Reserve Pay dead end** (`dev-logs/001`). The brief's whole
+The leading candidate from design: the **payment-rail collapse** (`dev-logs/001` then `dev-logs/005`). The brief's whole
 money architecture rested on Reserve Pay; it has no public API. The obvious fallback (card
 authorise-then-capture) was worse — Razorpay auto-refunds uncaptured authorisations in ~3 days, and
-appointments are booked weeks out. The recovery was UPI Autopay mandates, which turned out **stronger
-than the original plan**, because `max_amount` moves the bound outside our own trust boundary.
+appointments are booked weeks out. The recovery was card manual-capture authorisations, which turned out **stronger
+than the original plan**, because authorising at exactly the fee leaves zero headroom — a tighter bound than the ceiling-with-slack the brief assumed, still enforced by the rail rather than by us.
 
-Check the implementation logs for anything better — a real race caught in Slice 8, or test-mode mandate
+Check the implementation logs for anything better — a real race caught in Slice 8, or test-mode authorisation
 behaviour diverging from the docs in Slice 4, could be more compelling because it has more drama.
 
 Write it up as `docs/07-failure-and-recovery.md`: what was planned, what broke, how it was diagnosed,
@@ -65,7 +65,7 @@ Structure and timings are in `docs/06-build-sequence.md`. The beats:
 | 0:30–1:00 | Every protocol assumes a SKU. UCP: Shopping, Lodging, Food. No appointments primitive exists |
 | 1:00–2:00 | **Live:** real agent holds a slot, reads the ladder, pays a deposit. Trail streaming beside it |
 | 2:00–2:45 | **The bound.** Attempt an over-ceiling charge. Razorpay refuses. *"This isn't caught. It's impossible."* |
-| 2:45–3:45 | **The failure.** Doctor sick → decline → refund → mandate revoked → alternatives. ₹0, no human |
+| 2:45–3:45 | **The failure.** Doctor sick → decline → refund → authorisation released → alternatives. ₹0, no human |
 | 3:45–4:30 | Architecture: trail as source of truth; four mandatory fields; bound outside our trust boundary |
 | 4:30–5:00 | The money. ₹3L/month evaporating per clinic; no-show revenue 100% incremental to Razorpay |
 
@@ -97,7 +97,7 @@ demonstrable in the video, not merely true in the code:
 
 - **B1** every money action individually specified — seven tools, four move money
 - **B2** explainable — ladder machine-readable and acknowledged before commitment
-- **B3** bounded — mandate ceiling, unique index, server clock
+- **B3** bounded — authorisation ceiling, unique index, server clock
 - **B4** gated — no money action fires on agent inference
 - **B5** trail shown, and one failure handled gracefully
 

@@ -49,7 +49,7 @@ the recovery path of a money failure. It is a database query with a filter, and 
 | Setup fee | ₹0 | razorpay.com/pricing |
 | Annual maintenance (AMC) | ₹0 | razorpay.com/pricing |
 | Normal refund processing fee | ₹0 | razorpay.com/pricing |
-| UPI Autopay / e-mandate subscription pricing | **Not published — "on request"** | ⚠️ see gaps below |
+| Uncaptured authorisation (never captured) | **₹0** — no capture, no fee | razorpay.com/docs (capture settings) |
 
 Note the UPI line specifically. UPI has **zero MDR** by RBI policy — the bank charges the merchant
 nothing. Razorpay's 2% is a *platform/technology fee* for the infrastructure, not an interchange
@@ -72,7 +72,7 @@ than hiding:
 |---|---|---|
 | Deposit captured | ₹300 in | −₹7.08 |
 | Deposit refunded in full | ₹300 out | ₹0 processing, **fee not returned** |
-| Mandate revoked | — | ₹0 |
+| Authorisation released | — | ₹0 |
 | **Net to customer** | **₹0** | as designed ✅ |
 | **Net to merchant** | **−₹7.08** | real, unavoidable cost |
 
@@ -96,7 +96,7 @@ Reference merchant: dermatology clinic. ₹800 consultation, ₹300 deposit, ₹
 | Scenario | Merchant receives | Razorpay fee | Merchant net |
 |---|---|---|---|
 | **Booking → attended** (deposit ₹300 + balance ₹500) | ₹800 | ₹18.88 | ₹781.12 |
-| **Mandate registration** (₹1 auth txn) | — | ₹0.02 | −₹0.02 |
+| **No-show authorisation held, never captured** | — | **₹0** | ₹0 |
 | **No-show charged** (deposit ₹300 retained + ₹400 charge) | ₹700 | ₹16.52 | ₹683.48 |
 | **Customer cancels >48h** (free tier, full refund) | ₹0 | ₹7.08 sunk | **−₹7.08** |
 | **Customer cancels 12–48h** (50% retained) | ₹150 | ₹7.08 | ₹142.92 |
@@ -223,8 +223,8 @@ Named explicitly so nobody quotes a number that has not been verified.
 
 | Unknown | Why it matters | How to resolve |
 |---|---|---|
-| **UPI Autopay / mandate pricing** | Razorpay lists subscriptions pricing as "on request". There may be a per-mandate or per-debit fee on top of 2%, which would change no-show economics | Contact Razorpay sales, or find it in a merchant agreement |
-| **Mandate registration auth amount** | Whether the RBI auth transaction must be ₹1 or can be the deposit itself decides whether booking is one payment or two, and therefore one fee or two | Hands-on test-mode verification (carried over from dev-log 001) |
+| **card manual capture / authorisation pricing** | Razorpay lists subscriptions pricing as "on request". There may be a per-authorisation or per-debit fee on top of 2%, which would change no-show economics | Contact Razorpay sales, or find it in a merchant agreement |
+| **Authorisation hold auth amount** | Whether the RBI auth transaction must be ₹1 or can be the deposit itself decides whether booking is one payment or two, and therefore one fee or two | Hands-on test-mode verification (carried over from dev-log 001) |
 | **Instant settlement cost** | Service merchants may want faster than T+1; Razorpay charges extra, amount unpublished | Razorpay sales |
 | **Deposit → no-show reduction, India** | Recovery B above rests on an unsourced 5pp assumption | Pilot data, or find an Indian study |
 | **DPDP compliance cost** | Health-adjacent appointment data under India's DPDP Act may require data residency, consent records, and possibly an audit. Could be a material fixed cost | Legal review before any real merchant |

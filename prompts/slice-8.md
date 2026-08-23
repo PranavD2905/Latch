@@ -5,7 +5,7 @@ You are working on **Latch**, at `/Users/pranavd2905/Documents/projects/Latch`.
 Latch exposes an Indian dermatology clinic to any third-party AI agent over MCP. Razorpay AI
 Buildathon 2026, Track 01.
 
-**Slices 0–7 are complete**: all seven tools, real Razorpay test mode, failure path, mandates, live
+**Slices 0–7 are complete**: all seven tools, real Razorpay test mode, failure path, authorisations, live
 viewer, deployed with a remote agent connecting.
 
 ## What this slice is for
@@ -47,7 +47,7 @@ released slot.** Check Razorpay, not just our log.
 **3. Idempotency under concurrent retry**
 
 Fire the same idempotency key on `confirm_with_deposit` from several connections **simultaneously**
-(not sequentially — sequential retry is the easy case). Assert one capture at Razorpay, one mandate,
+(not sequentially — sequential retry is the easy case). Assert one capture at Razorpay, one authorisation,
 one set of events.
 
 Repeat for `charge_no_show` and `cancel`.
@@ -56,7 +56,7 @@ Repeat for `charge_no_show` and `cancel`.
 
 Walk `docs/03-domain-model.md` §5 and write a test per code:
 `SLOT_TAKEN`, `HOLD_EXPIRED`, `HOLD_LIMIT_REACHED`, `POLICY_NOT_ACKNOWLEDGED`,
-`POLICY_VERSION_STALE`, `MANDATE_CEILING_EXCEEDED`, `LADDER_FORBIDS_MOVE`, `NOT_YET_ELIGIBLE`,
+`POLICY_VERSION_STALE`, `CAPTURE_AMOUNT_MISMATCH`, `LADDER_FORBIDS_MOVE`, `NOT_YET_ELIGIBLE`,
 `MERCHANT_ACTION_REQUIRED`, `IDEMPOTENT_REPLAY`.
 
 Each must append an `ACTION_REFUSED` event. Refusals being recorded is what lets the demo *show* bounds
@@ -69,7 +69,7 @@ Assert an agent cannot, through any tool path:
 - mark non-attendance
 - change the policy
 - influence the ladder tier by supplying a timestamp
-- exceed the mandate ceiling
+- exceed the authorisation ceiling
 - exceed its concurrent-hold limit
 
 This is `docs/01-architecture.md` §9 (trust model) turned into executable assertions.

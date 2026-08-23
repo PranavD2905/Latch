@@ -51,14 +51,14 @@ everything.
 
 **3. Five events, atomically, in one database transaction**
 
-All five or none. A partial unwind — refund issued but mandate not revoked, or slot released but no
+All five or none. A partial unwind — refund issued but authorisation not revoked, or slot released but no
 refund — is worse than a clean failure.
 
 ```
 MERCHANT_DECLINED     reason, cause=MERCHANT, authority = merchant action
 SLOT_RELEASED         returns to inventory, freeing the partial unique index
 REFUND_ISSUED         full deposit → original instrument, real razorpay refund_id
-MANDATE_REVOKED       stub this slice — real revocation lands in Slice 4
+AUTHORIZATION_RELEASED       stub this slice — real revocation lands in Slice 4
 ALTERNATIVES_OFFERED  3 slots, same service, comparable practitioner
 ```
 
@@ -86,7 +86,7 @@ a deliberate architectural position, not an optimisation.
 
 ## Out of scope — do not build
 
-Real mandate revocation (Slice 4 — stub the event for now), `charge_no_show`, `reschedule`, customer
+Real authorisation release (Slice 4 — stub the event for now), `charge_no_show`, `reschedule`, customer
 `cancel` with ladder applied (Slice 5), the viewer.
 
 ## Before you finish

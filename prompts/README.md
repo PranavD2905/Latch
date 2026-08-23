@@ -33,7 +33,7 @@ The docs on disk are the shared memory. Every prompt begins by telling the sessi
 | 1 | `slice-1.md` | Agent books end to end, fake payments |
 | 2 | `slice-2.md` | Real Razorpay test-mode deposit captured |
 | 3 | `slice-3.md` | ⭐ The failure path works end to end |
-| 4 | `slice-4.md` | ⭐ Mandates + the ceiling refusal demo |
+| 4 | `slice-4.md` | ⭐ Authorisations + the ceiling refusal demo |
 | 5 | `slice-5.md` | Cancel, reschedule, background worker |
 | 6 | `slice-6.md` | Live audit trail viewer |
 | 7 | `slice-7.md` | Deployed; a remote agent connects |

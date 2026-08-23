@@ -57,10 +57,10 @@ money-and-time semantics of a service transaction, in a form an arbitrary agent 
 | `find_slots` | — | — | — | — |
 | `get_policy` | — | — | — | — |
 | `hold_slot` | **none** | Slot free | Concurrent holds; TTL | DB constraint |
-| `confirm_with_deposit` | deposit capture | Live hold + policy acknowledged | Deposit amount; mandate ceiling | Latch + **Razorpay** |
+| `confirm_with_deposit` | deposit capture | Live hold + policy acknowledged | Deposit amount; authorisation ceiling | Latch + **Razorpay** |
 | `reschedule` | price delta only | Target free + ladder permits | Delta ≤ booking value | Latch |
 | `cancel` | refund / retention | Tier from **server clock** | Ladder tier | Latch |
-| `charge_no_show` | debit | Start elapsed **+** merchant marked non-attendance | Mandate `max_amount` | **Razorpay** |
+| `charge_no_show` | debit | Start elapsed **+** merchant marked non-attendance | The authorised amount | **Razorpay** |
 
 ## Three architectural claims
 
@@ -75,12 +75,13 @@ Every money event carries four fields, enforced by the type system: `action` (wh
 no constructor that omits them.
 
 **3. The dangerous bound lives outside our own trust boundary.**
-The no-show ceiling is `max_amount` on a **UPI Autopay mandate**. A debit above it is refused by
-Razorpay, not by us. Even a fully compromised Latch server cannot debit ₹50,000 against a mandate
-registered at ₹1,500.
+The no-show charge is a **card authorisation** placed at booking for *exactly* the no-show fee and left
+uncaptured. Razorpay's Capture API refuses any capture that is not equal to the amount authorised — so
+there is no headroom, and a compromised Latch server cannot capture a rupee more than the customer
+consented to in front of a stated policy.
 
 > The bar asks for bounds that are *"impossible, not merely caught."* A server-side `if` is caught. A
-> mandate ceiling, a partial unique index, and a server-owned clock are impossible.
+> authorisation ceiling, a partial unique index, and a server-owned clock are impossible.
 
 ## The failure, handled
 
@@ -90,10 +91,10 @@ The doctor calls in sick on Wednesday. The merchant declines a confirmed, paid T
 MERCHANT_DECLINED     cause=MERCHANT → cancellation ladder deliberately NOT applied
 SLOT_RELEASED         returned to inventory
 REFUND_ISSUED         ₹300 → original instrument
-MANDATE_REVOKED       ₹1,500 ceiling returned — no orphaned authority
+AUTHORIZATION_RELEASED  no-show authorisation left to lapse — never captured
 ALTERNATIVES_OFFERED  3 matching slots pushed back to the originating agent
 
-net customer cost ₹0 · orphaned mandates 0 · stranded holds 0 · manual tickets 0
+net customer cost ₹0 · orphaned authorisations 0 · stranded holds 0 · manual tickets 0
 ```
 
 Chosen because it is a failure of the **domain**, not of the implementation — goods commerce has no

@@ -82,8 +82,8 @@ carry all four fields, and it must be impossible to construct one without them:
 
 - `action` — direction, amount in `Paise`, instrument
 - `gate` — which preconditions cleared, plus evidence
-- `bound` — ceiling, and `enforced_by: 'latch_policy' | 'db_constraint' | 'razorpay_mandate'`
-- `authority` — `policy_version`, plus mandate/payment ids where they exist
+- `bound` — ceiling, and `enforced_by: 'latch_policy' | 'db_constraint' | 'payment_rail'`
+- `authority` — `policy_version`, plus authorisation/payment ids where they exist
 
 Prove the constraint holds: write a test file with a deliberately-broken construction and a
 `@ts-expect-error` above it. If the code ever compiles without the error, the guarantee has silently

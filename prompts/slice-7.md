@@ -5,7 +5,7 @@ You are working on **Latch**, at `/Users/pranavd2905/Documents/projects/Latch`.
 Latch exposes an Indian dermatology clinic to any third-party AI agent over MCP. Razorpay AI
 Buildathon 2026, Track 01.
 
-**Slices 0–6 are complete**: all seven tools, real Razorpay test mode, the failure path, mandates, and
+**Slices 0–6 are complete**: all seven tools, real Razorpay test mode, the failure path, authorisations, and
 a live audit trail viewer. Everything currently runs locally over stdio.
 
 ## Why this slice matters more than it looks

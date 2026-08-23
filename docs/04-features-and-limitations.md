@@ -22,12 +22,12 @@ without a partnership or an integration deal.
 | Tool | Does |
 |---|---|
 | `find_slots` | Live availability as (service × practitioner × start × duration), computed from working hours |
-| `get_policy` | The machine-readable cancellation ladder, deposit rule, no-show terms, and mandate ceiling |
+| `get_policy` | The machine-readable cancellation ladder, deposit rule, no-show terms, and authorisation ceiling |
 | `hold_slot` | Reserves capacity for a TTL. **No money.** Idempotency-keyed |
-| `confirm_with_deposit` | Captures the deposit, registers the no-show mandate, confirms the booking |
+| `confirm_with_deposit` | Captures the deposit, registers the no-show authorisation, confirms the booking |
 | `reschedule` | Moves a booking. Same money, new time. Not a cancel-and-rebook |
 | `cancel` | Applies the ladder from the server clock, refunds or retains accordingly |
-| `charge_no_show` | Debits against the registered mandate after a missed appointment |
+| `charge_no_show` | Debits against the registered authorisation after a missed appointment |
 
 ### 1.2 The properties that make it defensible
 
@@ -35,19 +35,19 @@ without a partnership or an integration deal.
 |---|---|
 | **Audit trail is the source of truth** | Event-sourced. State is a fold over events. The trail cannot drift from reality because it *is* reality |
 | **Money actions cannot be unexplained** | The type system refuses a money event lacking action, gate, bound, and authority |
-| **The no-show ceiling is enforced by Razorpay** | `max_amount` on the UPI Autopay mandate. Not an `if` statement in our code |
+| **The no-show ceiling is enforced by Razorpay** | The authorised amount *is* the ceiling; capture must equal it. Not an `if` statement in our code |
 | **Double-booking is structurally impossible** | Postgres partial unique index, not application-level checking |
 | **Agents cannot assert time** | Every time-dependent decision reads the server `Clock` port |
 | **Retries cannot double-charge** | Idempotency keys on every money-moving tool |
 | **Refusals are recorded** | An attempted breach is a permanent event, so bounds can be *demonstrated*, not just claimed |
-| **Merchant decline unwinds autonomously** | Refund, mandate revoke, slot release, alternatives — one transaction, no human |
+| **Merchant decline unwinds autonomously** | Refund, authorisation released, slot release, alternatives — one transaction, no human |
 | **Policy is versioned** | A booking is judged under the ladder in force when it was made |
 
 ### 1.3 What ships in the buildathon build
 
 - MCP server, all seven tools, deployed at a public HTTPS endpoint
 - Postgres event store with the partial unique index and `FOR UPDATE` locking
-- Razorpay test-mode integration: orders, capture, refunds, UPI Autopay mandate registration and debit
+- Razorpay test-mode integration: orders, capture, refunds, card manual-capture authorisation registration and debit
 - Background worker: hold expiry, no-show eligibility
 - Live audit trail viewer over SSE
 - A minimal merchant control surface — enough to decline a booking and mark non-attendance
@@ -74,9 +74,10 @@ These are real constraints on what will exist on submission day. Stated plainly.
 
 | Limitation | Impact | Mitigation / path |
 |---|---|---|
-| **Razorpay test mode only** | No real money moves; test-mode mandate behaviour may differ subtly from live | Required by the competition. Every flow is nonetheless a real API call, not a mock |
-| **UPI Reserve Pay not used** | The brief proposed it; it has no public API (dev-log 001) | UPI Autopay mandate is used instead, and is *architecturally stronger*. Reserve Pay is the production evolution when its API ships |
-| **Mandate pricing unknown** | Razorpay lists subscription pricing "on request"; per-mandate fees could change no-show economics | Flagged in `05-cost-model.md` §5. Does not affect correctness |
+| **Razorpay test mode only** | No real money moves; test-mode authorisation behaviour may differ subtly from live | Required by the competition. Every flow is nonetheless a real API call, not a mock |
+| **UPI Reserve Pay not used** | Activation-gated, no documented test-mode flow, and test-mode UPI returns success on cancellation regardless — which would silently break the release path (dev-log 005) | Card manual capture is the test-mode stand-in. Reserve Pay is named as the production rail, and the active rail is recorded on every money event |
+| ⚠️ **Authorisations expire after 5 days** | `manual_expiry_period` maxes out at 7200 minutes. An appointment booked further out cannot carry a no-show authorisation on this rail | Demo books inside the window. A worker emits `AUTHORIZATION_LAPSED` so the system records losing its authority rather than failing silently. This limit is *why* Reserve Pay is the production rail |
+| **No void endpoint** | Razorpay documents no void/cancel API for an authorised payment | Release is by **lapse**: we simply never capture, and Razorpay auto-refunds at expiry. Customer cost stays ₹0, but release is asynchronous, not instant — the trail says so |
 | **Events table grows unbounded** | By design — audit trails are not deleted. Becomes a real cost at ~9M rows/month (Tier 3) | Date-partitioning + cold storage. Designed for, not built |
 | **Single region, single instance** | No HA. A Railway outage takes Latch down | Stateless app over one Postgres; horizontal scaling is a config change, not a rewrite |
 | **No DPDP compliance work** | Clinic appointment data is health-adjacent under India's DPDP Act | Zero risk during the buildathon (synthetic data, test mode). A genuine cost before any real merchant — named in the cost model |
@@ -106,8 +107,8 @@ idea.
 **"Why is this Razorpay's problem and not a scheduling company's?"**
 
 > Because the hard part is money, not time. A no-show charge is a debit against someone who received
-> nothing — that needs a mandate, a ceiling, and an audit trail, which is payments infrastructure. A
-> scheduler cannot build it without becoming a payments company. Razorpay already has the mandate
+> nothing — that needs an authorisation, a ceiling, and an audit trail, which is payments infrastructure. A
+> scheduler cannot build it without becoming a payments company. Razorpay already has the authorisation
 > rails and no booking primitive to put on them (brief §3, Layer 4).
 
 ---
@@ -125,7 +126,7 @@ Ordered. If the timeline compresses, cut from the top.
 **Never cut, in any scenario:**
 
 - The event store and the four-field money event — *this is the project*
-- Mandate registration with a real ceiling — this is B3, and the strongest claim we make
+- Authorisation hold with a real ceiling — this is B3, and the strongest claim we make
 - The merchant-decline path end to end — this is B5, and it is half the bar
 - The ladder boundary tests on a frozen clock — correctness of money is the product
 - The concurrency test — one slot, two agents, exactly one winner

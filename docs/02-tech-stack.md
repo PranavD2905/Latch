@@ -250,7 +250,7 @@ one data source.
 | Domain core | Pure unit tests. Frozen clock, in-memory state. Every ladder boundary, every gate, every refusal. | microseconds |
 | Adapters | Integration tests against real Postgres and real Razorpay **test mode** | seconds |
 | Concurrency | Parallel `hold_slot` calls against one slot, asserting exactly one wins | seconds |
-| Full flows | End-to-end: hold → confirm → merchant decline → refund → mandate revoked | seconds |
+| Full flows | End-to-end: hold → confirm → merchant decline → refund → authorisation released | seconds |
 
 The ladder boundary tests are the ones that matter most. "Cancelling at exactly 48 hours" and
 "cancelling at 47h59m" must be asserted deterministically, which requires a frozen clock, which
@@ -265,7 +265,7 @@ near-instant.
 
 Mandated by the competition, and correct anyway. Wrapped behind a `PaymentProvider` port so the domain
 never imports the SDK, and so `FakePaymentProvider` can simulate declines, timeouts, and — importantly
-— **a mandate ceiling rejection**, which is hard to trigger reliably against a live sandbox but must be
+— **a rail-side capture rejection**, which is hard to trigger reliably against a live sandbox but must be
 proven to work.
 
 ---

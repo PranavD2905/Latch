@@ -57,9 +57,8 @@ never be observed out of sync."
     { "hours_before": 0,  "retain_pct": 100 }
   ],
   "no_show": {
-    "fee_paise": 40000,                   // ₹400
-    "grace_minutes": 15,
-    "mandate_ceiling_paise": 150000       // ₹1,500 — registered on the mandate itself
+    "fee_paise": 40000,                   // ₹400 — ALSO the authorised amount; there is no headroom
+    "grace_minutes": 15
   },
   "hold_ttl_seconds": 600,                // 10 minutes
   "max_concurrent_holds_per_agent": 3
@@ -132,7 +131,7 @@ always sum to exactly the deposit.
        confirm_with_deposit   │
        ┌──────────────────────┘
        │  · deposit captured
-       │  · mandate registered
+       │  · authorisation registered
        ▼
   ┌───────────┐   reschedule (money preserved, slot moves)
   │           │ ◀──────────────┐
@@ -144,7 +143,7 @@ always sum to exactly the deposit.
         │
         ├── cancel(cause=MERCHANT) ──▶ ladder does NOT ──▶ DECLINED_BY_MERCHANT  (terminal)
         │                              apply; full refund;      ★ the B5 failure path
-        │                              mandate revoked;
+        │                              authorisation released;
         │                              alternatives offered
         │
         ├── start time + grace elapses ──▶ NO_SHOW_ELIGIBLE
@@ -178,11 +177,11 @@ system requires two independent facts, from two different authorities.
 ### Reschedule deserves a note
 
 Reschedule is a **self-transition**, not a cancel-and-rebook. `CONFIRMED → CONFIRMED`, same booking id,
-same deposit, same mandate, new `starts_at`.
+same deposit, same authorisation, new `starts_at`.
 
 This is brief §2.3 property #6 taken literally: *"Not return, not refund — a move."* Implementing it as
 cancel-then-rebook would refund the deposit (losing ₹7.08 in unrecoverable MDR — see cost model), void
-the mandate, and re-run the whole gate sequence. It would also break the audit trail's narrative: the
+the authorisation, and re-run the whole gate sequence. It would also break the audit trail's narrative: the
 history should read as one booking that moved, because that is what happened.
 
 The gate is a conjunction: the target slot must be free **and** the ladder must permit a move at the
@@ -203,17 +202,18 @@ The append-only log. Every row is immutable.
 | `HOLD_RELEASED` | — | Agent releases explicitly |
 | `POLICY_ACKNOWLEDGED` | — | Agent confirms it has read ladder vN |
 | `DEPOSIT_CAPTURED` | **in** | Razorpay capture succeeds |
-| `MANDATE_REGISTERED` | — | UPI Autopay token created, ceiling recorded |
+| `AUTHORIZATION_HELD` | — | card manual capture token created, ceiling recorded |
 | `BOOKING_CONFIRMED` | — | Both of the above succeeded |
 | `BOOKING_RESCHEDULED` | delta only | Move succeeded |
 | `CANCELLED_BY_CUSTOMER` | — | Cancel with `cause=CUSTOMER` |
 | `RETENTION_APPLIED` | **kept** | Ladder retained a portion |
 | `REFUND_ISSUED` | **out** | Razorpay refund succeeds |
 | `MERCHANT_DECLINED` | — | Merchant declines a confirmed booking ★ |
-| `MANDATE_REVOKED` | — | Token cancelled, ceiling returned |
+| `AUTHORIZATION_RELEASED` | — | Authorisation abandoned — never captured, left to lapse |
 | `ALTERNATIVES_OFFERED` | — | Replacement slots computed and pushed |
+| `AUTHORIZATION_LAPSED` | — | Worker: the 5-day authorisation window expired before the appointment |
 | `NO_SHOW_ELIGIBLE` | — | Start + grace elapsed |
-| `NO_SHOW_CHARGED` | **in** | Debit against mandate succeeded |
+| `NO_SHOW_CHARGED` | **in** | Debit against authorisation succeeded |
 | `BOOKING_COMPLETED` | — | Merchant marks attendance; booking finishes normally |
 | `ACTION_REFUSED` | — | A gate or bound rejected a command ★★ |
 
@@ -238,20 +238,21 @@ them.
   "action": {                                    // B1 — which rupee moved
     "direction": "debit",
     "amount_paise": 40000,
-    "instrument": "upi_mandate"
+    "instrument": "upi_authorisation"
   },
   "gate": {                                      // B4 — what permitted it
     "cleared": ["start_time_elapsed", "merchant_marked_non_attendance"],
     "evidence": { "started_at": "...", "marked_by": "merchant", "marked_at": "..." }
   },
   "bound": {                                     // B3 — the ceiling, and who holds it
-    "ceiling_paise": 150000,
-    "enforced_by": "razorpay_mandate",           // ← not "latch"
-    "headroom_after_paise": 110000
+    "ceiling_paise": 40000,                      // the authorised amount itself
+    "enforced_by": "payment_rail",               // ← not "latch"
+    "headroom_after_paise": 0                    // authorised at exactly the fee: no slack
   },
+  "rail": "manual_capture",                      // test-mode stand-in; prod rail is reserve_pay
   "authority": {                                 // B2 — under what rule
     "policy_version": 4,
-    "mandate_id": "token_8812",
+    "authorization_id": "pay_Auth991",
     "razorpay_payment_id": "pay_..."
   }
 }
@@ -261,7 +262,7 @@ Read that object and you can reconstruct the entire justification for ₹400 lea
 without opening the database or reading any code. That is the deliverable B5 asks for.
 
 Note `bound.enforced_by`. It is an enum, and the values are meaningfully different in strength:
-`latch_policy` < `db_constraint` < `razorpay_mandate`. The trail does not merely claim a bound existed
+`latch_policy` < `db_constraint` < `payment_rail`. The trail does not merely claim a bound existed
 — it names who would have stopped a breach.
 
 ---
@@ -278,10 +279,11 @@ humans need prose.
 | `HOLD_LIMIT_REACHED` | Too many concurrent holds | Release one |
 | `POLICY_NOT_ACKNOWLEDGED` | Confirm attempted without reading ladder | Call `get_policy`, then retry |
 | `POLICY_VERSION_STALE` | Ladder changed between read and confirm | Re-read and re-acknowledge |
-| `MANDATE_CEILING_EXCEEDED` | Debit above `max_amount` | **Nothing.** Structurally refused |
+| `CAPTURE_AMOUNT_MISMATCH` | Capture ≠ authorised amount | **Nothing.** Structurally refused |
 | `LADDER_FORBIDS_MOVE` | Reschedule attempted too close in | Cancel instead, accepting the tier |
 | `NOT_YET_ELIGIBLE` | No-show charge before start + grace | Wait |
 | `MERCHANT_ACTION_REQUIRED` | No-show charge without merchant marking | **Nothing.** Agent cannot self-serve |
+| `AUTHORIZATION_EXPIRED` | The 5-day authorisation window lapsed before the appointment | **Nothing.** Authority is gone; the no-show is uncollectable and the trail says why |
 | `IDEMPOTENT_REPLAY` | Duplicate key | Use the returned prior result |
 
 The two `Nothing` rows are the interesting ones. Most API errors tell a caller how to succeed. These
@@ -308,8 +310,9 @@ Thu 14:04:02  DEPOSIT_CAPTURED      ₹300 credit
                                     bound: ₹300  [enforced_by: latch_policy]
                                     authority: policy v4 · pay_NkT8s2
 
-Thu 14:04:03  MANDATE_REGISTERED    token_8812  ceiling ₹1,500  expires 2027-08-23
-                                    bound: ₹1,500  [enforced_by: razorpay_mandate]
+Thu 14:04:03  AUTHORIZATION_HELD    pay_Auth991  authorised ₹400  lapses in 5d
+                                    bound: ₹400 — the authorised amount IS the ceiling
+                                    [enforced_by: payment_rail] · rail: manual_capture
 
 Thu 14:04:03  BOOKING_CONFIRMED     bkg_01JQ  thu-1600  dr_rao
 
@@ -326,7 +329,8 @@ Wed 11:20:34  REFUND_ISSUED         ₹300 debit → original instrument  rfnd_4
                                     bound: ≤ captured amount  [enforced_by: latch_policy]
                                     note: MDR ₹7.08 not recovered — borne by merchant
 
-Wed 11:20:34  MANDATE_REVOKED       token_8812 released · ₹1,500 ceiling returned
+Wed 11:20:34  AUTHORIZATION_RELEASED       pay_Auth991 abandoned — never captured
+                                    rail: manual_capture · auto-refunds at expiry
                                     no orphaned authority remains
 
 Wed 11:20:35  ALTERNATIVES_OFFERED  3 slots · same service · comparable practitioner
@@ -335,7 +339,7 @@ Wed 11:20:35  ALTERNATIVES_OFFERED  3 slots · same service · comparable practi
               ─────────────────────────────────────────────────
               net customer cost  ₹0
               net merchant revenue  ₹0   (−₹7.08 sunk MDR)
-              orphaned mandates  0 · stranded holds  0 · manual tickets  0
+              orphaned authorisations  0 · stranded holds  0 · manual tickets  0
               ─────────────────────────────────────────────────
 ```
 

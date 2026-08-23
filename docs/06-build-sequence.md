@@ -18,7 +18,7 @@ Instead each slice cuts through every layer and ends with something that runs. *
 roughly day 4 — the complete failure path works end to end.** That is the submission's core argument.
 Everything after that deepens a thing that already exists.
 
-The risk profile matters too: the slices are ordered so the *most uncertain* work (Razorpay mandate
+The risk profile matters too: the slices are ordered so the *most uncertain* work (Razorpay authorisation
 registration, which dev-log 001 flagged as unverified) happens early enough that discovering a problem
 still leaves time to respond.
 
@@ -88,18 +88,18 @@ a submission that makes its case.
 
 ---
 
-## Slice 4 — Mandates and the no-show charge · ~days 5–6
+## Slice 4 — Authorisations and the no-show charge · ~days 5–6
 
 **The highest-risk slice, which is why it is scheduled while there is still room to react.**
 
-- UPI Autopay mandate registration: customer → order with `token` block → auth payment
+- card manual-capture authorisation registration: customer → order with `token` block → auth payment
 - Resolve the open question from dev-log 001: **is the auth transaction ₹1, or can it be the deposit?**
   (decides one payment or two at booking)
-- `MANDATE_REGISTERED` with the real ceiling, `enforced_by: razorpay_mandate`
+- `AUTHORIZATION_HELD` with the real ceiling, `enforced_by: payment_rail`
 - `charge_no_show`, gated on elapsed time **and** merchant marking
-- `MANDATE_REVOKED` wired into the decline path
-- **Prove the ceiling:** attempt a debit above `max_amount`, assert it is refused, assert
-  `ACTION_REFUSED` lands in the trail
+- `AUTHORIZATION_RELEASED` wired into the decline path
+- **Prove the ceiling:** attempt a capture above the authorised amount, assert Razorpay refuses it,
+  assert `ACTION_REFUSED` lands in the trail naming `payment_rail` as the enforcer
 
 That last item is not a test — it is a **demo asset**. It is how B3 gets *shown* rather than asserted.
 
@@ -108,7 +108,7 @@ That last item is not a test — it is a **demo asset**. It is how B3 gets *show
 ## Slice 5 — Cancel and reschedule · ~days 6–7
 
 - `cancel` with server-clock tier computation, retention and refund split
-- `reschedule` as a self-transition — same booking id, same deposit, same mandate
+- `reschedule` as a self-transition — same booking id, same deposit, same authorisation
 - Ladder gate on reschedule (no dodging a 100% tier by moving out then cancelling)
 - Background worker: hold expiry, no-show eligibility, via `FOR UPDATE SKIP LOCKED`
 
@@ -118,8 +118,8 @@ That last item is not a test — it is a **demo asset**. It is how B3 gets *show
 
 - SSE endpoint streaming events as they are appended
 - React + Vite + Tailwind; live list, expandable to the four fields
-- Visual weight on `bound.enforced_by` — `razorpay_mandate` must *look* different from `latch_policy`
-- Running totals: customer cost, merchant retention, mandate headroom
+- Visual weight on `bound.enforced_by` — `payment_rail` must *look* different from `latch_policy`
+- Running totals: customer cost, merchant retention, authorisation headroom
 
 **This is a product surface, not a debug page.** It is one of two things a judge looks at.
 
@@ -164,7 +164,7 @@ third-party agent can reach a merchant without a partnership.
 | 0:30–1:00 | Why: every protocol assumes a SKU. UCP has Shopping, Lodging, Food. No appointments primitive exists |
 | 1:00–2:00 | Live: a real agent holds a slot, reads the ladder, pays a deposit. Trail streaming beside it |
 | 2:00–2:45 | **The bound.** Attempt an over-ceiling no-show charge. Razorpay refuses it. Show the refusal in the trail. *"This isn't caught. It's impossible."* |
-| 2:45–3:45 | **The failure.** Doctor calls in sick. Decline → refund → mandate revoked → alternatives offered. Customer cost ₹0, no human |
+| 2:45–3:45 | **The failure.** Doctor calls in sick. Decline → refund → authorisation released → alternatives offered. Customer cost ₹0, no human |
 | 3:45–4:30 | Architecture: audit trail as source of truth; four mandatory fields; bound outside our trust boundary |
 | 4:30–5:00 | The money. ₹3 lakh/month evaporating per clinic; no-show revenue is 100% incremental to Razorpay |
 
@@ -183,5 +183,5 @@ Cut from the top if the timeline compresses. Detail in `04-features-and-limitati
 4. `find_slots` filters → next-available only
 5. Multi-practitioner → one practitioner
 
-**Never cut:** the event store and four-field money event · mandate registration with a real ceiling ·
+**Never cut:** the event store and four-field money event · authorisation hold with a real ceiling ·
 the merchant-decline path · ladder boundary tests on a frozen clock · the concurrency test.

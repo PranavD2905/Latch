@@ -48,7 +48,7 @@ Specified exactly in `docs/03-domain-model.md` §2. Two details that are easy to
 - `confirm_with_deposit` — against a **fake** payment provider this slice.
 
 **3. `FakePaymentProvider`** implementing the `PaymentProvider` port. It must be able to simulate
-success, decline, timeout, and (for Slice 4) a mandate ceiling rejection. Some of those are hard to
+success, decline, timeout, and (for Slice 4) an authorisation ceiling rejection. Some of those are hard to
 trigger reliably against a live sandbox but must be proven to work.
 
 **4. Gates, enforced server-side**
@@ -79,7 +79,7 @@ next slice and something breaks, the domain is already known-good and you know w
 
 ## Out of scope — do not build
 
-Real Razorpay calls, `cancel`, `reschedule`, `charge_no_show`, mandates, background workers, the SSE
+Real Razorpay calls, `cancel`, `reschedule`, `charge_no_show`, authorisations, background workers, the SSE
 viewer, deployment.
 
 ## Before you finish

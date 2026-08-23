@@ -6,7 +6,7 @@ Latch exposes an Indian dermatology clinic to any third-party AI agent over MCP.
 Buildathon 2026, Track 01.
 
 **Slices 0–4 are complete**: event store, ladder evaluator, MCP tools, real deposits, the
-merchant-decline failure path, mandates, and `charge_no_show`.
+merchant-decline failure path, authorisations, and `charge_no_show`.
 
 This slice completes the tool surface — all seven tools working — and adds the background jobs.
 
@@ -27,15 +27,15 @@ Slice 3 built the merchant-caused path. This is the customer-caused one, where t
   timestamp.** An agent may claim it is calling at 2pm; we do not care.
 - `RETENTION_APPLIED` and `REFUND_ISSUED` split the deposit. Floor on retention, remainder on refund,
   so they sum to exactly the deposit.
-- Mandate revoked — a cancelled booking must leave no live no-show authority.
+- Authorisation released — a cancelled booking must leave no live no-show authority.
 
 **2. `reschedule` — a self-transition, not a cancel-and-rebook**
 
-`CONFIRMED → CONFIRMED`. Same `booking_id`, same deposit, same mandate, new `starts_at`.
+`CONFIRMED → CONFIRMED`. Same `booking_id`, same deposit, same authorisation, new `starts_at`.
 
 Do **not** implement this as cancel-then-rebook. That would:
 - refund the deposit and lose ₹7.08 of unrecoverable MDR (`docs/05-cost-model.md`)
-- void and re-register the mandate
+- void and re-register the authorisation
 - break the trail's narrative — the history should read as one booking that *moved*, because that is
   what happened
 
@@ -76,7 +76,7 @@ Take `SELECT … FOR UPDATE` on the booking row in **both** paths. The confirm p
 - All seven MCP tools work
 - Ladder tests: cancelling at 72h refunds fully, at 47h59m retains 50%, at 11h59m retains 100%
 - A frozen-clock test proves an agent cannot influence the tier by claiming a different time
-- Reschedule preserves `booking_id`, deposit, and mandate — assert the mandate token is unchanged
+- Reschedule preserves `booking_id`, deposit, and authorisation — assert the authorisation is unchanged
 - The reschedule-then-cancel dodge is refused
 - Holds expire automatically and the slot becomes bookable
 - `NO_SHOW_ELIGIBLE` fires on time and charges nothing
