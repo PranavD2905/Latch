@@ -77,6 +77,7 @@ These are real constraints on what will exist on submission day. Stated plainly.
 | **Razorpay test mode only** | No real money moves; test-mode authorisation behaviour may differ subtly from live | Required by the competition. Every flow is nonetheless a real API call, not a mock |
 | **UPI Reserve Pay not used** | Activation-gated, no documented test-mode flow, and test-mode UPI returns success on cancellation regardless — which would silently break the release path (dev-log 005) | Card manual capture is the test-mode stand-in. Reserve Pay is named as the production rail, and the active rail is recorded on every money event |
 | ⚠️ **Authorisations expire after 5 days** | `manual_expiry_period` maxes out at 7200 minutes. An appointment booked further out cannot carry a no-show authorisation on this rail | Demo books inside the window. A worker emits `AUTHORIZATION_LAPSED` so the system records losing its authority rather than failing silently. This limit is *why* Reserve Pay is the production rail |
+| ⚠️ **First payment needs a human Checkout** | A standard test account cannot submit payments server-side; `/payments/create/upi` and `/payments/create/json` 404 pending TPV activation by Razorpay Support. Headless Checkout is blocked by hCaptcha + Sardine (dev-log 006) | Not a defect — this is AP2's *human-present* mode and B4's required gate. Everything after that first consent is autonomous. Applies to the no-show authorisation leg too, not just the deposit |
 | **No void endpoint** | Razorpay documents no void/cancel API for an authorised payment | Release is by **lapse**: we simply never capture, and Razorpay auto-refunds at expiry. Customer cost stays ₹0, but release is asynchronous, not instant — the trail says so |
 | **Events table grows unbounded** | By design — audit trails are not deleted. Becomes a real cost at ~9M rows/month (Tier 3) | Date-partitioning + cold storage. Designed for, not built |
 | **Single region, single instance** | No HA. A Railway outage takes Latch down | Stateless app over one Postgres; horizontal scaling is a config change, not a rewrite |
@@ -103,6 +104,27 @@ idea.
 > humans. Latch exposes the merchant *to* everyone else's agents — outbound, at machines. Zenoti has
 > no `/.well-known` manifest, no MCP server, no agent-facing API. And they sit on top of a gateway;
 > the money layer is not theirs to own.
+
+**"Is it really end to end if a human still completes Checkout?"** ⭐ the likeliest challenge
+
+> Yes — and the human step is the gate the bar asks for. B4 names *"a confirmation"* as its first
+> example of what must stand between intent and execution.
+>
+> AP2, which Track 01 cites by name, defines **two** modes: *human-present* (real-time approval) and
+> *human-not-present* (a human pre-signs a scoped mandate; the agent redeems it later with no clicks).
+> Latch implements both, in the right places — the deposit is human-present, the no-show charge is
+> human-not-present. ACP issues delegated tokens, Reserve Pay pre-approves a limit "with no **repeated**
+> approvals." Every protocol in this space puts a human at the front and the agent behind it. An agent
+> that could spend money with no consent at all isn't agentic commerce; it's an unauthorised
+> card-not-present transaction.
+>
+> And empirically: **Razorpay's own MCP server cannot do it either.** `initiate_payment` requires a
+> saved payment method from a prior human Checkout, then calls `submit_otp`. No tool in it creates a
+> payment from zero (dev-log 006).
+>
+> Of the nine lifecycle actions an AI buyer performs against Latch, **eight need no human** — including
+> the hardest one: a no-show debit executed weeks later against someone who received nothing, with no
+> customer and no front desk present.
 
 **"Why is this Razorpay's problem and not a scheduling company's?"**
 

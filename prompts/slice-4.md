@@ -17,7 +17,24 @@ returns success on cancellation regardless — which would silently break the re
 mandates hit the same mocked-cancel problem. **The rail is now card manual capture**, with Reserve Pay
 documented as the production rail.
 
-Three verified Razorpay constraints shape this slice. Do not design around them without re-verifying:
+### ⚠️ Slice 2 found a fourth constraint that lands directly on this slice
+
+**`capture: "manual"` does not give you a human-free way to CREATE an authorised payment.** It only
+changes what happens *after* a payment attempt succeeds — leave it `authorized` instead of
+auto-capturing. The payment attempt itself still has to go through Checkout.
+
+Slice 2 verified (dev-log 006) that a standard test account **cannot submit a payment server-side at
+all**: `/payments/create/upi` and `/payments/create/json` both return 404 and require Razorpay Support
+to enable TPV. Headless Checkout is blocked by hCaptcha + Sardine device fingerprinting.
+
+So the no-show authorisation leg needs the **same shape Slice 2 landed on for the deposit**: create the
+order server-side, then poll `orders.fetchPayments` until a human completes Checkout, with
+`PaymentTimeoutError` on expiry. Reuse that pattern — do not rediscover it.
+
+**This does not weaken the slice.** The authorisation is human-present (AP2's term); the *capture* weeks
+later is human-not-present and fully autonomous, which is the money action that matters here.
+
+Three further verified Razorpay constraints shape this slice. Do not design around them without re-verifying:
 
 1. **Capture must equal the authorised amount.** No partial capture, no multi-capture. One
    authorisation is consumed by exactly one capture.
