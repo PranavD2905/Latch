@@ -3,6 +3,7 @@ import type { Clock } from '../ports/clock.js'
 import type {
   ActionRefusedEvent,
   AlternativesOfferedEvent,
+  AuthorizationReleasedEvent,
   BookingCompletedEvent,
   BookingConfirmedEvent,
   BookingEvent,
@@ -21,6 +22,7 @@ import type {
   PolicyAcknowledgedEvent,
   RefundIssuedEvent,
   RetentionAppliedEvent,
+  SlotReleasedEvent,
 } from './events.js'
 
 function baseFields(bookingId: string, sequence: number, clock: Clock): EventBase {
@@ -49,7 +51,9 @@ export const createBookingConfirmedEvent = eventFactory<BookingConfirmedEvent>('
 export const createBookingRescheduledEvent = eventFactory<BookingRescheduledEvent>('BOOKING_RESCHEDULED')
 export const createCancelledByCustomerEvent = eventFactory<CancelledByCustomerEvent>('CANCELLED_BY_CUSTOMER')
 export const createMerchantDeclinedEvent = eventFactory<MerchantDeclinedEvent>('MERCHANT_DECLINED')
+export const createSlotReleasedEvent = eventFactory<SlotReleasedEvent>('SLOT_RELEASED')
 export const createMandateRevokedEvent = eventFactory<MandateRevokedEvent>('MANDATE_REVOKED')
+export const createAuthorizationReleasedEvent = eventFactory<AuthorizationReleasedEvent>('AUTHORIZATION_RELEASED')
 export const createAlternativesOfferedEvent = eventFactory<AlternativesOfferedEvent>('ALTERNATIVES_OFFERED')
 export const createNoShowEligibleEvent = eventFactory<NoShowEligibleEvent>('NO_SHOW_ELIGIBLE')
 export const createBookingCompletedEvent = eventFactory<BookingCompletedEvent>('BOOKING_COMPLETED')

@@ -209,6 +209,7 @@ The append-only log. Every row is immutable.
 | `RETENTION_APPLIED` | **kept** | Ladder retained a portion |
 | `REFUND_ISSUED` | **out** | Razorpay refund succeeds |
 | `MERCHANT_DECLINED` | — | Merchant declines a confirmed booking ★ |
+| `SLOT_RELEASED` | — | The declined booking's slot returns to inventory ★ |
 | `AUTHORIZATION_RELEASED` | — | Authorisation abandoned — never captured, left to lapse |
 | `ALTERNATIVES_OFFERED` | — | Replacement slots computed and pushed |
 | `AUTHORIZATION_LAPSED` | — | Worker: the 5-day authorisation window expired before the appointment |
@@ -217,7 +218,10 @@ The append-only log. Every row is immutable.
 | `BOOKING_COMPLETED` | — | Merchant marks attendance; booking finishes normally |
 | `ACTION_REFUSED` | — | A gate or bound rejected a command ★★ |
 
-★ the B5 failure path.
+★ the B5 failure path. `AUTHORIZATION_RELEASED` is also part of it but carries no ★ of its own: Slice 3
+appends it as a stub (`rail`, `note`, no `authorizationId`) because no-show authorisation registration
+is entirely Slice 4 scope — there is nothing real to release yet. Slice 4 fills in `authorizationId` and
+stops stubbing; the event type and its place in the five-event decline transaction do not change.
 ★★ **Refusals are events too.** When an agent tries to exceed a bound or skip a gate, that attempt is
 recorded permanently. This is what lets the demo *show the bound working* rather than merely assert it
 exists — a judge can watch an over-limit charge be refused and see the refusal land in the trail with
@@ -346,6 +350,15 @@ Wed 11:20:35  ALTERNATIVES_OFFERED  3 slots · same service · comparable practi
 Every line names its money action, its gate, its bound, its enforcer, and its authority. A judge
 reading top to bottom can account for every rupee, and can see that the ladder was *deliberately not
 applied* and why.
+
+**What Slice 3 alone actually produces, verified.** This trace is the full, post-Slice-4 picture. As of
+Slice 3, `AUTHORIZATION_HELD` does not exist yet — no-show authorisation registration is entirely
+Slice 4 scope (dev-logs/008) — so `BOOKING_CONFIRMED` follows `DEPOSIT_CAPTURED` directly, with no
+authorisation line between them, and `AUTHORIZATION_RELEASED` on decline carries `rail: manual_capture`
+and a `note` explaining it held nothing this slice, rather than a real `pay_Auth991`-style
+`authorizationId`. Confirmed against a real Razorpay refund (`src/app/decline-booking.live.integration.test.ts`):
+the five decline-path lines above (`MERCHANT_DECLINED` → `SLOT_RELEASED` → `REFUND_ISSUED` →
+`AUTHORIZATION_RELEASED` → `ALTERNATIVES_OFFERED`) match exactly, in order, in one transaction.
 
 ---
 

@@ -15,11 +15,14 @@
     "db:migrate": "tsx src/adapters/db/migrate.ts",
     "db:seed": "tsx src/adapters/db/seed.ts",
     "mcp:dev": "tsx src/adapters/mcp/stdio.ts",
-    "mcp:dev:razorpay": "PAYMENT_PROVIDER=razorpay tsx src/adapters/mcp/stdio.ts"
+    "mcp:dev:razorpay": "PAYMENT_PROVIDER=razorpay tsx src/adapters/mcp/stdio.ts",
+    "merchant-api:dev": "tsx src/adapters/merchant-api/http.ts",
+    "merchant-api:dev:razorpay": "PAYMENT_PROVIDER=razorpay tsx src/adapters/merchant-api/http.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "drizzle-orm": "^0.36.4",
+    "fastify": "^5.12.1",
     "postgres": "^3.4.5",
     "razorpay": "^2.9.8",
     "ulid": "^2.3.0",

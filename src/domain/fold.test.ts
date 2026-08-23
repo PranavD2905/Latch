@@ -84,7 +84,7 @@ describe('fold', () => {
         ceilingPaise: toPaise(150000),
         expiresAt: new Date('2027-08-23T00:00:00Z'),
       }),
-      createMerchantDeclinedEvent('bkg_01', 4, clock, { reason: 'practitioner_unavailable' }),
+      createMerchantDeclinedEvent('bkg_01', 4, clock, { reason: 'practitioner_unavailable', cause: 'MERCHANT' }),
       createRefundIssuedEvent('bkg_01', 5, clock, {
         action: { direction: 'debit', amountPaise: toPaise(30000), instrument: 'upi' },
         gate: { cleared: ['merchant_caused_cancellation'], evidence: {} },

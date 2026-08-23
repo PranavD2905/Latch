@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { FrozenClock } from '../adapters/clock/frozen-clock.js'
-import { createDepositCapturedEvent, createHoldCreatedEvent } from './event-factory.js'
+import { createDepositCapturedEvent, createHoldCreatedEvent, createMerchantDeclinedEvent } from './event-factory.js'
 import type { DepositCapturedEvent } from './events.js'
 import { toPaise } from './money.js'
 
@@ -56,5 +56,19 @@ describe('event construction', () => {
       gate: { cleared: [], evidence: {} },
       bound: { ceilingPaise: toPaise(30000), enforcedBy: 'latch_policy', headroomAfterPaise: toPaise(0) },
     })
+  })
+
+  // docs/03-domain-model.md §3 Rule 2 / slice-3.md: "cause is a required
+  // field... make omission impossible at the type level." MerchantDeclinedEvent
+  // has no default and no optional `cause` — the only value the type allows
+  // is the literal 'MERCHANT', and it cannot be left out.
+  it('cannot construct MERCHANT_DECLINED via the factory without `cause`', () => {
+    // @ts-expect-error — `cause` is missing from the fields argument
+    createMerchantDeclinedEvent('bkg_01', 4, clock, { reason: 'practitioner_unavailable' })
+  })
+
+  it('cannot construct MERCHANT_DECLINED with cause set to anything but MERCHANT', () => {
+    // @ts-expect-error — 'CUSTOMER' is not assignable to the literal type 'MERCHANT'
+    createMerchantDeclinedEvent('bkg_01', 4, clock, { reason: 'x', cause: 'CUSTOMER' })
   })
 })

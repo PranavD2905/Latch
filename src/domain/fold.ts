@@ -104,9 +104,14 @@ function applyEvent(state: BookingState, event: BookingEvent): BookingState {
 
     // Informational events: they happened, and lastEventSequence already
     // advanced above, but they do not change status or the projected fields.
+    // SLOT_RELEASED in particular: the booking already left ('held'|'confirmed')
+    // when MERCHANT_DECLINED set status above — this event records the fact,
+    // it isn't what makes the partial unique index stop blocking the slot.
     case 'DEPOSIT_CAPTURED':
     case 'RETENTION_APPLIED':
     case 'REFUND_ISSUED':
+    case 'SLOT_RELEASED':
+    case 'AUTHORIZATION_RELEASED':
     case 'ALTERNATIVES_OFFERED':
     case 'ACTION_REFUSED':
       return next
