@@ -21,7 +21,6 @@ export interface Policy {
   cancellationLadder: readonly LadderTier[]
   noShowFeePaise: Paise
   noShowGraceMinutes: number
-  mandateCeilingPaise: Paise
   holdTtlSeconds: number
   maxConcurrentHoldsPerAgent: number
 }

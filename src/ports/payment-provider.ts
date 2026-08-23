@@ -75,21 +75,6 @@ function describeCause(cause: unknown): string {
 }
 
 /**
- * docs/02-tech-stack.md §13 / docs/01-architecture.md Idea 3: the mandate
- * ceiling is enforced by Razorpay, not by Latch. `FakePaymentProvider`
- * simulates that rejection so the bound can be demoed before Slice 4 wires
- * a real mandate. Not exercised by a captureDeposit call in Slice 1 (there is
- * no mandate yet) — the scenario exists on the fake now so Slice 4 does not
- * need to touch this port's shape.
- */
-export class MandateCeilingExceededError extends Error {
-  constructor(reference: string) {
-    super(`Debit for ${reference} exceeds the registered mandate ceiling`)
-    this.name = 'MandateCeilingExceededError'
-  }
-}
-
-/**
  * Outbound port to the payment rail. docs/01-architecture.md system diagram:
  * `PaymentProvider -> Razorpay` in production, `-> FakeProvider` in tests.
  * The domain and app layers depend only on this interface — no Razorpay SDK

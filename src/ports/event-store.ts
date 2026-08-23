@@ -1,5 +1,6 @@
 import type { BookingEvent } from '../domain/events.js'
 import type { BookingStatus } from '../domain/fold.js'
+import type { Paise } from '../domain/money.js'
 
 /**
  * The `bookings` projection row, as read/written by the store. Mirrors
@@ -13,7 +14,24 @@ export interface BookingSnapshot {
   startsAt: Date
   status: BookingStatus
   policyVersion: number | undefined
-  mandateId: string | undefined
+  /** The no-show authorisation currently held against this booking — undefined before AUTHORIZATION_HELD, or after it's been captured/released. */
+  authorizationId: string | undefined
+  /**
+   * The amount actually authorised — cited by `charge_no_show` as the
+   * capture request, never re-derived from the merchant's *current* policy
+   * (docs/03-domain-model.md §2: money rules don't change retroactively on
+   * a booking already confirmed). If the merchant has since raised the
+   * no-show fee, capturing at the new, higher figure would itself trigger
+   * dev-logs/005 constraint 1 — the rail refuses any capture that isn't
+   * exactly what was authorised.
+   */
+  authorizationAmountPaise: Paise | undefined
+  /** Set alongside `authorizationId` — when this rail's authorisation window lapses (`manual_capture`'s `manual_expiry_period`). */
+  authorizationExpiresAt: Date | undefined
+  /** Set once the authorisation-lapse worker (or a gate check) has observed `authorizationExpiresAt` has passed. Prevents the worker re-emitting `AUTHORIZATION_LAPSED`. */
+  authorizationLapsedAt: Date | undefined
+  /** Set by the merchant API's mark-no-show route — the second of `charge_no_show`'s two independent facts (docs/03-domain-model.md §3 Rule 3). */
+  nonAttendanceMarkedAt: Date | undefined
   agentId: string | undefined
   /** Set only while status is HELD — when the hold's TTL expires. */
   holdExpiresAt: Date | undefined
@@ -82,4 +100,11 @@ export interface EventStore {
 
   /** How many bookings this agent currently has HELD — the concurrent-hold gate. */
   countLiveHoldsForAgent(agentId: string): Promise<number>
+
+  /**
+   * CONFIRMED bookings whose no-show authorisation has passed `expiresAt`
+   * but have not yet had that fact recorded (`authorizationLapsedAt` unset).
+   * The authorisation-lapse worker's input — docs/01-architecture.md §8.
+   */
+  listConfirmedBookingsWithExpiredAuthorization(now: Date): Promise<readonly BookingSnapshot[]>
 }

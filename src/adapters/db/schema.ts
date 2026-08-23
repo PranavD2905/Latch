@@ -13,7 +13,7 @@ export const eventTypeEnum = pgEnum('event_type', [
   'HOLD_RELEASED',
   'POLICY_ACKNOWLEDGED',
   'DEPOSIT_CAPTURED',
-  'MANDATE_REGISTERED',
+  'AUTHORIZATION_HELD',
   'BOOKING_CONFIRMED',
   'BOOKING_RESCHEDULED',
   'CANCELLED_BY_CUSTOMER',
@@ -21,10 +21,11 @@ export const eventTypeEnum = pgEnum('event_type', [
   'REFUND_ISSUED',
   'MERCHANT_DECLINED',
   'SLOT_RELEASED',
-  'MANDATE_REVOKED',
   'AUTHORIZATION_RELEASED',
+  'AUTHORIZATION_LAPSED',
   'ALTERNATIVES_OFFERED',
   'NO_SHOW_ELIGIBLE',
+  'NON_ATTENDANCE_MARKED',
   'NO_SHOW_CHARGED',
   'BOOKING_COMPLETED',
   'ACTION_REFUSED',
@@ -79,7 +80,20 @@ export const bookings = pgTable('bookings', {
   startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),
   status: bookingStatusEnum('status').notNull(),
   policyVersion: integer('policy_version'),
-  mandateId: text('mandate_id'),
+  /**
+   * Slice 4: the no-show authorisation currently held against this booking,
+   * and when it lapses / whether that lapse has been recorded — needed for
+   * `charge_no_show`'s gate and the authorisation-lapse worker without a
+   * full event replay. Renamed from the Slice 0-1 scaffolding's `mandateId`
+   * (dev-logs/005/006: the mandate design was replaced by card manual
+   * capture before it was ever used for real).
+   */
+  authorizationId: text('authorization_id'),
+  authorizationAmountPaise: integer('authorization_amount_paise'),
+  authorizationExpiresAt: timestamp('authorization_expires_at', { withTimezone: true }),
+  authorizationLapsedAt: timestamp('authorization_lapsed_at', { withTimezone: true }),
+  /** Set by the merchant API's mark-no-show route — `charge_no_show`'s second independent fact. */
+  nonAttendanceMarkedAt: timestamp('non_attendance_marked_at', { withTimezone: true }),
   /**
    * Slice 1 addition: which agent holds/confirmed this booking, and (while
    * status is 'held') when that hold's TTL expires. Both are needed for
@@ -142,7 +156,6 @@ export const policies = pgTable(
     cancellationLadder: jsonb('cancellation_ladder').notNull(),
     noShowFeePaise: integer('no_show_fee_paise').notNull(),
     noShowGraceMinutes: integer('no_show_grace_minutes').notNull(),
-    mandateCeilingPaise: integer('mandate_ceiling_paise').notNull(),
     holdTtlSeconds: integer('hold_ttl_seconds').notNull(),
     maxConcurrentHoldsPerAgent: integer('max_concurrent_holds_per_agent').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),

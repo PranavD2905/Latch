@@ -26,7 +26,7 @@ export interface BookingState {
   practitionerId: string | undefined
   startsAt: Date | undefined
   policyVersion: number | undefined
-  mandateId: string | undefined
+  authorizationId: string | undefined
   lastEventSequence: number
 }
 
@@ -66,8 +66,8 @@ function applyEvent(state: BookingState, event: BookingEvent): BookingState {
       next.policyVersion = event.policyVersion
       return next
 
-    case 'MANDATE_REGISTERED':
-      next.mandateId = event.mandateId
+    case 'AUTHORIZATION_HELD':
+      next.authorizationId = event.authorizationId
       return next
 
     case 'BOOKING_CONFIRMED':
@@ -86,8 +86,8 @@ function applyEvent(state: BookingState, event: BookingEvent): BookingState {
       next.status = 'DECLINED_BY_MERCHANT'
       return next
 
-    case 'MANDATE_REVOKED':
-      next.mandateId = undefined
+    case 'AUTHORIZATION_RELEASED':
+      next.authorizationId = undefined
       return next
 
     case 'NO_SHOW_ELIGIBLE':
@@ -111,8 +111,9 @@ function applyEvent(state: BookingState, event: BookingEvent): BookingState {
     case 'RETENTION_APPLIED':
     case 'REFUND_ISSUED':
     case 'SLOT_RELEASED':
-    case 'AUTHORIZATION_RELEASED':
+    case 'AUTHORIZATION_LAPSED':
     case 'ALTERNATIVES_OFFERED':
+    case 'NON_ATTENDANCE_MARKED':
     case 'ACTION_REFUSED':
       return next
   }
@@ -139,7 +140,7 @@ export function fold(events: readonly BookingEvent[]): BookingState {
     practitionerId: undefined,
     startsAt: undefined,
     policyVersion: undefined,
-    mandateId: undefined,
+    authorizationId: undefined,
     lastEventSequence: 0,
   }
 

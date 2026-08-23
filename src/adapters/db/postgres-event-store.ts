@@ -1,6 +1,7 @@
-import { and, eq, gte, inArray, lt, sql } from 'drizzle-orm'
+import { and, eq, gte, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm'
 import type { BookingEvent } from '../../domain/events.js'
 import type { BookingStatus } from '../../domain/fold.js'
+import { toPaise } from '../../domain/money.js'
 import type { BookingSnapshot, BusyInterval, EventStore, EventStoreTx } from '../../ports/event-store.js'
 import type { Db } from './client.js'
 import { bookings, events, services } from './schema.js'
@@ -45,7 +46,11 @@ function rowToSnapshot(row: typeof bookings.$inferSelect): BookingSnapshot {
     startsAt: row.startsAt,
     status: fromDbStatus(row.status),
     policyVersion: row.policyVersion ?? undefined,
-    mandateId: row.mandateId ?? undefined,
+    authorizationId: row.authorizationId ?? undefined,
+    authorizationAmountPaise: row.authorizationAmountPaise !== null ? toPaise(row.authorizationAmountPaise) : undefined,
+    authorizationExpiresAt: row.authorizationExpiresAt ?? undefined,
+    authorizationLapsedAt: row.authorizationLapsedAt ?? undefined,
+    nonAttendanceMarkedAt: row.nonAttendanceMarkedAt ?? undefined,
     agentId: row.agentId ?? undefined,
     holdExpiresAt: row.holdExpiresAt ?? undefined,
     lastEventSequence: row.lastEventSequence,
@@ -93,7 +98,11 @@ async function appendFor(db: Queryable, evts: readonly BookingEvent[], projectio
       startsAt: projection.startsAt,
       status: toDbStatus(projection.status),
       policyVersion: projection.policyVersion ?? null,
-      mandateId: projection.mandateId ?? null,
+      authorizationId: projection.authorizationId ?? null,
+      authorizationAmountPaise: projection.authorizationAmountPaise ?? null,
+      authorizationExpiresAt: projection.authorizationExpiresAt ?? null,
+      authorizationLapsedAt: projection.authorizationLapsedAt ?? null,
+      nonAttendanceMarkedAt: projection.nonAttendanceMarkedAt ?? null,
       agentId: projection.agentId ?? null,
       holdExpiresAt: projection.holdExpiresAt ?? null,
       lastEventSequence: projection.lastEventSequence,
@@ -105,7 +114,11 @@ async function appendFor(db: Queryable, evts: readonly BookingEvent[], projectio
       set: {
         status: toDbStatus(projection.status),
         policyVersion: projection.policyVersion ?? null,
-        mandateId: projection.mandateId ?? null,
+        authorizationId: projection.authorizationId ?? null,
+        authorizationAmountPaise: projection.authorizationAmountPaise ?? null,
+        authorizationExpiresAt: projection.authorizationExpiresAt ?? null,
+        authorizationLapsedAt: projection.authorizationLapsedAt ?? null,
+        nonAttendanceMarkedAt: projection.nonAttendanceMarkedAt ?? null,
         agentId: projection.agentId ?? null,
         holdExpiresAt: projection.holdExpiresAt ?? null,
         lastEventSequence: projection.lastEventSequence,
@@ -174,6 +187,21 @@ export class PostgresEventStore implements EventStore {
 
   async countLiveHoldsForAgent(agentId: string): Promise<number> {
     return countLiveHoldsFor(this.db, agentId)
+  }
+
+  async listConfirmedBookingsWithExpiredAuthorization(now: Date): Promise<readonly BookingSnapshot[]> {
+    const rows = await this.db
+      .select()
+      .from(bookings)
+      .where(
+        and(
+          eq(bookings.status, 'confirmed'),
+          isNotNull(bookings.authorizationExpiresAt),
+          lt(bookings.authorizationExpiresAt, now),
+          isNull(bookings.authorizationLapsedAt),
+        ),
+      )
+    return rows.map(rowToSnapshot)
   }
 }
 

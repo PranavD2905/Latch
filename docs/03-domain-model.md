@@ -214,14 +214,18 @@ The append-only log. Every row is immutable.
 | `ALTERNATIVES_OFFERED` | — | Replacement slots computed and pushed |
 | `AUTHORIZATION_LAPSED` | — | Worker: the 5-day authorisation window expired before the appointment |
 | `NO_SHOW_ELIGIBLE` | — | Start + grace elapsed |
+| `NON_ATTENDANCE_MARKED` | — | Merchant API marks non-attendance — the second of `charge_no_show`'s two independent facts |
 | `NO_SHOW_CHARGED` | **in** | Debit against authorisation succeeded |
 | `BOOKING_COMPLETED` | — | Merchant marks attendance; booking finishes normally |
 | `ACTION_REFUSED` | — | A gate or bound rejected a command ★★ |
 
-★ the B5 failure path. `AUTHORIZATION_RELEASED` is also part of it but carries no ★ of its own: Slice 3
-appends it as a stub (`rail`, `note`, no `authorizationId`) because no-show authorisation registration
-is entirely Slice 4 scope — there is nothing real to release yet. Slice 4 fills in `authorizationId` and
-stops stubbing; the event type and its place in the five-event decline transaction do not change.
+★ the B5 failure path. `AUTHORIZATION_RELEASED` is also part of it. Slice 3 appended it as a stub
+(`rail`, a free-text `note`, no `authorizationId`) because no-show authorisation registration was
+entirely Slice 4 scope at the time. Slice 4 fills it in for real: every decline now carries the actual
+`authorizationId` off the `AUTHORIZATION_HELD` it is abandoning, plus `expiresAt` (carried over from that
+same event) in place of the free-text `note` — a structural fact ("this clears automatically at this
+timestamp, not now") in place of prose. The event type and its place in the five-event decline
+transaction never changed.
 ★★ **Refusals are events too.** When an agent tries to exceed a bound or skip a gate, that attempt is
 recorded permanently. This is what lets the demo *show the bound working* rather than merely assert it
 exists — a judge can watch an over-limit charge be refused and see the refusal land in the trail with
@@ -242,7 +246,7 @@ them.
   "action": {                                    // B1 — which rupee moved
     "direction": "debit",
     "amount_paise": 40000,
-    "instrument": "upi_authorisation"
+    "instrument": "card"
   },
   "gate": {                                      // B4 — what permitted it
     "cleared": ["start_time_elapsed", "merchant_marked_non_attendance"],
@@ -268,6 +272,13 @@ without opening the database or reading any code. That is the deliverable B5 ask
 Note `bound.enforced_by`. It is an enum, and the values are meaningfully different in strength:
 `latch_policy` < `db_constraint` < `payment_rail`. The trail does not merely claim a bound existed
 — it names who would have stopped a breach.
+
+**`rail` appears on `NO_SHOW_CHARGED` only, not on every money event.** Narrower than dev-log 005's
+original phrasing ("every money event carries `rail`"). `DEPOSIT_CAPTURED` / `RETENTION_APPLIED` /
+`REFUND_ISSUED` always settle through the same `PaymentProvider` Checkout capture regardless of which
+`PaymentRail` is active — there is no rail choice for them to name. `AUTHORIZATION_HELD` /
+`AUTHORIZATION_RELEASED` / `AUTHORIZATION_LAPSED` carry it too, since they're the events that name which
+rail is holding the authority in the first place.
 
 ---
 
@@ -351,14 +362,34 @@ Every line names its money action, its gate, its bound, its enforcer, and its au
 reading top to bottom can account for every rupee, and can see that the ladder was *deliberately not
 applied* and why.
 
-**What Slice 3 alone actually produces, verified.** This trace is the full, post-Slice-4 picture. As of
-Slice 3, `AUTHORIZATION_HELD` does not exist yet — no-show authorisation registration is entirely
-Slice 4 scope (dev-logs/008) — so `BOOKING_CONFIRMED` follows `DEPOSIT_CAPTURED` directly, with no
-authorisation line between them, and `AUTHORIZATION_RELEASED` on decline carries `rail: manual_capture`
-and a `note` explaining it held nothing this slice, rather than a real `pay_Auth991`-style
-`authorizationId`. Confirmed against a real Razorpay refund (`src/app/decline-booking.live.integration.test.ts`):
-the five decline-path lines above (`MERCHANT_DECLINED` → `SLOT_RELEASED` → `REFUND_ISSUED` →
+**Confirmed against a real Razorpay refund** (`src/app/decline-booking.live.integration.test.ts`): the
+five decline-path lines above (`MERCHANT_DECLINED` → `SLOT_RELEASED` → `REFUND_ISSUED` →
 `AUTHORIZATION_RELEASED` → `ALTERNATIVES_OFFERED`) match exactly, in order, in one transaction.
+`AUTHORIZATION_HELD`/`AUTHORIZATION_RELEASED` themselves are proven against `FakePaymentRail` — which
+reproduces `ManualCaptureRail`'s real behaviour exactly, including the item-7 ceiling refusal — and
+against real Razorpay for order creation (`manual-capture-rail.live.integration.test.ts`); a real
+authorised payment landing and being captured needs a human at Checkout (dev-logs/006/007), which is
+carried forward rather than blocking Slice 4 (`dev-logs/009`).
+
+**The no-show-charge path, the other half of this slice**, does not run through decline — it is the
+booking's alternate ending when the patient never shows up at all:
+
+```
+── 15 minutes past the appointment, patient never arrived ─────────────────
+
+Thu 16:15:41  NON_ATTENDANCE_MARKED  marked_by=merchant
+                                    (merchant API only — no agent-facing path can forge this)
+
+Thu 16:16:02  NO_SHOW_CHARGED       ₹400 debit  pay_Auth991
+                                    gate: start_time_elapsed + merchant_marked_non_attendance
+                                    bound: ₹400  [enforced_by: payment_rail] · headroom after: ₹0
+                                    rail: manual_capture · authority: policy v4 · pay_Auth991
+```
+
+Two independent facts, from two different authorities, both satisfied before either event lands — an
+agent calling `charge_no_show` a minute earlier (`NOT_YET_ELIGIBLE`) or before the merchant marks
+non-attendance (`MERCHANT_ACTION_REQUIRED`) is refused, and that refusal is itself in the trail
+(`src/app/charge-no-show.integration.test.ts`).
 
 ---
 

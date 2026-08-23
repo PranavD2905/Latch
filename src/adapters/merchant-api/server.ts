@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify'
-import { BookingNotDeclinableError, BookingNotFoundError, NoDepositFoundError, declineBooking } from '../../app/decline-booking.js'
+import { BookingNotDeclinableError, BookingNotFoundError, NoAuthorizationFoundError, NoDepositFoundError, declineBooking } from '../../app/decline-booking.js'
+import { BookingNotMarkableError, BookingNotFoundError as MarkBookingNotFoundError, markNoShow } from '../../app/mark-no-show.js'
 import type { AppDeps } from '../../app/types.js'
 
 export interface MerchantApiOptions {
@@ -57,6 +58,33 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
         if (err instanceof BookingNotFoundError) return reply.code(404).send({ error: err.message })
         if (err instanceof BookingNotDeclinableError) return reply.code(409).send({ error: err.message })
         if (err instanceof NoDepositFoundError) return reply.code(422).send({ error: err.message })
+        if (err instanceof NoAuthorizationFoundError) return reply.code(422).send({ error: err.message })
+        throw err
+      }
+    },
+  )
+
+  // Slice 4: the second of charge_no_show's two independent facts
+  // (docs/03-domain-model.md §3 Rule 3) — merchant-only, same auth hook as
+  // decline above, and equally absent from the MCP tool list.
+  app.post<{ Params: { bookingId: string }; Body: { idempotencyKey: string } }>(
+    '/bookings/:bookingId/mark-no-show',
+    {
+      schema: {
+        params: { type: 'object', required: ['bookingId'], properties: { bookingId: { type: 'string', minLength: 1 } } },
+        body: { type: 'object', required: ['idempotencyKey'], properties: { idempotencyKey: { type: 'string', minLength: 1 } } },
+      },
+    },
+    async (request, reply) => {
+      const { bookingId } = request.params
+      const { idempotencyKey } = request.body
+
+      try {
+        const result = await markNoShow({ bookingId, idempotencyKey }, deps)
+        return await reply.code(200).send(result)
+      } catch (err) {
+        if (err instanceof MarkBookingNotFoundError) return reply.code(404).send({ error: err.message })
+        if (err instanceof BookingNotMarkableError) return reply.code(409).send({ error: err.message })
         throw err
       }
     },

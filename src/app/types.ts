@@ -3,6 +3,7 @@ import type { Clock } from '../ports/clock.js'
 import type { EventStore } from '../ports/event-store.js'
 import type { IdempotencyStore } from '../ports/idempotency-store.js'
 import type { PaymentProvider } from '../ports/payment-provider.js'
+import type { PaymentRail } from '../ports/payment-rail.js'
 
 /**
  * Everything a command handler needs, injected. This is the seam the
@@ -19,6 +20,8 @@ export interface AppDeps {
   eventStore: EventStore
   catalogRepo: CatalogRepo
   paymentProvider: PaymentProvider
+  /** Slice 4: the no-show authorisation leg (dev-logs/005) — deliberately a separate port from `paymentProvider`. */
+  paymentRail: PaymentRail
   idempotencyStore: IdempotencyStore
   merchantId: string
 }

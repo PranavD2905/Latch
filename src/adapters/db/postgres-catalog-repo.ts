@@ -48,7 +48,6 @@ export class PostgresCatalogRepo implements CatalogRepo {
       cancellationLadder: row.cancellationLadder as readonly LadderTier[],
       noShowFeePaise: toPaise(row.noShowFeePaise),
       noShowGraceMinutes: row.noShowGraceMinutes,
-      mandateCeilingPaise: toPaise(row.mandateCeilingPaise),
       holdTtlSeconds: row.holdTtlSeconds,
       maxConcurrentHoldsPerAgent: row.maxConcurrentHoldsPerAgent,
     }

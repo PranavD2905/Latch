@@ -1,4 +1,4 @@
-import { createBookingConfirmedEvent, createDepositCapturedEvent, createPolicyAcknowledgedEvent } from '../domain/event-factory.js'
+import { createAuthorizationHeldEvent, createBookingConfirmedEvent, createDepositCapturedEvent, createPolicyAcknowledgedEvent } from '../domain/event-factory.js'
 import { subtractPaise } from '../domain/money.js'
 import type { Policy } from '../domain/policy.js'
 import { Refusal, type RefusalCode } from '../domain/refusals.js'
@@ -6,6 +6,21 @@ import type { BookingSnapshot } from '../ports/event-store.js'
 import { NoActivePolicyError } from './get-policy.js'
 import { appendRefusalEvent } from './refusal.js'
 import type { AppDeps } from './types.js'
+
+/**
+ * Distinct from `cmd.idempotencyKey`, which keys the deposit leg (and, via
+ * this suffix, the receipt Razorpay would otherwise collide on): two
+ * separate Checkout completions happen at `confirm_with_deposit` — deposit
+ * capture and no-show authorisation — and `ManualCaptureRail`/
+ * `RazorpayPaymentProvider` both derive a Razorpay `receipt` deterministically
+ * from whatever key they're given (dev-logs/006). Reusing the same raw key
+ * for both would make them resolve to the same receipt and one call would
+ * find the other's order. The deposit leg's key is left untouched (not
+ * suffixed) because existing fixtures reference it as a raw receipt string.
+ */
+function authorizationIdempotencyKey(depositIdempotencyKey: string): string {
+  return `${depositIdempotencyKey}:no_show_auth`
+}
 
 export interface ConfirmWithDepositCommand {
   bookingId: string
@@ -28,6 +43,12 @@ export interface ConfirmWithDepositResult {
   deposit: {
     paymentId: string
     amountPaise: number
+  }
+  /** The no-show authorisation registered alongside the deposit — docs/01-architecture.md Idea 3. */
+  authorization: {
+    authorizationId: string
+    amountPaise: number
+    expiresAt: string
   }
 }
 
@@ -106,17 +127,29 @@ export async function confirmWithDeposit(cmd: ConfirmWithDepositCommand, deps: A
   }
 
   const { snapshot } = gateOutcome
+  const now = deps.clock.now()
 
   // Outside the row lock, deliberately — never hold a DB lock across a
-  // network call to the payment rail. A decline/timeout here is an external
-  // failure, not a gate/bound refusal, so no ACTION_REFUSED is appended and
-  // the booking is left HELD: the agent can simply retry confirm (its
-  // idempotency key was never stored, since we only store on success).
-  const captured = await deps.paymentProvider.captureDeposit({
-    amountPaise: policy.depositAmountPaise,
-    idempotencyKey: cmd.idempotencyKey,
-    reference: snapshot.bookingId,
-  })
+  // network call to the payment rail. A decline/timeout on either leg is an
+  // external failure, not a gate/bound refusal, so no ACTION_REFUSED is
+  // appended and the booking is left HELD: the agent can simply retry
+  // confirm (its idempotency key was never stored, since we only store on
+  // success). Run concurrently — docs/01-architecture.md Idea 3 / dev-logs/007:
+  // two separate Checkout completions in this build, so a human waiting on
+  // both should not wait on them serially.
+  const [captured, authorized] = await Promise.all([
+    deps.paymentProvider.captureDeposit({
+      amountPaise: policy.depositAmountPaise,
+      idempotencyKey: cmd.idempotencyKey,
+      reference: snapshot.bookingId,
+    }),
+    deps.paymentRail.authorize({
+      amountPaise: policy.noShowFeePaise,
+      idempotencyKey: authorizationIdempotencyKey(cmd.idempotencyKey),
+      reference: snapshot.bookingId,
+      now,
+    }),
+  ])
 
   await deps.eventStore.transaction(async (tx) => {
     const fresh = await tx.loadSnapshotForUpdate(snapshot.bookingId)
@@ -139,16 +172,27 @@ export async function confirmWithDeposit(cmd: ConfirmWithDepositCommand, deps: A
       },
       authority: { policyVersion: policy.policyVersion, razorpayPaymentId: captured.paymentId },
     })
+    const authorizationEvent = createAuthorizationHeldEvent(snapshot.bookingId, ++sequence, deps.clock, {
+      authorizationId: authorized.authorizationId,
+      amountPaise: authorized.amountPaise,
+      expiresAt: authorized.expiresAt,
+      rail: deps.paymentRail.name,
+      enforcedBy: 'payment_rail',
+      policyVersion: policy.policyVersion,
+    })
     const confirmedEvent = createBookingConfirmedEvent(snapshot.bookingId, ++sequence, deps.clock, {})
 
     const projection: BookingSnapshot = {
       ...base,
       status: 'CONFIRMED',
       policyVersion: policy.policyVersion,
+      authorizationId: authorized.authorizationId,
+      authorizationAmountPaise: authorized.amountPaise,
+      authorizationExpiresAt: authorized.expiresAt,
       lastEventSequence: sequence,
     }
 
-    await tx.append([ackEvent, depositEvent, confirmedEvent], projection)
+    await tx.append([ackEvent, depositEvent, authorizationEvent, confirmedEvent], projection)
   })
 
   const result: ConfirmWithDepositResult = {
@@ -156,6 +200,7 @@ export async function confirmWithDeposit(cmd: ConfirmWithDepositCommand, deps: A
     status: 'CONFIRMED',
     policyVersion: policy.policyVersion,
     deposit: { paymentId: captured.paymentId, amountPaise: captured.amountPaise },
+    authorization: { authorizationId: authorized.authorizationId, amountPaise: authorized.amountPaise, expiresAt: authorized.expiresAt.toISOString() },
   }
   await deps.idempotencyStore.put('confirm_with_deposit', cmd.idempotencyKey, result)
   return result

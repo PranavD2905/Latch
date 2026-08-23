@@ -338,7 +338,7 @@ never moves money — that would be a money action firing on inference, which B4
 
 | Actor | Can | Cannot |
 |---|---|---|
-| Third-party agent | Search, read policy, hold, confirm, reschedule, cancel | Set policy, decline, mark no-show, exceed authorisation ceiling, assert a timestamp |
+| Third-party agent | Search, read policy, hold, confirm, reschedule, cancel, call `charge_no_show` (gated — see below) | Set policy, decline, mark non-attendance, exceed authorisation ceiling, assert a timestamp |
 | Merchant | Set policy, decline, mark non-attendance | Debit above the registered authorisation ceiling |
 | Latch server | Orchestrate all of the above | Debit above the registered authorisation ceiling |
 | Razorpay | Enforce the ceiling | — |

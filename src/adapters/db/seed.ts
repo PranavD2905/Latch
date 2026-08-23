@@ -73,7 +73,6 @@ async function seed() {
       ],
       noShowFeePaise: 40000, // ₹400
       noShowGraceMinutes: 15,
-      mandateCeilingPaise: 150000, // ₹1,500
       holdTtlSeconds: 600,
       maxConcurrentHoldsPerAgent: 3,
       createdAt: now,

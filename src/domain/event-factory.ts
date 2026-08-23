@@ -3,6 +3,8 @@ import type { Clock } from '../ports/clock.js'
 import type {
   ActionRefusedEvent,
   AlternativesOfferedEvent,
+  AuthorizationHeldEvent,
+  AuthorizationLapsedEvent,
   AuthorizationReleasedEvent,
   BookingCompletedEvent,
   BookingConfirmedEvent,
@@ -14,9 +16,8 @@ import type {
   HoldCreatedEvent,
   HoldExpiredEvent,
   HoldReleasedEvent,
-  MandateRegisteredEvent,
-  MandateRevokedEvent,
   MerchantDeclinedEvent,
+  NonAttendanceMarkedEvent,
   NoShowChargedEvent,
   NoShowEligibleEvent,
   PolicyAcknowledgedEvent,
@@ -46,16 +47,17 @@ export const createHoldCreatedEvent = eventFactory<HoldCreatedEvent>('HOLD_CREAT
 export const createHoldExpiredEvent = eventFactory<HoldExpiredEvent>('HOLD_EXPIRED')
 export const createHoldReleasedEvent = eventFactory<HoldReleasedEvent>('HOLD_RELEASED')
 export const createPolicyAcknowledgedEvent = eventFactory<PolicyAcknowledgedEvent>('POLICY_ACKNOWLEDGED')
-export const createMandateRegisteredEvent = eventFactory<MandateRegisteredEvent>('MANDATE_REGISTERED')
+export const createAuthorizationHeldEvent = eventFactory<AuthorizationHeldEvent>('AUTHORIZATION_HELD')
 export const createBookingConfirmedEvent = eventFactory<BookingConfirmedEvent>('BOOKING_CONFIRMED')
 export const createBookingRescheduledEvent = eventFactory<BookingRescheduledEvent>('BOOKING_RESCHEDULED')
 export const createCancelledByCustomerEvent = eventFactory<CancelledByCustomerEvent>('CANCELLED_BY_CUSTOMER')
 export const createMerchantDeclinedEvent = eventFactory<MerchantDeclinedEvent>('MERCHANT_DECLINED')
 export const createSlotReleasedEvent = eventFactory<SlotReleasedEvent>('SLOT_RELEASED')
-export const createMandateRevokedEvent = eventFactory<MandateRevokedEvent>('MANDATE_REVOKED')
 export const createAuthorizationReleasedEvent = eventFactory<AuthorizationReleasedEvent>('AUTHORIZATION_RELEASED')
+export const createAuthorizationLapsedEvent = eventFactory<AuthorizationLapsedEvent>('AUTHORIZATION_LAPSED')
 export const createAlternativesOfferedEvent = eventFactory<AlternativesOfferedEvent>('ALTERNATIVES_OFFERED')
 export const createNoShowEligibleEvent = eventFactory<NoShowEligibleEvent>('NO_SHOW_ELIGIBLE')
+export const createNonAttendanceMarkedEvent = eventFactory<NonAttendanceMarkedEvent>('NON_ATTENDANCE_MARKED')
 export const createBookingCompletedEvent = eventFactory<BookingCompletedEvent>('BOOKING_COMPLETED')
 export const createActionRefusedEvent = eventFactory<ActionRefusedEvent>('ACTION_REFUSED')
 

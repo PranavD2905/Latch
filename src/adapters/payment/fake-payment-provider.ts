@@ -1,6 +1,5 @@
 import { ulid } from 'ulid'
 import {
-  MandateCeilingExceededError,
   PaymentDeclinedError,
   PaymentTimeoutError,
   type CaptureDepositParams,
@@ -10,15 +9,18 @@ import {
   type RefundDepositResult,
 } from '../../ports/payment-provider.js'
 
-export type PaymentScenario = 'success' | 'decline' | 'timeout' | 'mandate_ceiling_exceeded'
+export type PaymentScenario = 'success' | 'decline' | 'timeout'
 
 /**
  * docs/02-tech-stack.md §13 / prompts/slice-1.md: must be able to simulate
- * success, decline, timeout, and (for Slice 4) a mandate ceiling rejection —
- * scenarios that are hard to trigger reliably against a live Razorpay
- * sandbox but must be proven to work. Tests call `setScenario` for a given
- * idempotency key before invoking the command handler, so behaviour is
- * deterministic rather than random.
+ * success, decline, and timeout — scenarios that are hard to trigger
+ * reliably against a live Razorpay sandbox but must be proven to work.
+ * Tests call `setScenario` for a given idempotency key before invoking the
+ * command handler, so behaviour is deterministic rather than random. (The
+ * no-show authorisation leg's own scenarios — including the amount-mismatch
+ * ceiling refusal — live on `FakePaymentRail`, not here; see dev-logs/005:
+ * the old mandate-ceiling design this used to simulate was replaced by card
+ * manual capture before it was ever exercised for real.)
  *
  * Idempotency is honoured here too, at the provider level: a repeated
  * `captureDeposit` call with a key that already succeeded returns the same
@@ -46,8 +48,6 @@ export class FakePaymentProvider implements PaymentProvider {
         throw new PaymentDeclinedError(params.reference)
       case 'timeout':
         throw new PaymentTimeoutError(params.reference)
-      case 'mandate_ceiling_exceeded':
-        throw new MandateCeilingExceededError(params.reference)
       case 'success': {
         const result: CaptureDepositResult = { paymentId: `pay_${ulid()}`, amountPaise: params.amountPaise, instrument: 'upi' }
         this.captured.set(params.idempotencyKey, result)

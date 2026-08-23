@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { FrozenClock } from '../adapters/clock/frozen-clock.js'
 import {
+  createAuthorizationHeldEvent,
+  createAuthorizationReleasedEvent,
   createBookingConfirmedEvent,
   createDepositCapturedEvent,
   createHoldCreatedEvent,
-  createMandateRegisteredEvent,
-  createMandateRevokedEvent,
   createMerchantDeclinedEvent,
   createNoShowChargedEvent,
   createNoShowEligibleEvent,
@@ -61,17 +61,20 @@ describe('fold', () => {
         bound: { ceilingPaise: toPaise(30000), enforcedBy: 'latch_policy', headroomAfterPaise: toPaise(0) },
         authority: { policyVersion: 4, razorpayPaymentId: 'pay_1' },
       }),
-      createMandateRegisteredEvent('bkg_01', 4, clock, {
-        mandateId: 'token_8812',
-        ceilingPaise: toPaise(150000),
+      createAuthorizationHeldEvent('bkg_01', 4, clock, {
+        authorizationId: 'pay_Auth991',
+        amountPaise: toPaise(40000),
         expiresAt: new Date('2027-08-23T00:00:00Z'),
+        rail: 'manual_capture',
+        enforcedBy: 'payment_rail',
+        policyVersion: 4,
       }),
       createBookingConfirmedEvent('bkg_01', 5, clock, {}),
     ]
     const state = fold(events)
     expect(state.status).toBe('CONFIRMED')
     expect(state.policyVersion).toBe(4)
-    expect(state.mandateId).toBe('token_8812')
+    expect(state.authorizationId).toBe('pay_Auth991')
     expect(state.lastEventSequence).toBe(5)
   })
 
@@ -79,10 +82,13 @@ describe('fold', () => {
     const events = [
       holdCreated('bkg_01', 1),
       createBookingConfirmedEvent('bkg_01', 2, clock, {}),
-      createMandateRegisteredEvent('bkg_01', 3, clock, {
-        mandateId: 'token_8812',
-        ceilingPaise: toPaise(150000),
+      createAuthorizationHeldEvent('bkg_01', 3, clock, {
+        authorizationId: 'pay_Auth991',
+        amountPaise: toPaise(40000),
         expiresAt: new Date('2027-08-23T00:00:00Z'),
+        rail: 'manual_capture',
+        enforcedBy: 'payment_rail',
+        policyVersion: 4,
       }),
       createMerchantDeclinedEvent('bkg_01', 4, clock, { reason: 'practitioner_unavailable', cause: 'MERCHANT' }),
       createRefundIssuedEvent('bkg_01', 5, clock, {
@@ -91,11 +97,15 @@ describe('fold', () => {
         bound: { ceilingPaise: toPaise(30000), enforcedBy: 'latch_policy', headroomAfterPaise: toPaise(0) },
         authority: { policyVersion: 4, razorpayPaymentId: 'pay_1' },
       }),
-      createMandateRevokedEvent('bkg_01', 6, clock, { mandateId: 'token_8812' }),
+      createAuthorizationReleasedEvent('bkg_01', 6, clock, {
+        authorizationId: 'pay_Auth991',
+        rail: 'manual_capture',
+        expiresAt: new Date('2027-08-23T00:00:00Z'),
+      }),
     ]
     const state = fold(events)
     expect(state.status).toBe('DECLINED_BY_MERCHANT')
-    expect(state.mandateId).toBeUndefined() // revoked
+    expect(state.authorizationId).toBeUndefined() // released
   })
 
   it('folds through to NO_SHOW_CHARGED', () => {
@@ -104,10 +114,11 @@ describe('fold', () => {
       createBookingConfirmedEvent('bkg_01', 2, clock, {}),
       createNoShowEligibleEvent('bkg_01', 3, clock, {}),
       createNoShowChargedEvent('bkg_01', 4, clock, {
-        action: { direction: 'debit', amountPaise: toPaise(40000), instrument: 'upi_mandate' },
+        rail: 'manual_capture',
+        action: { direction: 'debit', amountPaise: toPaise(40000), instrument: 'card' },
         gate: { cleared: ['start_time_elapsed', 'merchant_marked_non_attendance'], evidence: {} },
-        bound: { ceilingPaise: toPaise(150000), enforcedBy: 'razorpay_mandate', headroomAfterPaise: toPaise(110000) },
-        authority: { policyVersion: 4, mandateId: 'token_8812' },
+        bound: { ceilingPaise: toPaise(40000), enforcedBy: 'payment_rail', headroomAfterPaise: toPaise(0) },
+        authority: { policyVersion: 4, authorizationId: 'pay_Auth991' },
       }),
     ]
     const state = fold(events)

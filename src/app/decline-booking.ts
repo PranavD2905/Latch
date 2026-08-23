@@ -5,7 +5,7 @@ import {
   createRefundIssuedEvent,
   createSlotReleasedEvent,
 } from '../domain/event-factory.js'
-import type { DepositCapturedEvent } from '../domain/events.js'
+import type { AuthorizationHeldEvent, DepositCapturedEvent } from '../domain/events.js'
 import { subtractPaise } from '../domain/money.js'
 import { findSlots } from './find-slots.js'
 import type { AppDeps } from './types.js'
@@ -29,12 +29,24 @@ export class BookingNotFoundError extends Error {}
 export class BookingNotDeclinableError extends Error {}
 /** A CONFIRMED booking with no DEPOSIT_CAPTURED event in its history would be a prior-slice bug, not a real state. */
 export class NoDepositFoundError extends Error {}
+/** A CONFIRMED booking with no AUTHORIZATION_HELD event in its history would be a prior-slice bug (every confirm_with_deposit registers one) — not a real state. */
+export class NoAuthorizationFoundError extends Error {}
 
 type GateOutcome =
   | { kind: 'not_found' }
   | { kind: 'not_declinable' }
   | { kind: 'no_deposit' }
-  | { kind: 'ok'; practitionerId: string; serviceId: string; startsAt: Date; policyVersion: number | undefined; lastEventSequence: number; deposit: DepositCapturedEvent }
+  | { kind: 'no_authorization' }
+  | {
+      kind: 'ok'
+      practitionerId: string
+      serviceId: string
+      startsAt: Date
+      policyVersion: number | undefined
+      lastEventSequence: number
+      deposit: DepositCapturedEvent
+      authorization: AuthorizationHeldEvent
+    }
 
 /**
  * `decline_booking` — the merchant-only failure path, docs/01-architecture.md
@@ -73,6 +85,10 @@ export async function declineBooking(cmd: DeclineBookingCommand, deps: AppDeps):
     if (!deposit) {
       return { kind: 'no_deposit' }
     }
+    const authorization = history.find((e): e is AuthorizationHeldEvent => e.type === 'AUTHORIZATION_HELD')
+    if (!authorization) {
+      return { kind: 'no_authorization' }
+    }
 
     return {
       kind: 'ok',
@@ -82,6 +98,7 @@ export async function declineBooking(cmd: DeclineBookingCommand, deps: AppDeps):
       policyVersion: snapshot.policyVersion,
       lastEventSequence: snapshot.lastEventSequence,
       deposit,
+      authorization,
     }
   })
 
@@ -94,8 +111,11 @@ export async function declineBooking(cmd: DeclineBookingCommand, deps: AppDeps):
   if (gateOutcome.kind === 'no_deposit') {
     throw new NoDepositFoundError(`booking ${cmd.bookingId} is CONFIRMED but has no DEPOSIT_CAPTURED event in its history`)
   }
+  if (gateOutcome.kind === 'no_authorization') {
+    throw new NoAuthorizationFoundError(`booking ${cmd.bookingId} is CONFIRMED but has no AUTHORIZATION_HELD event in its history`)
+  }
 
-  const { practitionerId, serviceId, startsAt, deposit } = gateOutcome
+  const { practitionerId, serviceId, startsAt, deposit, authorization } = gateOutcome
 
   const paymentId = deposit.authority.razorpayPaymentId
   if (!paymentId) {
@@ -154,9 +174,13 @@ export async function declineBooking(cmd: DeclineBookingCommand, deps: AppDeps):
         razorpayRefundId: refund.refundId,
       },
     })
+    // No rail call here, deliberately (dev-logs/005: no void endpoint) —
+    // "released" means we simply never call captureAuthorization on it.
+    // Razorpay auto-refunds the authorisation on its own at `expiresAt`.
     const authorizationReleasedEvent = createAuthorizationReleasedEvent(cmd.bookingId, ++sequence, deps.clock, {
-      rail: 'manual_capture',
-      note: 'stub: no authorisation was held this slice — AUTHORIZATION_HELD lands in Slice 4, so there is nothing yet to release',
+      authorizationId: authorization.authorizationId,
+      rail: authorization.rail,
+      expiresAt: authorization.expiresAt,
     })
     const alternativesEvent = createAlternativesOfferedEvent(cmd.bookingId, ++sequence, deps.clock, {
       alternatives: alternatives.map((a) => ({ ...a, startsAt: new Date(a.startsAt) })),

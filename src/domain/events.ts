@@ -18,15 +18,16 @@ export interface EventBase {
 // ---------------------------------------------------------------------------
 
 export type MoneyDirection = 'credit' | 'debit'
-export type Instrument = 'card' | 'upi' | 'upi_mandate' | 'netbanking' | 'wallet'
+export type Instrument = 'card' | 'upi' | 'netbanking' | 'wallet'
 
 /**
  * Which payment rail enforced a bound. `manual_capture` is the test-mode
- * stand-in built in Slice 4; `reserve_pay` is the documented production
- * rail, never built (dev-logs/005). Slice 3 introduces this ahead of Slice
- * 4's `AUTHORIZATION_HELD`/`AUTHORIZATION_RELEASED` work because
- * `AUTHORIZATION_RELEASED` is stubbed here and must still name a rail — the
- * trail must never be silent about which rail (if any) was in play.
+ * stand-in built in Slice 4 (`ManualCaptureRail`); `reserve_pay` is the
+ * documented production rail, a stub-that-throws (`ReservePayRail`,
+ * dev-logs/005). Slice 3 introduced this field ahead of Slice 4's
+ * `AUTHORIZATION_HELD`/`AUTHORIZATION_RELEASED` work because
+ * `AUTHORIZATION_RELEASED` was stubbed there and had to still name a rail —
+ * the trail must never be silent about which rail (if any) was in play.
  */
 export type PaymentRail = 'manual_capture' | 'reserve_pay'
 
@@ -45,9 +46,12 @@ export interface GateCleared {
 
 /**
  * B3 — the ceiling this action ran against, and who would have stopped a breach.
- * The strength ordering matters: latch_policy < db_constraint < razorpay_mandate.
+ * The strength ordering matters: latch_policy < db_constraint < payment_rail.
+ * (Renamed from `razorpay_mandate` in Slice 4, dev-logs/005: the enforcing
+ * rail now swaps via the `PaymentRail` port, so the enum names the role, not
+ * one specific rail's mechanism.)
  */
-export type BoundEnforcer = 'latch_policy' | 'db_constraint' | 'razorpay_mandate'
+export type BoundEnforcer = 'latch_policy' | 'db_constraint' | 'payment_rail'
 
 export interface BoundApplied {
   ceilingPaise: Paise
@@ -55,10 +59,11 @@ export interface BoundApplied {
   headroomAfterPaise: Paise
 }
 
-/** B2 — under which policy version / mandate / payment this action was authorised. */
+/** B2 — under which policy version / authorisation / payment this action was authorised. */
 export interface AuthorityRef {
   policyVersion: number
-  mandateId?: string
+  /** The no-show authorisation this action cites — set by AUTHORIZATION_HELD and carried by NO_SHOW_CHARGED. */
+  authorizationId?: string
   razorpayPaymentId?: string
   /**
    * Slice 3 addition, for `REFUND_ISSUED`: the payment being refunded and
@@ -108,11 +113,24 @@ export interface PolicyAcknowledgedEvent extends EventBase {
   policyVersion: number
 }
 
-export interface MandateRegisteredEvent extends EventBase {
-  type: 'MANDATE_REGISTERED'
-  mandateId: string
-  ceilingPaise: Paise
+/**
+ * Slice 4 (dev-logs/005, replacing the never-built `MandateRegisteredEvent`).
+ * Not a `MoneyFields` event — no money moves yet, `action.direction` would
+ * be a lie. But B3's bound is real from this instant: `amountPaise` carries
+ * the no-show fee, authorised at *exactly* that amount (dev-logs/005 —
+ * "there is no headroom to abuse at all"), so `enforcedBy` is the fixed
+ * literal `'payment_rail'` rather than the wider `BoundEnforcer` union —
+ * this event can only ever claim the rail as its enforcer.
+ */
+export interface AuthorizationHeldEvent extends EventBase {
+  type: 'AUTHORIZATION_HELD'
+  authorizationId: string
+  amountPaise: Paise
+  /** `manual_expiry_period`, at its max (7200 minutes / 5 days) for `manual_capture` — docs/03-domain-model.md §4. */
   expiresAt: Date
+  rail: PaymentRail
+  enforcedBy: 'payment_rail'
+  policyVersion: number
 }
 
 export interface BookingConfirmedEvent extends EventBase {
@@ -163,26 +181,54 @@ export interface SlotReleasedEvent extends EventBase {
   startsAt: Date
 }
 
-export interface MandateRevokedEvent extends EventBase {
-  type: 'MANDATE_REVOKED'
-  mandateId: string
-}
-
 /**
- * Slice 3 stub for the release leg of the decline path. Real revocation
- * (Slice 4) has an actual `AUTHORIZATION_HELD` authorisation to abandon;
- * this slice never places one (no-show authorisation registration is
- * entirely Slice 4 scope), so there is nothing yet to release. The event is
- * still appended — the decline path's five-event shape is fixed now, so
- * Slice 4 only has to fill in `authorizationId` and stop stubbing, not add
- * a new event type or touch the transaction shape. `note` says plainly that
- * this run held no authorisation, rather than implying one was revoked.
+ * The release leg of the decline path. Slice 3 appended this as a stub (no
+ * real authorisation existed yet, so `authorizationId` was optional and a
+ * free-text `note` explained why). Slice 4 fills it in for real: every
+ * decline now points at the actual `AUTHORIZATION_HELD` authorisation it is
+ * abandoning. `authorizationId` is required, and `note` is gone — replaced
+ * by the structural `expiresAt` it carries over from that event. Razorpay
+ * has no void endpoint (dev-logs/005): "released" means we simply never
+ * capture, and Razorpay auto-refunds the authorisation at `expiresAt` on its
+ * own. That makes release *asynchronous*, not an instant revoke — the trail
+ * says so via `expiresAt` rather than implying otherwise.
  */
 export interface AuthorizationReleasedEvent extends EventBase {
   type: 'AUTHORIZATION_RELEASED'
-  authorizationId?: string
+  authorizationId: string
   rail: PaymentRail
-  note: string
+  expiresAt: Date
+}
+
+/**
+ * Slice 4. Because a manual-capture authorisation has a finite life
+ * (`manual_expiry_period` maxes at 5 days — dev-logs/005), the system must
+ * know when it has *lost* its authority rather than discovering that only
+ * when `charge_no_show` is attempted. A background worker appends this once
+ * an authorisation's `expiresAt` has passed on a still-`CONFIRMED` booking.
+ * Purely informational — it does not change the booking's projected status
+ * (docs/03-domain-model.md §3: the booking just sits `CONFIRMED` with an
+ * uncollectable no-show fee) — but from this point `charge_no_show` refuses
+ * with `AUTHORIZATION_EXPIRED`, and a merchant reading the trail learns why,
+ * instead of finding a silent failure.
+ */
+export interface AuthorizationLapsedEvent extends EventBase {
+  type: 'AUTHORIZATION_LAPSED'
+  authorizationId: string
+  rail: PaymentRail
+}
+
+/**
+ * Slice 4. The second of the two independent facts `charge_no_show` gates
+ * on (docs/03-domain-model.md §3 Rule 3) — appended only by the merchant
+ * API's mark-no-show route, never by any agent-facing path. `markedBy` is
+ * the literal `'merchant'`, not a wider union: the same structural trick
+ * `MerchantDeclinedEvent.cause` uses to make "an agent forged this" a
+ * compile error rather than a runtime check.
+ */
+export interface NonAttendanceMarkedEvent extends EventBase {
+  type: 'NON_ATTENDANCE_MARKED'
+  markedBy: 'merchant'
 }
 
 /**
@@ -235,8 +281,19 @@ export interface RefundIssuedEvent extends EventBase, MoneyFields {
   type: 'REFUND_ISSUED'
 }
 
+/**
+ * The one money event whose settlement mechanism is genuinely swappable —
+ * `rail` names which (dev-logs/005: "the trail must never imply the
+ * production rail was exercised when it was not"). `DEPOSIT_CAPTURED` /
+ * `REFUND_ISSUED` / `RETENTION_APPLIED` don't carry this field: the deposit
+ * always settles through the same `PaymentProvider` Checkout capture
+ * regardless of which `PaymentRail` is active, so there is no rail choice
+ * for them to name. Narrower than dev-log 005's original "every money event
+ * carries rail" — corrected here to where it's actually true.
+ */
 export interface NoShowChargedEvent extends EventBase, MoneyFields {
   type: 'NO_SHOW_CHARGED'
+  rail: PaymentRail
 }
 
 // ---------------------------------------------------------------------------
@@ -249,7 +306,7 @@ export type BookingEvent =
   | HoldReleasedEvent
   | PolicyAcknowledgedEvent
   | DepositCapturedEvent
-  | MandateRegisteredEvent
+  | AuthorizationHeldEvent
   | BookingConfirmedEvent
   | BookingRescheduledEvent
   | CancelledByCustomerEvent
@@ -257,10 +314,11 @@ export type BookingEvent =
   | RefundIssuedEvent
   | MerchantDeclinedEvent
   | SlotReleasedEvent
-  | MandateRevokedEvent
   | AuthorizationReleasedEvent
+  | AuthorizationLapsedEvent
   | AlternativesOfferedEvent
   | NoShowEligibleEvent
+  | NonAttendanceMarkedEvent
   | BookingCompletedEvent
   | NoShowChargedEvent
   | ActionRefusedEvent

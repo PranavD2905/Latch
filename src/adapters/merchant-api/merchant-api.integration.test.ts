@@ -13,6 +13,7 @@ import { PostgresIdempotencyStore } from '../db/postgres-idempotency-store.js'
 import { bookings, events } from '../db/schema.js'
 import { SEED_MERCHANT_ID, SEED_PRACTITIONER_ID, SEED_SERVICE_ID } from '../db/seed-data.js'
 import { FakePaymentProvider } from '../payment/fake-payment-provider.js'
+import { FakePaymentRail } from '../payment/fake-payment-rail.js'
 import { createMerchantApiServer } from './server.js'
 
 process.loadEnvFile?.('.env')
@@ -27,6 +28,7 @@ const deps: AppDeps = {
   eventStore: new PostgresEventStore(db),
   catalogRepo: new PostgresCatalogRepo(db),
   paymentProvider: new FakePaymentProvider(),
+  paymentRail: new FakePaymentRail(),
   idempotencyStore: new PostgresIdempotencyStore(db),
   merchantId: SEED_MERCHANT_ID,
 }
@@ -159,5 +161,84 @@ describe('merchant API — decline_booking, the only surface that can trigger it
     // Rejected at the schema, not by the app layer — booking is untouched.
     const snapshot = await deps.eventStore.loadSnapshot(bookingId)
     expect(snapshot?.status).toBe('CONFIRMED')
+  })
+})
+
+describe('merchant API — mark_no_show, the second of charge_no_show’s two independent facts', () => {
+  it('rejects a request with no Authorization header', async () => {
+    const bookingId = await confirmedBooking('13:00')
+    const response = await app.inject({ method: 'POST', url: `/bookings/${bookingId}/mark-no-show`, payload: { idempotencyKey: freshKey() } })
+    expect(response.statusCode).toBe(401)
+    const snapshot = await deps.eventStore.loadSnapshot(bookingId)
+    expect(snapshot?.nonAttendanceMarkedAt).toBeUndefined()
+  })
+
+  it('with the correct merchant token, marks a confirmed booking as a no-show', async () => {
+    const bookingId = await confirmedBooking('13:30')
+    const response = await app.inject({
+      method: 'POST',
+      url: `/bookings/${bookingId}/mark-no-show`,
+      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
+      payload: { idempotencyKey: freshKey() },
+    })
+    expect(response.statusCode).toBe(200)
+    const body = response.json()
+    expect(body.bookingId).toBe(bookingId)
+    expect(body.nonAttendanceMarkedAt).toBeTruthy()
+
+    const trail = await db.select().from(events).where(eq(events.bookingId, bookingId))
+    const marked = trail.find((e) => e.type === 'NON_ATTENDANCE_MARKED')
+    expect(marked?.payload).toMatchObject({ markedBy: 'merchant' })
+
+    const snapshot = await deps.eventStore.loadSnapshot(bookingId)
+    expect(snapshot?.nonAttendanceMarkedAt).toBeDefined()
+    expect(snapshot?.status).toBe('CONFIRMED') // marking non-attendance does not itself move money or change status
+  })
+
+  it('re-marking an already-marked booking is a no-op — exactly one NON_ATTENDANCE_MARKED event', async () => {
+    const bookingId = await confirmedBooking('14:00')
+    await app.inject({
+      method: 'POST',
+      url: `/bookings/${bookingId}/mark-no-show`,
+      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
+      payload: { idempotencyKey: freshKey() },
+    })
+    await app.inject({
+      method: 'POST',
+      url: `/bookings/${bookingId}/mark-no-show`,
+      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
+      payload: { idempotencyKey: freshKey() }, // deliberately a different key
+    })
+
+    const trail = await db.select().from(events).where(eq(events.bookingId, bookingId))
+    expect(trail.filter((e) => e.type === 'NON_ATTENDANCE_MARKED')).toHaveLength(1)
+  })
+
+  it('409s for a booking that is not CONFIRMED (still HELD)', async () => {
+    const startsAt = slotAt('15:00')
+    clock.set(new Date(startsAt.getTime() - 5 * 24 * 3_600_000))
+    const held = await holdSlot(
+      { agentId: `agent_${ulid()}`, practitionerId: SEED_PRACTITIONER_ID, serviceId: SEED_SERVICE_ID, startsAt, idempotencyKey: freshKey() },
+      deps,
+    )
+    createdBookingIds.push(held.bookingId)
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/bookings/${held.bookingId}/mark-no-show`,
+      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
+      payload: { idempotencyKey: freshKey() },
+    })
+    expect(response.statusCode).toBe(409)
+  })
+
+  it('404s for an unknown booking', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: `/bookings/bkg_does_not_exist/mark-no-show`,
+      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
+      payload: { idempotencyKey: freshKey() },
+    })
+    expect(response.statusCode).toBe(404)
   })
 })

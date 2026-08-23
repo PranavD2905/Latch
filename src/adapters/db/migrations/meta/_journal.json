@@ -29,6 +29,27 @@
       "when": 1787503669221,
       "tag": "0003_lean_gorgon",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1787545200000,
+      "tag": "0004_authorization_hold",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787548800000,
+      "tag": "0005_authorization_amount",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787552400000,
+      "tag": "0006_drop_mandate_ceiling",
+      "breakpoints": true
     }
   ]
 }

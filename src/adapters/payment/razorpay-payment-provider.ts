@@ -1,6 +1,4 @@
-import { createHash } from 'node:crypto'
 import Razorpay from 'razorpay'
-import type { Instrument } from '../../domain/events.js'
 import { toPaise } from '../../domain/money.js'
 import {
   PaymentDeclinedError,
@@ -12,6 +10,7 @@ import {
   type RefundDepositParams,
   type RefundDepositResult,
 } from '../../ports/payment-provider.js'
+import { DEFAULT_CAPTURE_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, receiptFor, sleep, toInstrument, type RazorpayPaymentLike } from './razorpay-shared.js'
 
 export interface RazorpayPaymentProviderOptions {
   keyId: string
@@ -28,56 +27,6 @@ export interface RazorpayPaymentProviderOptions {
    */
   captureTimeoutMs?: number
   capturePollIntervalMs?: number
-}
-
-const DEFAULT_CAPTURE_TIMEOUT_MS = 5 * 60 * 1000
-const DEFAULT_POLL_INTERVAL_MS = 3000
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-/**
- * Razorpay's Orders API has no native idempotency mechanism (verified —
- * dev-logs/006: a repeated `receipt` value creates a second, distinct
- * order). `receipt` is, however, queryable, so lookup-before-create against
- * it is the mechanism this adapter uses instead — for both orders and
- * refunds. `receipt` is capped at 40 characters by Razorpay, so an
- * idempotency key outside that (or containing characters Razorpay might
- * reject) is hashed down to a fixed-length, safe value; a key that already
- * fits is passed through unchanged so hand-picked test fixtures stay
- * legible in the dashboard.
- */
-function receiptFor(idempotencyKey: string): string {
-  if (/^[A-Za-z0-9_-]{1,40}$/.test(idempotencyKey)) {
-    return idempotencyKey
-  }
-  return `lh_${createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 37)}`
-}
-
-interface RazorpayPaymentLike {
-  id: string
-  status: string
-  amount: number | string
-  method: string
-}
-
-/**
- * Razorpay's `payment.method` is a free-form string; our `Instrument` union
- * is closed (B1 needs a stable, known vocabulary on the trail). An
- * unrecognised method throws rather than silently mislabelling which
- * instrument moved the money.
- */
-function toInstrument(method: string, reference: string): Instrument {
-  switch (method) {
-    case 'card':
-    case 'upi':
-    case 'netbanking':
-    case 'wallet':
-      return method
-    default:
-      throw new PaymentProviderError(reference, new Error(`unrecognised Razorpay payment method: ${method}`))
-  }
 }
 
 /**
@@ -134,7 +83,9 @@ export class RazorpayPaymentProvider implements PaymentProvider {
         return {
           paymentId: payment.id,
           amountPaise: toPaise(Number(payment.amount)),
-          instrument: toInstrument(payment.method, params.reference),
+          instrument: toInstrument(payment.method, (message) => {
+            throw new PaymentProviderError(params.reference, new Error(message))
+          }),
         }
       }
       if (payment?.status === 'failed') {

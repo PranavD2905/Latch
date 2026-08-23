@@ -8,8 +8,15 @@ import { PostgresEventStore } from '../adapters/db/postgres-event-store.js'
 import { PostgresIdempotencyStore } from '../adapters/db/postgres-idempotency-store.js'
 import { bookings, events, idempotencyKeys } from '../adapters/db/schema.js'
 import { SEED_MERCHANT_ID, SEED_PRACTITIONER_ID, SEED_SERVICE_ID } from '../adapters/db/seed-data.js'
+import { ManualCaptureRail } from '../adapters/payment/manual-capture-rail.js'
 import { RazorpayPaymentProvider } from '../adapters/payment/razorpay-payment-provider.js'
-import { createBookingConfirmedEvent, createDepositCapturedEvent, createHoldCreatedEvent, createPolicyAcknowledgedEvent } from '../domain/event-factory.js'
+import {
+  createAuthorizationHeldEvent,
+  createBookingConfirmedEvent,
+  createDepositCapturedEvent,
+  createHoldCreatedEvent,
+  createPolicyAcknowledgedEvent,
+} from '../domain/event-factory.js'
 import { toPaise } from '../domain/money.js'
 import type { BookingSnapshot } from '../ports/event-store.js'
 import { declineBooking } from './decline-booking.js'
@@ -90,12 +97,14 @@ describe('decline_booking against real Razorpay test mode', () => {
       eventStore: new PostgresEventStore(db),
       catalogRepo: new PostgresCatalogRepo(db),
       paymentProvider: new RazorpayPaymentProvider({ keyId: keyId!, keySecret: keySecret! }),
+      paymentRail: new ManualCaptureRail({ keyId: keyId!, keySecret: keySecret! }),
       idempotencyStore: new PostgresIdempotencyStore(db),
       merchantId: SEED_MERCHANT_ID,
     }
 
     const bookingId = `bkg_livedecline_${ulid()}`
     const startsAt = new Date('2026-09-17T09:00:00+05:30')
+    const authorizationExpiresAt = new Date('2026-09-20T09:00:00+05:30')
     createdBookingIds.push(bookingId)
 
     await deps.eventStore.transaction(async (tx) => {
@@ -112,7 +121,20 @@ describe('decline_booking against real Razorpay test mode', () => {
         bound: { ceilingPaise: DEPOSIT_AMOUNT_PAISE, enforcedBy: 'latch_policy', headroomAfterPaise: toPaise(0) },
         authority: { policyVersion: 1, razorpayPaymentId: REFUND_FIXTURE_PAYMENT_ID },
       })
-      const confirmedEvent = createBookingConfirmedEvent(bookingId, 4, clock, {})
+      // Synthetic — this test only exercises the refund leg. decline_booking
+      // reads authorizationId/rail/expiresAt straight off this event to
+      // build AUTHORIZATION_RELEASED; it never calls the rail for release
+      // (dev-logs/005: no void endpoint), so this never needs to resolve
+      // against a real Razorpay payment the way the deposit/refund do.
+      const authorizationEvent = createAuthorizationHeldEvent(bookingId, 4, clock, {
+        authorizationId: 'pay_livedecline_auth_fixture',
+        amountPaise: toPaise(40000),
+        expiresAt: authorizationExpiresAt,
+        rail: 'manual_capture',
+        enforcedBy: 'payment_rail',
+        policyVersion: 1,
+      })
+      const confirmedEvent = createBookingConfirmedEvent(bookingId, 5, clock, {})
 
       const projection: BookingSnapshot = {
         bookingId,
@@ -121,12 +143,16 @@ describe('decline_booking against real Razorpay test mode', () => {
         startsAt,
         status: 'CONFIRMED',
         policyVersion: 1,
-        mandateId: undefined,
+        authorizationId: 'pay_livedecline_auth_fixture',
+        authorizationAmountPaise: toPaise(40000),
+        authorizationExpiresAt,
+        authorizationLapsedAt: undefined,
+        nonAttendanceMarkedAt: undefined,
         agentId: 'agent_live_decline_seed',
         holdExpiresAt: undefined,
-        lastEventSequence: 4,
+        lastEventSequence: 5,
       }
-      await tx.append([holdEvent, ackEvent, depositEvent, confirmedEvent], projection)
+      await tx.append([holdEvent, ackEvent, depositEvent, authorizationEvent, confirmedEvent], projection)
     })
 
     const declined = await declineBooking({ bookingId, reason: 'practitioner_unavailable', idempotencyKey: REFUND_IDEMPOTENCY_KEY }, deps)

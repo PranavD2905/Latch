@@ -9,6 +9,7 @@ import { PostgresIdempotencyStore } from '../adapters/db/postgres-idempotency-st
 import { SEED_MERCHANT_ID, SEED_PRACTITIONER_ID, SEED_SERVICE_ID } from '../adapters/db/seed-data.js'
 import { bookings, events } from '../adapters/db/schema.js'
 import { FakePaymentProvider } from '../adapters/payment/fake-payment-provider.js'
+import { FakePaymentRail } from '../adapters/payment/fake-payment-rail.js'
 import { confirmWithDeposit } from './confirm-with-deposit.js'
 import { findSlots } from './find-slots.js'
 import { getPolicy } from './get-policy.js'
@@ -27,6 +28,7 @@ const deps: AppDeps = {
   eventStore: new PostgresEventStore(db),
   catalogRepo: new PostgresCatalogRepo(db),
   paymentProvider,
+  paymentRail: new FakePaymentRail(),
   idempotencyStore: new PostgresIdempotencyStore(db),
   merchantId: SEED_MERCHANT_ID,
 }

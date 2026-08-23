@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { toPaise } from '../../domain/money.js'
-import { MandateCeilingExceededError, PaymentDeclinedError, PaymentTimeoutError } from '../../ports/payment-provider.js'
+import { PaymentDeclinedError, PaymentTimeoutError } from '../../ports/payment-provider.js'
 import { FakePaymentProvider } from './fake-payment-provider.js'
 
 describe('FakePaymentProvider', () => {
@@ -24,14 +24,6 @@ describe('FakePaymentProvider', () => {
     provider.setScenario('k3', 'timeout')
     await expect(provider.captureDeposit({ amountPaise: toPaise(30000), idempotencyKey: 'k3', reference: 'bkg_3' })).rejects.toThrow(
       PaymentTimeoutError,
-    )
-  })
-
-  it('simulates a mandate ceiling rejection', async () => {
-    const provider = new FakePaymentProvider()
-    provider.setScenario('k4', 'mandate_ceiling_exceeded')
-    await expect(provider.captureDeposit({ amountPaise: toPaise(30000), idempotencyKey: 'k4', reference: 'bkg_4' })).rejects.toThrow(
-      MandateCeilingExceededError,
     )
   })
 

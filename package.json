@@ -17,7 +17,11 @@
     "mcp:dev": "tsx src/adapters/mcp/stdio.ts",
     "mcp:dev:razorpay": "PAYMENT_PROVIDER=razorpay tsx src/adapters/mcp/stdio.ts",
     "merchant-api:dev": "tsx src/adapters/merchant-api/http.ts",
-    "merchant-api:dev:razorpay": "PAYMENT_PROVIDER=razorpay tsx src/adapters/merchant-api/http.ts"
+    "merchant-api:dev:razorpay": "PAYMENT_PROVIDER=razorpay tsx src/adapters/merchant-api/http.ts",
+    "worker:dev": "tsx src/adapters/worker/authorization-lapse.ts",
+    "worker:dev:razorpay": "PAYMENT_PROVIDER=razorpay tsx src/adapters/worker/authorization-lapse.ts",
+    "demo:ceiling-refusal": "tsx src/adapters/demo/ceiling-refusal.ts",
+    "demo:ceiling-refusal:razorpay": "PAYMENT_PROVIDER=razorpay tsx src/adapters/demo/ceiling-refusal.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

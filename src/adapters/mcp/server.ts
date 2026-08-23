@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
+import { chargeNoShow } from '../../app/charge-no-show.js'
 import { confirmWithDeposit } from '../../app/confirm-with-deposit.js'
 import { findSlots } from '../../app/find-slots.js'
 import { getPolicy } from '../../app/get-policy.js'
@@ -97,7 +98,7 @@ export function createServer(deps: AppDeps): McpServer {
     'confirm_with_deposit',
     {
       description:
-        'Confirm a held booking by capturing the deposit (against a fake payment provider in this build). Requires a live, unexpired hold and the current policy version acknowledged — call get_policy first and pass its policyVersion as acknowledgedPolicyVersion.',
+        'Confirm a held booking: captures the deposit immediately and separately registers a no-show authorisation for exactly the no-show fee (card manual capture, left uncaptured). Requires a live, unexpired hold and the current policy version acknowledged — call get_policy first and pass its policyVersion as acknowledgedPolicyVersion.',
       inputSchema: {
         bookingId: z.string().describe('bookingId returned by hold_slot'),
         agentId: z.string(),
@@ -108,6 +109,26 @@ export function createServer(deps: AppDeps): McpServer {
     async (args) => {
       try {
         return jsonResult(await confirmWithDeposit(args, deps))
+      } catch (err) {
+        if (err instanceof Refusal) return refusalResult(err)
+        return errorResult(err)
+      }
+    },
+  )
+
+  server.registerTool(
+    'charge_no_show',
+    {
+      description:
+        'Charge the no-show fee against the authorisation registered at booking. Gated on two independent facts: the appointment start time plus grace period must have elapsed (server clock — never an agent claim), and the merchant must have separately marked the booking as a no-show (an agent cannot do this). Captures the authorisation in full — the rail refuses any amount other than exactly what was authorised.',
+      inputSchema: {
+        bookingId: z.string().describe('bookingId returned by hold_slot'),
+        idempotencyKey: z.string(),
+      },
+    },
+    async (args) => {
+      try {
+        return jsonResult(await chargeNoShow(args, deps))
       } catch (err) {
         if (err instanceof Refusal) return refusalResult(err)
         return errorResult(err)

@@ -9,6 +9,7 @@ import { PostgresIdempotencyStore } from '../adapters/db/postgres-idempotency-st
 import { SEED_MERCHANT_ID, SEED_PRACTITIONER_ID, SEED_SERVICE_ID } from '../adapters/db/seed-data.js'
 import { bookings, events } from '../adapters/db/schema.js'
 import { FakePaymentProvider } from '../adapters/payment/fake-payment-provider.js'
+import { FakePaymentRail } from '../adapters/payment/fake-payment-rail.js'
 import { createMerchantDeclinedEvent, createRefundIssuedEvent, createSlotReleasedEvent } from '../domain/event-factory.js'
 import type { BookingEvent } from '../domain/events.js'
 import { toPaise } from '../domain/money.js'
@@ -30,6 +31,7 @@ const deps: AppDeps = {
   eventStore: new PostgresEventStore(db),
   catalogRepo: new PostgresCatalogRepo(db),
   paymentProvider,
+  paymentRail: new FakePaymentRail(),
   idempotencyStore: new PostgresIdempotencyStore(db),
   merchantId: SEED_MERCHANT_ID,
 }
@@ -118,6 +120,17 @@ describe('decline_booking (real Postgres + FakePaymentProvider + FrozenClock) �
 
     const refundEvent = allEvents.find((e) => e.type === 'REFUND_ISSUED')
     expect(refundEvent).toMatchObject({ action: { direction: 'debit', amountPaise: depositAmountPaise } })
+
+    // Slice 4, item 5 — the real release, not the Slice 3 stub: the same
+    // authorizationId AUTHORIZATION_HELD registered, never captured.
+    const authorizationHeldEvent = allEvents.find((e) => e.type === 'AUTHORIZATION_HELD')
+    const authorizationReleasedEvent = allEvents.find((e) => e.type === 'AUTHORIZATION_RELEASED')
+    expect(authorizationHeldEvent).toMatchObject({ authorizationId: expect.stringMatching(/^pay_/) })
+    expect(authorizationReleasedEvent).toMatchObject({
+      authorizationId: (authorizationHeldEvent as { authorizationId?: string })?.authorizationId,
+      rail: 'manual_capture',
+    })
+    expect(allEvents.some((e) => e.type === 'NO_SHOW_CHARGED')).toBe(false) // the no-show fee was never captured — customer never debited for it
   })
 
   it('cause attribution beats proximity: declining 2 hours before the appointment still retains ₹0', async () => {
