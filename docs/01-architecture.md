@@ -11,7 +11,7 @@ machine in detail), `04-features-and-limitations.md` (honest scope)
 
 Latch is a **service-transaction layer**. It sits on top of a single Indian service merchant's
 Razorpay account and exposes that merchant to *any* third-party AI agent as something that can be
-transacted with — not merely booked. The agent-facing surface is an MCP server with seven tools. The
+transacted with — not merely booked. The agent-facing surface is an MCP server with eight tools. The
 core is an event-sourced domain model where the audit trail is not a log written beside the truth;
 the audit trail **is** the truth. Money bounds are enforced twice: once by our policy engine, and
 once by Razorpay itself at the payment rail, so that even a fully compromised Latch server cannot
@@ -126,7 +126,7 @@ production rail was exercised when it was not.
 │  Latch does not know or care which. That is the entire point.        │
 └────────────────────────────┬─────────────────────────────────────────┘
                              │  MCP over Streamable HTTP
-                             │  (7 tools, Zod-validated)
+                             │  (8 tools, Zod-validated)
 ╔════════════════════════════▼═════════════════════════════════════════╗
 ║  INBOUND ADAPTERS                                                    ║
 ║                                                                      ║
@@ -197,19 +197,29 @@ outbound one. **The architecture is the argument.**
 
 ---
 
-## 3. The seven tools, and where the risk lives
+## 3. The eight tools, and where the risk lives
 
-From brief §6.2, with the enforcement point named for each.
+From brief §6.2, with the enforcement point named for each. `get_booking` is a Slice 7 addition, not
+from the original brief — see below.
 
 | Tool | Money | Gate (B4) | Bound (B3) | Bound enforced by |
 |---|---|---|---|---|
 | `find_slots` | none | — | — | — |
 | `get_policy` | none | — | — | — |
+| `get_booking` | none | — | — | — |
 | `hold_slot` | **none** | Slot free at request time | Max concurrent holds/agent; TTL | DB constraint + Latch |
 | `confirm_with_deposit` | deposit capture | Live unexpired hold **and** policy acknowledged | Policy deposit amount; authorisation ceiling | Latch + **Razorpay** |
 | `reschedule` | price delta only | Target free; ladder permits move now | Delta ≤ original booking value | Latch |
 | `cancel` | refund / retention | Booking exists; tier from **server clock** | Retention ≤ ladder tier for true timestamp | Latch |
 | `charge_no_show` | debit | Start time elapsed **and** merchant marked non-attendance | The authorised amount | **Razorpay** |
+
+**Why `get_booking` exists.** `confirm_with_deposit` can take minutes in practice — it blocks on a real
+human completing Razorpay Checkout — and a long-held HTTP response is exactly the kind of thing an
+intermediate proxy can kill while the server keeps working underneath it (dev-logs/012, hit for real
+against the Slice 7 deployment). Before this tool, an agent facing a dead connection after a write had
+nothing to check against — `find_slots` can't distinguish a live hold from a confirmed booking, let alone
+report deposit or authorisation state. `get_booking` is the one call that's always safe to retry: no
+gate, no money, just the truth of what the server already did.
 
 Note the shape of the risk curve. `hold_slot` is the most frequently called tool and carries **zero**
 money exposure — that is deliberate (brief §6.3: *"All risk is pushed into the cheap, reversible

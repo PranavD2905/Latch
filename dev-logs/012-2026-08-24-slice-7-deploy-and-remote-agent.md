@@ -231,26 +231,68 @@ fixed by a `git reset --soft` + reconstructing a clean commit without the traile
 it confirms multiple sessions were operating on one shared checkout concurrently, which is a real
 collision risk for whatever comes after this slice if the same setup is still in use.
 
+## `confirm_with_deposit` against a real remote agent, and the `mcp-remote` timeout it surfaced
+
+The user connected Claude Desktop to the deployed `/mcp` endpoint via `mcp-remote` (the standard bridge
+for a stdio-only client talking to a remote Streamable HTTP server) and drove a real booking through it —
+`hold_slot`, then `confirm_with_deposit`. This is the genuine deliverable: a separate client, on a
+separate machine's process, transacting with the deployed merchant over the public internet. It worked —
+but `confirm_with_deposit` appeared to hang in Claude Desktop, twice, and after the second attempt
+`find_slots` stopped responding too, which read as the whole deployed server being down.
+
+**It wasn't.** `/healthz` and a direct `find_slots` call both answered instantly the whole time. Checked
+the real state: **the booking had actually confirmed** — `DEPOSIT_CAPTURED` → `AUTHORIZATION_HELD` →
+`BOOKING_CONFIRMED`, ₹300 captured, ₹400 held uncaptured, all real, all on Razorpay's dashboard. Claude
+Desktop just never got the response.
+
+Root-caused rather than assumed. First hypothesis was a Railway edge/proxy timeout on a long-held POST
+(the same *class* of issue as the SSE `flushHeaders` bug above). Tested directly: a raw `curl` against
+`/mcp` calling `confirm_with_deposit` on an order deliberately left unpaid ran for the full 300 seconds,
+successfully, complete with periodic SSE `: keepalive` comment lines the MCP SDK's own transport sends
+automatically, and returned a correct `PaymentTimeoutError` at exactly 300000ms. **The deployed server and
+Railway's network path handle a multi-minute request completely correctly.** That ruled out the server
+side entirely.
+
+The actual cause: `mcp-remote` bundles the MCP TypeScript SDK's `Client`/`Protocol` class, which has a
+**hardcoded 60-second default request timeout** (`DEFAULT_REQUEST_TIMEOUT_MSEC = 6e4`, found directly in
+`mcp-remote`'s bundled source) — and `mcp-remote` exposes no CLI flag or environment variable to override
+it. Any request through that bridge taking longer than 60 seconds aborts client-side, regardless of
+whether the server is still correctly working on it (which `confirm_with_deposit` routinely will, since it
+waits on a human completing real Checkout). The aborted request appears to also leave the bridge's
+connection in a bad state — `find_slots` failing right after is consistent with that, not with a server
+outage.
+
+**What actually fixes the demo experience, since the 60-second ceiling can't be configured away:**
+1. **`get_booking`** (new MCP tool, below) — an agent whose write times out client-side now has something
+   safe to check rather than guessing or blindly retrying.
+2. **`confirm_with_deposit`'s tool description now says this explicitly** — instructs a calling agent to
+   call `get_booking` first on a timeout, and only retry with the *same* `idempotencyKey` if the booking is
+   still `HELD`. This is aimed squarely at the exact confusion this session hit.
+3. **For the actual pitch video: complete Checkout quickly.** A human clicking through a real Checkout flow
+   promptly (not alt-tabbing between a chat window and a hand-built test page, which is what made this
+   session's own test run past 60s) will very likely land inside the 60-second window and never see this at
+   all. Worth a dry run before Friday specifically to confirm.
+
+## `get_booking` — the eighth tool
+
+Added directly because of the incident above: read-only, no gate, no money — `deps.eventStore.loadSnapshot`
+exposed as a tool, returning status/deposit/authorisation state for one booking. `docs/01-architecture.md`
+§3 and `README.md` updated (seven tools → eight, everywhere they're counted); `mcp-e2e.integration.test.ts`
+updated to assert the full eight-tool surface; a new `get-booking.integration.test.ts` covers the found and
+not-found cases the same way every other command module's tests do. `npm test`: 121/121.
+
 ## Carried forward
 
-1. **`confirm_with_deposit` (real deposit capture) against the deployed environment, and therefore the
-   full failure path against the real Razorpay test dashboard, deployed.** Needs a human completing real
-   Razorpay Checkout in a browser — genuinely cannot be driven from a script, locally or deployed. This is
-   the next concrete step whenever someone is at a keyboard to do it.
-2. **A genuinely separate machine/agent connecting to the deployed `/mcp` URL.** This session's
-   verification used `curl` from the machine running this session — a real network hop to Railway's public
-   internet endpoint, not localhost, which is the meaningful part of the claim, but it is still this
-   session's own network. Wiring an actual third-party agent (Claude Desktop, another MCP client entirely)
-   to `https://latch-mcp-production.up.railway.app/mcp` is worth doing before the pitch video, even though
-   nothing about the transport itself distinguishes "this session's curl" from "a stranger's agent" — the
-   endpoint has no auth and no knowledge of who's calling, by design.
-3. **Visual verification of the viewer is still separately owed from dev-log 011** — this session again
-   had no way to open a browser. The data layer is proven twice over now (local, and live against the real
-   deploy); the rendering has still only been reasoned about from source, never looked at by a human.
-4. Test `latch-mcp` on next redeploy: **the background workers' actual behaviour under a real crash-loop
+1. **Visual verification of the viewer is still separately owed from dev-log 011** — this session again
+   had no way to open a browser. The data layer is proven three times over now (local, live against the
+   real deploy, and now via a real remote agent's actual booking); the rendering has still only been
+   reasoned about from source, never looked at by a human.
+2. Test `latch-mcp` on next redeploy: **the background workers' actual behaviour under a real crash-loop
    restart** (Railway restarting the container after a failure) hasn't been observed — the
    `flushHeaders`/unguarded-tick fixes were verified by making them succeed, not by deliberately breaking
    something to watch the restart policy work.
+3. **A dry run of the actual pitch-video Checkout flow, timed**, per the mitigation above — confirm a
+   prompt, real Checkout completion lands inside `mcp-remote`'s 60-second ceiling before relying on it live.
 
 ## One thing outside this slice's scope, flagged anyway
 

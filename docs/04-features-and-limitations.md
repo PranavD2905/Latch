@@ -45,7 +45,7 @@ without a partnership or an integration deal.
 
 ### 1.3 What ships in the buildathon build
 
-- MCP server, all seven tools, deployed at a public HTTPS endpoint
+- MCP server, all eight tools, deployed at a public HTTPS endpoint
 - Postgres event store with the partial unique index and `FOR UPDATE` locking
 - Razorpay test-mode integration: orders, capture, refunds, card manual-capture authorisation registration and debit
 - Background worker: hold expiry, no-show eligibility

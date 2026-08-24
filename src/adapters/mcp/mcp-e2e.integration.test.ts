@@ -58,10 +58,10 @@ afterAll(async () => {
 })
 
 describe('MCP end-to-end over stdio — a real agent, over the real transport', () => {
-  it('advertises the full seven-tool surface', async () => {
+  it('advertises the full eight-tool surface', async () => {
     const { tools } = await client.listTools()
     const names = tools.map((t) => t.name).sort()
-    expect(names).toEqual(['cancel', 'charge_no_show', 'confirm_with_deposit', 'find_slots', 'get_policy', 'hold_slot', 'reschedule'])
+    expect(names).toEqual(['cancel', 'charge_no_show', 'confirm_with_deposit', 'find_slots', 'get_booking', 'get_policy', 'hold_slot', 'reschedule'])
   })
 
   it('completes find_slots -> get_policy -> hold_slot -> confirm_with_deposit', async () => {

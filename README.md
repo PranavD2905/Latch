@@ -35,7 +35,7 @@ transaction at all.
 ## What Latch is
 
 A **service-transaction layer** on a merchant's Razorpay account, exposed as an **MCP server** with
-seven tools. Any third-party agent — Claude, ChatGPT, a user's own — can hold a slot, read the
+eight tools. Any third-party agent — Claude, ChatGPT, a user's own — can hold a slot, read the
 cancellation ladder, pay a deposit, reschedule, and be charged for a no-show. No partnership, no
 integration deal.
 
@@ -50,12 +50,13 @@ What Latch builds:   [Anyone's agent] ──MCP──▶ [Merchant] ──▶ [b
 The novelty is not "an AI that books appointments." That is crowded. The novelty is **the
 money-and-time semantics of a service transaction, in a form an arbitrary agent can execute against.**
 
-## The seven tools
+## The eight tools
 
 | Tool | Money action | Gate | Bound | Bound enforced by |
 |---|---|---|---|---|
 | `find_slots` | — | — | — | — |
 | `get_policy` | — | — | — | — |
+| `get_booking` | — | — | — | — |
 | `hold_slot` | **none** | Slot free | Concurrent holds; TTL | DB constraint |
 | `confirm_with_deposit` | deposit capture | Live hold + policy acknowledged | Deposit amount; authorisation ceiling | Latch + **Razorpay** |
 | `reschedule` | price delta only | Target free + ladder permits | Delta ≤ booking value | Latch |

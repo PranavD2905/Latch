@@ -5,6 +5,7 @@ import { cancelBooking } from '../../app/cancel-booking.js'
 import { chargeNoShow } from '../../app/charge-no-show.js'
 import { confirmWithDeposit } from '../../app/confirm-with-deposit.js'
 import { findSlots } from '../../app/find-slots.js'
+import { getBooking } from '../../app/get-booking.js'
 import { getPolicy } from '../../app/get-policy.js'
 import { holdSlot } from '../../app/hold-slot.js'
 import { rescheduleBooking } from '../../app/reschedule-booking.js'
@@ -74,6 +75,24 @@ export function createServer(deps: AppDeps): McpServer {
   )
 
   server.registerTool(
+    'get_booking',
+    {
+      description:
+        'Read-only status for one booking: its lifecycle status, deposit/authorisation state, and hold expiry if still held. No gate, no money moved. Always safe to call, including as a retry after a prior tool call timed out without a response — this reports what actually happened server-side rather than what the caller assumes happened.',
+      inputSchema: {
+        bookingId: z.string().describe('bookingId returned by hold_slot'),
+      },
+    },
+    async (args) => {
+      try {
+        return jsonResult(await getBooking(args, deps))
+      } catch (err) {
+        return errorResult(err)
+      }
+    },
+  )
+
+  server.registerTool(
     'hold_slot',
     {
       description:
@@ -100,7 +119,7 @@ export function createServer(deps: AppDeps): McpServer {
     'confirm_with_deposit',
     {
       description:
-        'Confirm a held booking: captures the deposit immediately and separately registers a no-show authorisation for exactly the no-show fee (card manual capture, left uncaptured). Requires a live, unexpired hold and the current policy version acknowledged — call get_policy first and pass its policyVersion as acknowledgedPolicyVersion.',
+        'Confirm a held booking: captures the deposit immediately and separately registers a no-show authorisation for exactly the no-show fee (card manual capture, left uncaptured). Requires a live, unexpired hold and the current policy version acknowledged — call get_policy first and pass its policyVersion as acknowledgedPolicyVersion. This call blocks on a real customer completing payment checkout and can legitimately take minutes, which can exceed some MCP clients\' own request timeout even though the booking still completes normally on the server. If this call times out or the connection drops, do NOT assume it failed and do NOT retry with a new idempotencyKey — call get_booking with the same bookingId first to check what actually happened; retry confirm_with_deposit with the identical idempotencyKey only if get_booking shows the booking is still HELD.',
       inputSchema: {
         bookingId: z.string().describe('bookingId returned by hold_slot'),
         agentId: z.string(),
