@@ -249,6 +249,17 @@ recorded permanently. This is what lets the demo *show the bound working* rather
 exists — a judge can watch an over-limit charge be refused and see the refusal land in the trail with
 its reason.
 
+**A note on ordering the log for display, added in Slice 6.** `occurredAt` is a domain timestamp off the
+`Clock` port, and integration tests legitimately run a `FrozenClock` far into the future to simulate
+elapsed time (e.g. a no-show's grace period) — those rows land for real in the shared dev database with
+`occurredAt` nowhere near actual insertion time. `eventId`'s ULID is no safer: its sub-millisecond
+ordering is random, not causal, and a single multi-event transaction (e.g. `decline_booking`'s five-event
+write) appends every one of its rows within the same millisecond, so sorting by `eventId` can shuffle them
+— this was caught live-testing the Slice 6 viewer against a real decline. The `events` table therefore
+carries a `global_sequence` `bigserial` column (migration `0008`), true row-insertion order, independent
+of any domain timestamp — the SSE audit-trail feed (`src/adapters/audit-trail/`) orders and pages by that
+column exclusively, never by `occurredAt` or `eventId`.
+
 ### Every money event carries these four fields
 
 This is Idea 2 from the architecture doc, made concrete. The type system refuses a money event without

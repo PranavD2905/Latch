@@ -1,5 +1,5 @@
 import { relations } from 'drizzle-orm'
-import { integer, jsonb, pgEnum, pgTable, text, timestamp, unique } from 'drizzle-orm/pg-core'
+import { bigserial, integer, jsonb, pgEnum, pgTable, text, timestamp, unique } from 'drizzle-orm/pg-core'
 
 // ---------------------------------------------------------------------------
 // Enums — mirrors of the domain's discriminated union and state machine.
@@ -57,6 +57,17 @@ export const events = pgTable(
     sequence: integer('sequence').notNull(),
     /** The full event object (action/gate/bound/authority included, for money events). */
     payload: jsonb('payload').notNull(),
+    /**
+     * Slice 6: true row-insertion order, independent of `occurredAt`.
+     * `occurredAt` comes from the `Clock` port, and integration tests
+     * legitimately advance a `FrozenClock` far into the future to simulate
+     * elapsed time (e.g. `NO_SHOW_ELIGIBLE`) — those rows land for real in
+     * the shared dev database with a domain timestamp nowhere near actual
+     * insertion time. The audit-trail SSE feed needs "as they are appended"
+     * literally (prompts/slice-6.md item 1), so it orders and pages by this
+     * column, never by `occurredAt`.
+     */
+    globalSequence: bigserial('global_sequence', { mode: 'number' }).notNull(),
   },
   (table) => [
     // One sequence number per booking, exactly once — makes a gap or a

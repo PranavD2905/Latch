@@ -22,6 +22,9 @@
     "worker:dev:razorpay": "PAYMENT_PROVIDER=razorpay tsx src/adapters/worker/authorization-lapse.ts",
     "worker:background:dev": "tsx src/adapters/worker/background.ts",
     "worker:background:dev:razorpay": "PAYMENT_PROVIDER=razorpay tsx src/adapters/worker/background.ts",
+    "audit-trail:dev": "tsx src/adapters/audit-trail/http.ts",
+    "audit-trail:dev:razorpay": "PAYMENT_PROVIDER=razorpay tsx src/adapters/audit-trail/http.ts",
+    "web:dev": "npm --prefix web run dev",
     "demo:ceiling-refusal": "tsx src/adapters/demo/ceiling-refusal.ts",
     "demo:ceiling-refusal:razorpay": "PAYMENT_PROVIDER=razorpay tsx src/adapters/demo/ceiling-refusal.ts"
   },

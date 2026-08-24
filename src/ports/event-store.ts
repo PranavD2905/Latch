@@ -132,4 +132,37 @@ export interface EventStore {
    * The authorisation-lapse worker's input — docs/01-architecture.md §8.
    */
   listConfirmedBookingsWithExpiredAuthorization(now: Date): Promise<readonly BookingSnapshot[]>
+
+  /**
+   * Every event across every booking, oldest first — Slice 6's SSE audit
+   * trail feed (prompts/slice-6.md item 1: "streaming events as they are
+   * appended"). Ordered and paged by the `events` table's `globalSequence`
+   * column (`schema.ts`), a `bigserial` that is literally row-insertion
+   * order — deliberately not `occurredAt` (a domain timestamp off the
+   * `Clock` port; integration tests legitimately run a `FrozenClock` far
+   * into the future to simulate elapsed time, and those rows land for real
+   * in the shared dev database, which would poison any ordering/cursor
+   * built on `occurredAt`) and not `eventId` (a ULID's sub-millisecond
+   * ordering is random, not causal — a multi-event transaction like
+   * `decline_booking`'s five-event write appends all its rows within the
+   * same millisecond, so sorting by `eventId` alone visibly shuffled them
+   * when this was live-tested against a real decline). Pass `afterGlobalSequence`
+   * (a previously-seen event's own value) to fetch only what's new since —
+   * the same call serves both "replay everything on connect" (omit it) and
+   * "catch up after a reconnect."
+   */
+  listAllEvents(afterGlobalSequence?: number): Promise<readonly EventWithGlobalSequence[]>
+
+  /**
+   * Resolves a bare `eventId` (all the SSE protocol's `Last-Event-ID`
+   * header can carry) to its `globalSequence` — the one spot a reconnecting
+   * browser hands the server less than a full cursor.
+   */
+  findGlobalSequence(eventId: string): Promise<number | undefined>
+}
+
+/** One `listAllEvents` row: the event plus the insertion-order cursor value it landed at. */
+export interface EventWithGlobalSequence {
+  event: BookingEvent
+  globalSequence: number
 }

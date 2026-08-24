@@ -1,8 +1,8 @@
-import { and, eq, gte, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm'
+import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm'
 import type { BookingEvent } from '../../domain/events.js'
 import type { BookingStatus } from '../../domain/fold.js'
 import { toPaise } from '../../domain/money.js'
-import type { BookingSnapshot, BusyInterval, EventStore, EventStoreTx } from '../../ports/event-store.js'
+import type { BookingSnapshot, BusyInterval, EventStore, EventStoreTx, EventWithGlobalSequence } from '../../ports/event-store.js'
 import type { Db } from './client.js'
 import { bookings, events, services } from './schema.js'
 
@@ -212,6 +212,19 @@ export class PostgresEventStore implements EventStore {
         ),
       )
     return rows.map(rowToSnapshot)
+  }
+
+  async listAllEvents(afterGlobalSequence?: number): Promise<readonly EventWithGlobalSequence[]> {
+    const rows =
+      afterGlobalSequence === undefined
+        ? await this.db.select().from(events).orderBy(events.globalSequence)
+        : await this.db.select().from(events).where(gt(events.globalSequence, afterGlobalSequence)).orderBy(events.globalSequence)
+    return rows.map((row) => ({ event: hydrateDates(row.payload) as BookingEvent, globalSequence: row.globalSequence }))
+  }
+
+  async findGlobalSequence(eventId: string): Promise<number | undefined> {
+    const rows = await this.db.select({ globalSequence: events.globalSequence }).from(events).where(eq(events.eventId, eventId)).limit(1)
+    return rows[0]?.globalSequence
   }
 }
 
