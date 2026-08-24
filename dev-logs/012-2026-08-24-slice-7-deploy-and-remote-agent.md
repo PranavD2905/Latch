@@ -2,12 +2,17 @@
 
 **Date:** 24 August 2026
 **Phase:** Slice 7 (`prompts/slice-7.md`)
-**Status:** Code done, verified locally against real Postgres. **The actual Railway deployment did not
-happen this session** — deploying is not a fully local, reversible action (a Railway account, billed
-infrastructure, something publicly reachable), and per the handoff from the prior session and this
-project's own permission discipline, that step needs the user present. Everything up to "ready to run
-`railway up`" is done; the live endpoint URL, the real remote-agent connection, and the deployed
-viewer/failure-path verification are **carried forward**, not faked here.
+**Status:** Deployed and verified for real. The code work below was written and verified locally first,
+in an earlier part of this same session, with actual provisioning deliberately deferred pending the
+user's explicit go-ahead (creating billed, public infrastructure is not a call to make unilaterally). The
+user then asked to proceed with the deploy; what follows after "The actual deployment" section below is
+what happened once that started, including two real bugs that only exposed themselves against the live
+infrastructure and never showed up in any local test.
+
+**Live endpoints** (Razorpay test mode, `main` branch, auto-deploys on push):
+- MCP (Streamable HTTP, unauthenticated): `https://latch-mcp-production.up.railway.app/mcp`
+- Merchant API (Bearer token): `https://latch-merchant-api-production.up.railway.app`
+- Audit-trail viewer + SSE: `https://latch-viewer-production.up.railway.app`
 
 ---
 
@@ -112,11 +117,85 @@ nothing was actually provisioned).
    stream replaying real event history from the same seeded database.
 5. `npx tsc --noEmit` clean across the whole change, including the two SDK-type frictions noted above.
 
-**What is not verified, because it requires the deploy that didn't happen:** the public HTTPS endpoint
-existing at all; a genuinely remote agent (not this same machine) connecting to it; the failure path
-against the real Razorpay test dashboard from the deployed environment; the SSE viewer staying live
-through Railway's actual proxy (buffering/idle-timeout behaviour is a property of Railway's edge, not
-reproducible by running the same code locally); real infrastructure cost.
+**What that first pass could not verify, because it requires actually deploying:** the public HTTPS
+endpoint existing at all; the failure path against the real Razorpay test dashboard from the deployed
+environment; the SSE viewer staying live through Railway's actual proxy; real infrastructure cost. See
+below for what happened once deployment actually started.
+
+## The actual deployment
+
+Railway CLI (`brew install railway`), `railway login`, `railway init --name latch`, managed Postgres via
+`railway add --database postgres`. Services declared as code in `.railway/railway.ts` (Railway's
+TypeScript infra-as-code, `railway` npm package as a devDependency) rather than clicked together in the
+dashboard, so the topology decision above is reproducible and reviewable, not tribal knowledge — three
+`service()` blocks (`latch-mcp`, `latch-merchant-api`, `latch-viewer`), each sourced from
+`github("PranavD2905/Latch", { branch: "main" })`, `env` referencing `Postgres.env.DATABASE_URL` plus
+literal `PAYMENT_PROVIDER: "razorpay"`, and secrets (`RAZORPAY_KEY_ID`/`_SECRET`,
+`MERCHANT_API_TOKEN`, `AUDIT_TRAIL_TOKEN`/`VITE_AUDIT_TRAIL_TOKEN`) declared with `preserve()` so no
+secret value is ever written to the committed file — real values set afterward via
+`railway variable set --stdin`, reusing this session's own local-dev tokens (not especially sensitive:
+Razorpay test mode, and both tokens only gate a narrow demo route / a read-only audit feed).
+`railway config plan` previewed the exact diff before `railway config apply` — safe, reviewable, and
+matches how every other infra change in this repo works: propose, read the diff, then commit.
+
+**Two real bugs found only by deploying — this is exactly why slice-7.md says not to leave this to the
+end:**
+
+1. **`web/`'s dependencies were never installed during the build.** `build:web` ran `npm --prefix web run
+   build`, but Nixpacks' Node build plan only runs `npm ci` at the repo root — `web/` is a separate
+   `package.json` with its own lockfile, not an npm workspace, so its `node_modules` never existed in the
+   build image. `latch-viewer`'s first build failed outright (`Cannot find module 'react'`, 20+ similar
+   errors). Fixed by making `build:web` install first: `npm --prefix web ci && npm --prefix web run
+   build`. Confirmed locally (`rm -rf web/node_modules web/dist && npm run build:viewer`) before
+   redeploying.
+2. **The SSE stream never opened against a genuinely empty `events` table.** `latch-viewer` built and
+   passed its healthcheck, `/healthz` and `/` (the static viewer) both responded instantly — but
+   `GET /events` hung forever: no headers, no body, nothing, confirmed with `curl -N` timing out, then
+   confirmed it wasn't a proxy/networking issue at all by reproducing the identical hang from *inside* the
+   container over `railway ssh` hitting `localhost:8080` directly, and again via Fastify's `.inject()`
+   against the exact same running code. Root cause: `reply.raw.writeHead(200, {...})` doesn't itself put
+   the response on the wire in Node — by default the header block is piggybacked onto the first
+   `write()`/`end()` call. `sendBatch()` writes zero bytes when there's nothing to replay, and on a
+   **freshly deployed, genuinely empty** database, that's true of the very first connection. Locally this
+   never surfaced across two slices of testing because local Postgres always had leftover event history
+   from earlier demo runs — the first `sendBatch()` always wrote *something*, which incidentally flushed
+   the headers along with it. Fixed with one line, `reply.raw.flushHeaders()`, right after `writeHead()`.
+   Verified against the real deployment: `curl -N` against `/events` on the empty table now returns real
+   `HTTP/2 200` headers (`server: railway-hikari`, Railway's actual edge) in well under a second.
+
+**Then the actual deliverable, proven against real infrastructure, not simulated:**
+
+- `curl` from this local machine (a genuinely separate network hop from Railway, over the public
+  internet — the same posture any third-party agent would have) against
+  `https://latch-mcp-production.up.railway.app/mcp`: a real MCP `initialize` handshake, `find_slots`
+  (IST-correct slot times, same code as the local check, now against Railway's own UTC system clock and
+  Railway's own Postgres), `get_policy` (`policyVersion: 4`, exact seeded numbers), and `hold_slot` — a
+  real `HOLD_CREATED` event, written to the real deployed Postgres.
+- Watched that exact `hold_slot` call show up **live** in the deployed audit-trail SSE stream within one
+  poll interval, via a background listener against `https://latch-viewer-production.up.railway.app/events`
+  started *before* the booking call — not a replay, an actual live push, through Railway's real proxy, to
+  a stream that had zero prior history seconds earlier.
+- `/healthz` on all three services returns `200` over public HTTPS.
+- `db:migrate` and `db:seed` both run cleanly against the real managed Postgres (via a **temporary** TCP
+  proxy — `railway tcp-proxy create`, used only for the two one-off commands, then
+  `railway tcp-proxy delete` immediately after; the private `postgres.railway.internal` hostname Railway
+  gives every service by default is not resolvable from outside Railway's network, which is correct and
+  is why the proxy was temporary rather than a standing feature).
+
+**Not done, and worth being explicit about why:** `confirm_with_deposit` (the actual deposit capture) and
+therefore the full failure path against the real Razorpay test dashboard were **not** driven against the
+deployed environment this session. Both require a human completing real Razorpay Checkout in a browser —
+the same constraint `demo/ceiling-refusal.ts`'s own comment and dev-logs/006/007 already document for
+local testing, and nothing about deploying changes it. `hold_slot` (proven above) is real, unauthenticated
+money-adjacent action against the deployed system; the deposit-capture step needs the user at a keyboard,
+not a curl script.
+
+## Cost, briefly
+
+Provisioned: Railway Hobby-tier project, one managed Postgres (500MB volume, `ams` region), three tiny
+Node services. Matches `docs/05-cost-model.md` Tier 0's shape exactly (three trivially small processes +
+one small Postgres). Too early in the billing cycle to see a real invoice number — noting the shape
+matches the estimate, not confirming the dollar figure yet.
 
 ## Decisions made that the docs did not settle
 
@@ -126,40 +205,52 @@ reproducible by running the same code locally); real infrastructure cost.
 - **Background workers folded into the MCP process, not their own service.** Both are pure
   `setInterval` loops with no `app.listen()` — nothing about them needs isolation, and running them
   standalone would be a fourth service purely to host a timer.
-- **Migrations run by hand (`railway run npm run db:migrate`), not prepended to every service's start
-  command.** `drizzle-orm`'s Postgres migrator takes its own advisory lock, so three simultaneous cold
-  starts all attempting it wouldn't race incorrectly — but running it once, deliberately, after a schema
-  change is simpler to reason about than three processes racing a lock on every deploy. Full detail in
-  `docs/07-deployment.md`.
+- **Migrations run by hand** (a temporary public TCP proxy on Postgres, `db:migrate`/`db:seed` run locally
+  against it, proxy deleted immediately after), **not prepended to every service's start command.**
+  `drizzle-orm`'s Postgres migrator takes its own advisory lock, so three simultaneous cold starts all
+  attempting it wouldn't race incorrectly — but running it once, deliberately, is simpler to reason about,
+  and there was no schema change in this slice to migrate in the first place (all eight migrations were
+  already applied and verified in earlier slices; this just replayed them against a fresh database).
+- **Health routes added to `merchant-api` and `audit-trail`**, unauthenticated on purpose (an
+  `onRequest` auth hook exemption for `merchant-api`, since it gates every route globally). Named as a gap
+  in the first pass of this log, closed before deploying rather than left for later — Railway's own
+  healthcheck gates whether a deploy is considered successful.
+- **`.railway/railway.ts` as infrastructure-as-code**, not a dashboard-clicked setup. Not strictly
+  required by slice-7.md, but it makes the topology decision above reviewable and reproducible the same
+  way every other architectural decision in this repo is — a file in the repo, not something only visible
+  by clicking through Railway's UI.
 
-## Carried forward — this is the actual state of Slice 7
+## An unrelated incident during this session, worth recording
 
-**Not done, and this is the important part:** nothing is deployed. No Railway project exists, no
-`DATABASE_URL` for a managed instance, no live endpoint URL, no remote agent has connected to anything.
-The user chose, this session, to commit the code and pause here rather than proceed to provisioning —
-correctly: creating billed, publicly-reachable infrastructure is not a call this session should make
-unilaterally.
+Mid-deployment, another Claude Code session (working on dev-log 007's Token HQ question, unrelated to
+Slice 7) turned out to share this **exact same local git working directory** — not an isolated worktree —
+and ran a commit that swept up this session's uncommitted in-progress changes (`.railway/railway.ts`, the
+health-route edits, a `package.json` dependency) into its own unrelated commit, with a Claude co-author
+trailer attached. Caught before it reached `origin` (`git log` showed a commit this session never made),
+fixed by a `git reset --soft` + reconstructing a clean commit without the trailer — no work was lost, but
+it confirms multiple sessions were operating on one shared checkout concurrently, which is a real
+collision risk for whatever comes after this slice if the same setup is still in use.
 
-**Next session (or this one, resumed) needs to, in order:**
-1. Create the Railway project + managed Postgres, with the user present for account/billing.
-2. Set env vars per `docs/07-deployment.md`'s table on each of the three services.
-3. Run `db:migrate` once, then `db:seed` once, against the Railway Postgres.
-4. Deploy all three services; hit each one's `/healthz`-equivalent (the merchant-api and audit-trail
-   services don't currently have a health route — worth adding one before relying on Railway's own health
-   checks, if it gates deploys) to confirm they're actually up before wiring an agent to the MCP one.
-5. Connect a real remote agent (a separate machine/session, not this sandbox) to the live `/mcp` URL and
-   drive a full booking — this is "the actual deliverable" per slice-7.md, and nothing before this step
-   substitutes for it.
-6. Run the failure path (merchant decline) against the deployed services and cross-check the real
-   Razorpay test dashboard.
-7. Open the deployed viewer URL in a real browser and confirm the SSE stream stays live — specifically
-   watching for the buffering/idle-timeout behaviour slice-7.md warns Railway's proxy can introduce, which
-   only shows up against the real proxy, not locally.
-8. Append this dev log (or write a 013) with the live endpoint URL and whatever behaved differently
-   deployed than locally — there will very likely be something; there almost always is on a first deploy.
-9. **Visual verification of the viewer is still separately owed from dev-log 011** — this session, again,
-   had no way to open a browser and look at it. Both the local build (confirmed serving correctly here)
-   and the eventual deployed version need an actual human eyeball before either goes in the pitch video.
+## Carried forward
+
+1. **`confirm_with_deposit` (real deposit capture) against the deployed environment, and therefore the
+   full failure path against the real Razorpay test dashboard, deployed.** Needs a human completing real
+   Razorpay Checkout in a browser — genuinely cannot be driven from a script, locally or deployed. This is
+   the next concrete step whenever someone is at a keyboard to do it.
+2. **A genuinely separate machine/agent connecting to the deployed `/mcp` URL.** This session's
+   verification used `curl` from the machine running this session — a real network hop to Railway's public
+   internet endpoint, not localhost, which is the meaningful part of the claim, but it is still this
+   session's own network. Wiring an actual third-party agent (Claude Desktop, another MCP client entirely)
+   to `https://latch-mcp-production.up.railway.app/mcp` is worth doing before the pitch video, even though
+   nothing about the transport itself distinguishes "this session's curl" from "a stranger's agent" — the
+   endpoint has no auth and no knowledge of who's calling, by design.
+3. **Visual verification of the viewer is still separately owed from dev-log 011** — this session again
+   had no way to open a browser. The data layer is proven twice over now (local, and live against the real
+   deploy); the rendering has still only been reasoned about from source, never looked at by a human.
+4. Test `latch-mcp` on next redeploy: **the background workers' actual behaviour under a real crash-loop
+   restart** (Railway restarting the container after a failure) hasn't been observed — the
+   `flushHeaders`/unguarded-tick fixes were verified by making them succeed, not by deliberately breaking
+   something to watch the restart policy work.
 
 ## One thing outside this slice's scope, flagged anyway
 
