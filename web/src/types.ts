@@ -70,3 +70,41 @@ export function formatRupees(paise: number): string {
   const rupees = paise / 100
   return `₹${rupees.toLocaleString('en-IN', { minimumFractionDigits: rupees % 1 === 0 ? 0 : 2 })}`
 }
+
+export function formatCompactRupees(paise: number): string {
+  const rupees = paise / 100
+  if (Math.abs(rupees) >= 100000) return `₹${(rupees / 100000).toFixed(1)}L`
+  if (Math.abs(rupees) >= 1000) return `₹${(rupees / 1000).toFixed(1)}K`
+  return formatRupees(paise)
+}
+
+/** Coarse grouping the pill-filter row switches between — mirrors a Payments-style status tab row. */
+export type EventCategory = 'money' | 'refused' | 'lifecycle'
+
+export function eventCategory(event: BookingEvent): EventCategory {
+  if (event.type === 'ACTION_REFUSED') return 'refused'
+  if (isMoneyEvent(event)) return 'money'
+  return 'lifecycle'
+}
+
+/** A coarse, display-only status derived from the last significant event for a booking — not a re-implementation of `fold()`. */
+export function bookingStatusLabel(events: readonly BookingEvent[]): { label: string; tone: 'good' | 'warning' | 'critical' | 'neutral' } {
+  const byType = new Map<string, BookingEvent>()
+  for (const e of events) byType.set(e.type, e)
+
+  if (byType.has('NO_SHOW_CHARGED')) return { label: 'No-show charged', tone: 'critical' }
+  if (byType.has('BOOKING_COMPLETED')) return { label: 'Completed', tone: 'good' }
+  if (byType.has('MERCHANT_DECLINED')) return { label: 'Declined by merchant', tone: 'critical' }
+  if (byType.has('CANCELLED_BY_CUSTOMER')) return { label: 'Cancelled', tone: 'neutral' }
+  if (byType.has('NO_SHOW_ELIGIBLE')) return { label: 'No-show eligible', tone: 'warning' }
+  if (byType.has('BOOKING_CONFIRMED')) return { label: 'Confirmed', tone: 'good' }
+  if (byType.has('HOLD_EXPIRED')) return { label: 'Hold expired', tone: 'neutral' }
+  if (byType.has('HOLD_RELEASED')) return { label: 'Released', tone: 'neutral' }
+  if (byType.has('HOLD_CREATED')) return { label: 'Held', tone: 'warning' }
+  return { label: 'Unknown', tone: 'neutral' }
+}
+
+export function shortId(id: string | undefined | null): string {
+  if (!id) return '—'
+  return id.length > 16 ? `${id.slice(0, 11)}…${id.slice(-4)}` : id
+}
