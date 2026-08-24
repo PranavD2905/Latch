@@ -1,0 +1,63 @@
+import { defineRailway, github, postgres, preserve, project, service, volume } from "railway/iac";
+
+// Slice 7 topology (docs/07-deployment.md): three small services sharing one
+// managed Postgres, rather than one combined process. Secrets (Razorpay
+// keys, the merchant/audit tokens) are declared with preserve() — their
+// real values are set out-of-band via `railway variable set`, never written
+// here, per this file's own README on how imported secrets are handled.
+
+export default defineRailway(() => {
+  const Postgres = postgres("Postgres", { region: "ams" });
+  const postgresVolume = volume("postgres-volume", {
+    alerts: { usage: { "100": {}, "80": {}, "95": {} } },
+    allowOnlineResize: true,
+    region: "ams",
+    sizeMB: 500,
+  });
+
+  const source = github("PranavD2905/Latch", { branch: "main" });
+
+  const sharedEnv = {
+    DATABASE_URL: Postgres.env.DATABASE_URL,
+    PAYMENT_PROVIDER: "razorpay",
+    RAZORPAY_KEY_ID: preserve(),
+    RAZORPAY_KEY_SECRET: preserve(),
+  };
+
+  const mcp = service("latch-mcp", {
+    source,
+    build: "npm run build",
+    start: "npm run start:mcp",
+    healthcheck: "/healthz",
+    env: sharedEnv,
+  });
+
+  const merchantApi = service("latch-merchant-api", {
+    source,
+    build: "npm run build",
+    start: "npm run start:merchant-api",
+    healthcheck: "/healthz",
+    env: {
+      ...sharedEnv,
+      MERCHANT_API_TOKEN: preserve(),
+    },
+  });
+
+  const viewer = service("latch-viewer", {
+    source,
+    build: "npm run build:viewer",
+    start: "npm run start:viewer",
+    healthcheck: "/healthz",
+    env: {
+      ...sharedEnv,
+      AUDIT_TRAIL_TOKEN: preserve(),
+      // Vite bakes this into the static bundle at build time — must match
+      // AUDIT_TRAIL_TOKEN exactly (web/src/App.tsx).
+      VITE_AUDIT_TRAIL_TOKEN: preserve(),
+    },
+  });
+
+  return project("latch", {
+    resources: [Postgres, postgresVolume, mcp, merchantApi, viewer],
+  });
+});

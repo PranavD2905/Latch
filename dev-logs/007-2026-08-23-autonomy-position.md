@@ -130,6 +130,16 @@ production design. Checked whether it is available. It is not — and neither is
 | **Card e-mandate / recurring** | OTP once → debit to `max_amount`, revocable token | **On-demand activation** ("raise a request with Support"), granted *"at the discretion of the payment gateway and partner banks"* and dependent on line of business. And in test mode, **card tokens are valid for 3 days only** — shorter than the 5-day manual-capture window we already have |
 | **S2S / TPV direct payment** | Server submits payments outright | 404, needs Support activation (dev-log 006) |
 | **Card manual capture** | Authorise now, capture later | ✅ **in use** — the only self-serve option, 5-day window |
+| **Token HQ** (card-on-file tokenisation) | — | ❌ **Does not apply.** Saves the card *number* as a token, not a *permission*. Razorpay's docs: on a repeat transaction the customer "can provide the OTP and use their saved card." It removes card re-entry, not the human. Customer-initiated by definition; a no-show charge is merchant-initiated |
+
+**On Token HQ specifically**, since it is an easy thing to mistake for a solution: tokenisation and
+mandates are orthogonal. Tokenisation answers *"how do we store the card safely?"* (CIT — customer
+initiated, OTP each time). A mandate answers *"may we charge without asking again?"* (MIT — merchant
+initiated). Latch's no-show charge is MIT by definition, so no amount of tokenisation reaches it.
+
+The confirmation is already in this log: Razorpay's own MCP `initiate_payment` requires a saved payment
+method — a Token HQ token — and *then* calls `submit_otp`. Razorpay built tokenisation, wired it into
+agent tooling, and it still needs a human.
 
 **The pattern is the finding.** Every mechanism granting delegated, bounded spending authority is
 gated behind manual approval. That is not accidental: under RBI's AFA framework these are regulated

@@ -34,6 +34,10 @@ const POLL_INTERVAL_MS = 500
 export function createAuditTrailServer(deps: AppDeps, options: AuditTrailServerOptions): FastifyInstance {
   const app = Fastify({ logger: false })
 
+  // Unauthenticated on purpose — Railway's own health check (docs/07-deployment.md)
+  // needs to reach this without the viewer token.
+  app.get('/healthz', async () => ({ ok: true }))
+
   app.get<{ Querystring: { token?: string } }>('/events', async (request, reply) => {
     if (request.query.token !== options.viewerToken) {
       await reply.code(401).send({ error: 'unauthorized' })

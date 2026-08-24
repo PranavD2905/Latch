@@ -23,7 +23,12 @@ export interface MerchantApiOptions {
 export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptions): FastifyInstance {
   const app = Fastify({ logger: false })
 
+  // Unauthenticated on purpose — Railway's own health check (docs/07-deployment.md)
+  // needs to reach this without a merchant token.
+  app.get('/healthz', async () => ({ ok: true }))
+
   app.addHook('onRequest', async (request, reply) => {
+    if (request.url === '/healthz') return
     const header = request.headers.authorization
     const token = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined
     if (token !== options.merchantToken) {

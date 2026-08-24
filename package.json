@@ -11,7 +11,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
-    "build:web": "npm --prefix web run build",
+    "build:web": "npm --prefix web ci && npm --prefix web run build",
     "build:viewer": "npm run build && npm run build:web",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/adapters/db/migrate.ts",
@@ -48,6 +48,7 @@
   "devDependencies": {
     "@types/node": "^22.10.2",
     "drizzle-kit": "^0.28.1",
+    "railway": "^3.11.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
