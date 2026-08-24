@@ -4,8 +4,10 @@ import { Refusal, type RefusalCode } from '../domain/refusals.js'
 import type { BookingSnapshot } from '../ports/event-store.js'
 import { CaptureAmountMismatchError } from '../ports/payment-rail.js'
 import { NoActivePolicyError } from './get-policy.js'
-import { appendRefusalEvent } from './refusal.js'
+import { appendRefusalEvent, refuseAgainstBooking } from './refusal.js'
 import type { AppDeps } from './types.js'
+
+const IDEMPOTENCY_CLAIM_TIMEOUT_MS = 30_000
 
 export interface ChargeNoShowCommand {
   bookingId: string
@@ -52,11 +54,29 @@ type GateOutcome =
  * final transaction appends the trail event and flips the projection).
  */
 export async function chargeNoShow(cmd: ChargeNoShowCommand, deps: AppDeps): Promise<ChargeNoShowResult> {
-  const cached = await deps.idempotencyStore.get<ChargeNoShowResult>('charge_no_show', cmd.idempotencyKey)
-  if (cached) {
-    return cached
+  const claim = await deps.idempotencyStore.claim<ChargeNoShowResult>('charge_no_show', cmd.idempotencyKey, {
+    timeoutMs: deps.idempotencyClaimTimeoutMs ?? IDEMPOTENCY_CLAIM_TIMEOUT_MS,
+  })
+  if (claim.kind === 'completed') {
+    return claim.response
+  }
+  if (claim.kind === 'timed_out') {
+    return refuseAgainstBooking(deps, cmd.bookingId, {
+      attemptedType: 'charge_no_show',
+      code: 'IDEMPOTENT_REPLAY',
+      reason: `a charge_no_show request with idempotency key ${cmd.idempotencyKey} is already in progress and did not complete in time`,
+    })
   }
 
+  try {
+    return await chargeNoShowClaimed(cmd, deps)
+  } catch (err) {
+    await deps.idempotencyStore.release('charge_no_show', cmd.idempotencyKey)
+    throw err
+  }
+}
+
+async function chargeNoShowClaimed(cmd: ChargeNoShowCommand, deps: AppDeps): Promise<ChargeNoShowResult> {
   const policy = await deps.catalogRepo.getActivePolicy(deps.merchantId)
   if (!policy) {
     throw new NoActivePolicyError(`no active policy for merchant ${deps.merchantId}`)

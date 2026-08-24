@@ -11,12 +11,62 @@ import { bookings, events } from '../adapters/db/schema.js'
 import { FakePaymentProvider } from '../adapters/payment/fake-payment-provider.js'
 import { FakePaymentRail } from '../adapters/payment/fake-payment-rail.js'
 import type { BookingEvent } from '../domain/events.js'
+import type {
+  AuthorizeParams,
+  AuthorizeResult,
+  CaptureAuthorizationParams,
+  CaptureAuthorizationResult,
+  PaymentRail as PaymentRailPort,
+} from '../ports/payment-rail.js'
+import type { CaptureDepositParams, CaptureDepositResult, PaymentProvider, RefundDepositParams, RefundDepositResult } from '../ports/payment-provider.js'
 import { confirmWithDeposit } from './confirm-with-deposit.js'
 import { getPolicy } from './get-policy.js'
 import { holdSlot } from './hold-slot.js'
 import { runHoldExpiryWorker } from './hold-expiry-worker.js'
 import { runNoShowEligibilityWorker } from './no-show-eligibility-worker.js'
 import type { AppDeps } from './types.js'
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Widens the window between confirm_with_deposit's gate transaction and its
+ * final append — even FakePaymentProvider's near-instant resolution leaves
+ * that window too narrow to reliably land a concurrent worker tick inside it
+ * via ordinary Promise scheduling. This makes the straddled-race test below
+ * deterministic instead of a timing gamble. dev-logs/013.
+ */
+class DelayedPaymentProvider implements PaymentProvider {
+  constructor(
+    private readonly inner: PaymentProvider,
+    private readonly delayMs: number,
+  ) {}
+  async captureDeposit(params: CaptureDepositParams): Promise<CaptureDepositResult> {
+    await sleep(this.delayMs)
+    return this.inner.captureDeposit(params)
+  }
+  async refundDeposit(params: RefundDepositParams): Promise<RefundDepositResult> {
+    return this.inner.refundDeposit(params)
+  }
+}
+
+class DelayedPaymentRail implements PaymentRailPort {
+  readonly name: PaymentRailPort['name']
+  constructor(
+    private readonly inner: PaymentRailPort,
+    private readonly delayMs: number,
+  ) {
+    this.name = inner.name
+  }
+  async authorize(params: AuthorizeParams): Promise<AuthorizeResult> {
+    await sleep(this.delayMs)
+    return this.inner.authorize(params)
+  }
+  async captureAuthorization(params: CaptureAuthorizationParams): Promise<CaptureAuthorizationResult> {
+    return this.inner.captureAuthorization(params)
+  }
+}
 
 process.loadEnvFile?.('.env')
 const databaseUrl = process.env['DATABASE_URL'] ?? 'postgres://latch:latch@localhost:5432/latch'
@@ -217,6 +267,89 @@ describe('Race 2 — hold expiry vs. confirm (docs/03-domain-model.md §7)', () 
     } else {
       expect(depositCaptured).toBe(true) // confirm genuinely won the race and captured for real
       expect(workerOutcome.status === 'fulfilled' && workerOutcome.value.expiredBookingIds).not.toContain(held.bookingId)
+    }
+  })
+
+  // The test above shares one FrozenClock between both sides, so it's
+  // already past the TTL for both the instant either one checks it — the
+  // worker vs. confirm ordering is racy, but *which side wins the gate
+  // check* is not (confirm's own gate always sees an expired hold and always
+  // refuses, regardless of the lock race). dev-logs/013's actual find is a
+  // narrower, nastier window: a confirm request that reads the clock a
+  // moment *before* TTL (legitimately live) racing a worker tick reading it
+  // a moment *after* (legitimately sweepable) — two independently correct
+  // views of time straddling the same instant. Simulated here with two
+  // separate FrozenClocks. Before the confirmation-claim-window fix
+  // (dev-logs/013), if confirm's gate won the lock first, its *second*
+  // (post-payment) transaction unconditionally overwrote whatever the
+  // worker had done in between straight back to CONFIRMED — silently eating
+  // a HOLD_EXPIRED the worker had already committed, or worse, crashing
+  // after real money had already moved if a different agent had re-claimed
+  // the freed slot in that window.
+  it('a straddled race (confirm reads the clock just before TTL, the worker just after) still produces exactly one coherent outcome', async () => {
+    clock.set(new Date(slotAt('15:30').getTime() - 5 * 24 * 3_600_000))
+    const agentId = `agent_${ulid()}`
+    const held = await holdSlot({ agentId, practitionerId: SEED_PRACTITIONER_ID, serviceId: SEED_SERVICE_ID, startsAt: slotAt('15:30'), idempotencyKey: freshKey() }, deps)
+    createdBookingIds.push(held.bookingId)
+    const policyResult = await getPolicy(deps)
+
+    const holdExpiresAt = new Date(held.holdExpiresAt)
+    const confirmClock = new FrozenClock(new Date(holdExpiresAt.getTime() - 500)) // still live, from this side's own clock
+    const workerClock = new FrozenClock(new Date(holdExpiresAt.getTime() + 500)) // already expired, from this side's own clock
+
+    const confirmDeps: AppDeps = {
+      ...deps,
+      clock: confirmClock,
+      paymentProvider: new DelayedPaymentProvider(deps.paymentProvider, 200),
+      paymentRail: new DelayedPaymentRail(deps.paymentRail, 200),
+    }
+    const workerDeps: AppDeps = { ...deps, clock: workerClock }
+
+    // Fired in this order, deliberately, not via a bare Promise.all: confirm
+    // first, then a short pause — comfortably long enough for its gate
+    // transaction (a couple of fast local Postgres round trips, no
+    // artificial delay) to land, comfortably short of the 200ms artificial
+    // delay on its payment calls above — then the worker. This reliably
+    // lands the worker's claim query *inside* confirm's post-gate,
+    // pre-append window instead of leaving it to chance, which is the
+    // window dev-logs/013 found unprotected.
+    const confirmPromise = confirmWithDeposit(
+      { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: freshKey() },
+      confirmDeps,
+    )
+    await sleep(100)
+    await runHoldExpiryWorker(workerDeps)
+    const confirmOutcome = await confirmPromise.then(
+      (value) => ({ status: 'fulfilled' as const, value }),
+      (reason) => ({ status: 'rejected' as const, reason }),
+    )
+
+    const snapshot = await deps.eventStore.loadSnapshot(held.bookingId)
+    const allEvents = await loadEventLog(held.bookingId)
+    const depositCapturedCount = allEvents.filter((e) => e.type === 'DEPOSIT_CAPTURED').length
+    const holdExpiredCount = allEvents.filter((e) => e.type === 'HOLD_EXPIRED').length
+
+    // The exact corruption this test exists to rule out: both a HOLD_EXPIRED
+    // *and* a real capture landing against the same booking.
+    expect(depositCapturedCount === 1 && holdExpiredCount === 1).toBe(false)
+
+    // The sequencing above deterministically puts confirm's gate transaction
+    // (and its holdExpiresAt claim-bump) first, with the worker's claim
+    // query landing squarely inside the delayed payment-call window that
+    // follows — so with the claim window in place, confirm always wins:
+    // the worker's claim query must not select a row it just bumped past
+    // its own clock reading.
+    if (snapshot?.status === 'CONFIRMED') {
+      expect(depositCapturedCount).toBe(1)
+      expect(holdExpiredCount).toBe(0)
+      expect(confirmOutcome.status).toBe('fulfilled')
+    } else {
+      expect(depositCapturedCount).toBe(0)
+      expect(holdExpiredCount).toBe(1)
+      expect(confirmOutcome.status).toBe('rejected')
+      if (confirmOutcome.status === 'rejected') {
+        expect(confirmOutcome.reason).toMatchObject({ code: 'HOLD_EXPIRED' })
+      }
     }
   })
 })

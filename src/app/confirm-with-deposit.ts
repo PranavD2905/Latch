@@ -4,8 +4,38 @@ import type { Policy } from '../domain/policy.js'
 import { Refusal, type RefusalCode } from '../domain/refusals.js'
 import type { BookingSnapshot } from '../ports/event-store.js'
 import { NoActivePolicyError } from './get-policy.js'
-import { appendRefusalEvent } from './refusal.js'
+import { appendRefusalEvent, refuseAgainstBooking } from './refusal.js'
 import type { AppDeps } from './types.js'
+
+/**
+ * Generous on purpose: `confirm_with_deposit` legitimately blocks on a human
+ * completing real Razorpay Checkout, which routinely takes longer than a
+ * minute (dev-logs/012's `mcp-remote` 60s-timeout incident). A concurrent
+ * retry with the *same* idempotency key should wait for that human, not fail
+ * fast — 5 minutes matches `DEFAULT_CAPTURE_TIMEOUT_MS`, the ceiling the
+ * payment/rail adapters themselves already use for the same wait.
+ */
+const IDEMPOTENCY_CLAIM_TIMEOUT_MS = 5 * 60 * 1000
+
+/**
+ * dev-logs/013 (Slice 8, Race 2): the gate check and the money-moving append
+ * are two separate transactions with a real, unlocked payment call between
+ * them (see the big comment below for why that gap is deliberate). Without
+ * this, a hold whose TTL happens to lapse *during* that payment call is
+ * fair game for the background hold-expiry worker's sweep — and the final
+ * append below, which didn't re-verify anything, would silently overwrite
+ * that expiry back to CONFIRMED (or, worse, crash with an unhandled
+ * unique-index violation if another agent had already re-claimed the freed
+ * slot) *after* real money had already moved. The gate transaction now
+ * extends `holdExpiresAt` into this window as part of its own write — the
+ * worker's claim query (`holdExpiresAt < now`) then simply doesn't select
+ * this row while a confirm is in flight, the same way `SKIP LOCKED` makes it
+ * skip a row a concurrent transaction is holding, just without needing to
+ * hold a real lock/connection across the payment call itself. Matches
+ * `IDEMPOTENCY_CLAIM_TIMEOUT_MS` — both exist to cover the same worst case,
+ * a human taking the full length of a real Checkout.
+ */
+const CONFIRMATION_CLAIM_WINDOW_MS = 5 * 60 * 1000
 
 /**
  * Distinct from `cmd.idempotencyKey`, which keys the deposit leg (and, via
@@ -68,11 +98,29 @@ type GateOutcome =
  * call itself happens *outside* that lock, in a second transaction.
  */
 export async function confirmWithDeposit(cmd: ConfirmWithDepositCommand, deps: AppDeps): Promise<ConfirmWithDepositResult> {
-  const cached = await deps.idempotencyStore.get<ConfirmWithDepositResult>('confirm_with_deposit', cmd.idempotencyKey)
-  if (cached) {
-    return cached
+  const claim = await deps.idempotencyStore.claim<ConfirmWithDepositResult>('confirm_with_deposit', cmd.idempotencyKey, {
+    timeoutMs: deps.idempotencyClaimTimeoutMs ?? IDEMPOTENCY_CLAIM_TIMEOUT_MS,
+  })
+  if (claim.kind === 'completed') {
+    return claim.response
+  }
+  if (claim.kind === 'timed_out') {
+    return refuseAgainstBooking(deps, cmd.bookingId, {
+      attemptedType: 'confirm_with_deposit',
+      code: 'IDEMPOTENT_REPLAY',
+      reason: `a confirm_with_deposit request with idempotency key ${cmd.idempotencyKey} is already in progress and did not complete in time`,
+    })
   }
 
+  try {
+    return await confirmWithDepositClaimed(cmd, deps)
+  } catch (err) {
+    await deps.idempotencyStore.release('confirm_with_deposit', cmd.idempotencyKey)
+    throw err
+  }
+}
+
+async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: AppDeps): Promise<ConfirmWithDepositResult> {
   const policy = await deps.catalogRepo.getActivePolicy(deps.merchantId)
   if (!policy) {
     throw new NoActivePolicyError(`no active policy for merchant ${deps.merchantId}`)
@@ -116,6 +164,24 @@ export async function confirmWithDeposit(cmd: ConfirmWithDepositCommand, deps: A
       )
     }
 
+    // Claim this hold against the background expiry sweep for the duration
+    // of the payment call that follows — see CONFIRMATION_CLAIM_WINDOW_MS.
+    // POLICY_ACKNOWLEDGED moves here (was previously written in the final
+    // transaction, alongside the money events) purely so this write has a
+    // real event to carry the bumped `holdExpiresAt` on the projection —
+    // it doesn't depend on the payment result, so nothing is lost by
+    // recording it earlier.
+    const ackEvent = createPolicyAcknowledgedEvent(snapshot.bookingId, nextSequence, deps.clock, {
+      policyVersion: policy.policyVersion,
+    })
+    const claimedHoldExpiresAt = new Date(now.getTime() + CONFIRMATION_CLAIM_WINDOW_MS)
+    const claimedSnapshot: BookingSnapshot = { ...snapshot, holdExpiresAt: claimedHoldExpiresAt, lastEventSequence: nextSequence }
+    await tx.append([ackEvent], claimedSnapshot)
+
+    // Return the *original* (unbumped) snapshot — callers below only use it
+    // for its bookingId and the hold-expiry value to cite as gate evidence;
+    // the claim-window bump is an internal detail of protecting the payment
+    // call, not something the trail's own `gate.evidence` should surface.
     return { kind: 'ok', snapshot, policy }
   })
 
@@ -154,11 +220,23 @@ export async function confirmWithDeposit(cmd: ConfirmWithDepositCommand, deps: A
   await deps.eventStore.transaction(async (tx) => {
     const fresh = await tx.loadSnapshotForUpdate(snapshot.bookingId)
     const base = fresh ?? snapshot
+
+    // Belt and braces on top of the claim window above: the only actors
+    // that can touch a HELD booking are this same confirm attempt and the
+    // hold-expiry worker, and the claim window is specifically sized to
+    // keep the worker off this row for the whole payment call. If this
+    // ever fires, the claim mechanism itself has a bug — better to fail
+    // loudly than silently overwrite whatever state this booking is
+    // actually in with a CONFIRMED that real money was captured for, but
+    // the trail can no longer honestly justify.
+    if (base.status !== 'HELD') {
+      throw new Error(
+        `confirm_with_deposit: booking ${snapshot.bookingId} left the HELD state (now ${base.status}) while its deposit/authorization were being captured — this should be structurally impossible under the confirmation claim window`,
+      )
+    }
+
     let sequence = base.lastEventSequence
 
-    const ackEvent = createPolicyAcknowledgedEvent(snapshot.bookingId, ++sequence, deps.clock, {
-      policyVersion: policy.policyVersion,
-    })
     const depositEvent = createDepositCapturedEvent(snapshot.bookingId, ++sequence, deps.clock, {
       action: { direction: 'credit', amountPaise: captured.amountPaise, instrument: captured.instrument },
       gate: {
@@ -192,7 +270,7 @@ export async function confirmWithDeposit(cmd: ConfirmWithDepositCommand, deps: A
       lastEventSequence: sequence,
     }
 
-    await tx.append([ackEvent, depositEvent, authorizationEvent, confirmedEvent], projection)
+    await tx.append([depositEvent, authorizationEvent, confirmedEvent], projection)
   })
 
   const result: ConfirmWithDepositResult = {

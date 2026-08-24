@@ -24,4 +24,12 @@ export interface AppDeps {
   paymentRail: PaymentRail
   idempotencyStore: IdempotencyStore
   merchantId: string
+  /**
+   * Overrides every handler's default `IdempotencyStore.claim` timeout —
+   * dev-logs/013. Undefined in production (each handler picks its own
+   * sensible default); tests set a short value to force the
+   * `IDEMPOTENT_REPLAY` path deterministically instead of waiting out a
+   * multi-minute production ceiling.
+   */
+  idempotencyClaimTimeoutMs?: number
 }

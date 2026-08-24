@@ -4,7 +4,10 @@ import { evaluateLadder } from '../domain/ladder.js'
 import { floorPercentageOf, subtractPaise, type Paise } from '../domain/money.js'
 import type { Policy } from '../domain/policy.js'
 import type { BookingSnapshot } from '../ports/event-store.js'
+import { refuseAgainstBooking } from './refusal.js'
 import type { AppDeps } from './types.js'
+
+const IDEMPOTENCY_CLAIM_TIMEOUT_MS = 30_000
 
 export interface CancelBookingCommand {
   bookingId: string
@@ -56,11 +59,29 @@ type GateOutcome =
  * policy happens to be today (docs/03-domain-model.md §2).
  */
 export async function cancelBooking(cmd: CancelBookingCommand, deps: AppDeps): Promise<CancelBookingResult> {
-  const cached = await deps.idempotencyStore.get<CancelBookingResult>('cancel', cmd.idempotencyKey)
-  if (cached) {
-    return cached
+  const claim = await deps.idempotencyStore.claim<CancelBookingResult>('cancel', cmd.idempotencyKey, {
+    timeoutMs: deps.idempotencyClaimTimeoutMs ?? IDEMPOTENCY_CLAIM_TIMEOUT_MS,
+  })
+  if (claim.kind === 'completed') {
+    return claim.response
+  }
+  if (claim.kind === 'timed_out') {
+    return refuseAgainstBooking(deps, cmd.bookingId, {
+      attemptedType: 'cancel',
+      code: 'IDEMPOTENT_REPLAY',
+      reason: `a cancel request with idempotency key ${cmd.idempotencyKey} is already in progress and did not complete in time`,
+    })
   }
 
+  try {
+    return await cancelBookingClaimed(cmd, deps)
+  } catch (err) {
+    await deps.idempotencyStore.release('cancel', cmd.idempotencyKey)
+    throw err
+  }
+}
+
+async function cancelBookingClaimed(cmd: CancelBookingCommand, deps: AppDeps): Promise<CancelBookingResult> {
   const gateOutcome = await deps.eventStore.transaction<GateOutcome>(async (tx) => {
     const snapshot = await tx.loadSnapshotForUpdate(cmd.bookingId)
     if (!snapshot) {

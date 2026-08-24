@@ -4,8 +4,10 @@ import { evaluateLadder } from '../domain/ladder.js'
 import { ZERO_PAISE } from '../domain/money.js'
 import { Refusal, type RefusalCode } from '../domain/refusals.js'
 import type { BookingSnapshot } from '../ports/event-store.js'
-import { appendRefusalEvent } from './refusal.js'
+import { appendRefusalEvent, refuseAgainstBooking } from './refusal.js'
 import type { AppDeps } from './types.js'
+
+const IDEMPOTENCY_CLAIM_TIMEOUT_MS = 30_000
 
 export interface RescheduleBookingCommand {
   bookingId: string
@@ -60,11 +62,29 @@ type GateOutcome =
  *     system treats as authoritative for "is this exact slot occupied."
  */
 export async function rescheduleBooking(cmd: RescheduleBookingCommand, deps: AppDeps): Promise<RescheduleBookingResult> {
-  const cached = await deps.idempotencyStore.get<RescheduleBookingResult>('reschedule', cmd.idempotencyKey)
-  if (cached) {
-    return cached
+  const claim = await deps.idempotencyStore.claim<RescheduleBookingResult>('reschedule', cmd.idempotencyKey, {
+    timeoutMs: deps.idempotencyClaimTimeoutMs ?? IDEMPOTENCY_CLAIM_TIMEOUT_MS,
+  })
+  if (claim.kind === 'completed') {
+    return claim.response
+  }
+  if (claim.kind === 'timed_out') {
+    return refuseAgainstBooking(deps, cmd.bookingId, {
+      attemptedType: 'reschedule',
+      code: 'IDEMPOTENT_REPLAY',
+      reason: `a reschedule request with idempotency key ${cmd.idempotencyKey} is already in progress and did not complete in time`,
+    })
   }
 
+  try {
+    return await rescheduleBookingClaimed(cmd, deps)
+  } catch (err) {
+    await deps.idempotencyStore.release('reschedule', cmd.idempotencyKey)
+    throw err
+  }
+}
+
+async function rescheduleBookingClaimed(cmd: RescheduleBookingCommand, deps: AppDeps): Promise<RescheduleBookingResult> {
   let outcome: GateOutcome
   try {
     outcome = await deps.eventStore.transaction<GateOutcome>(async (tx) => {

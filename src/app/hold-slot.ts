@@ -30,6 +30,8 @@ export interface HoldSlotResult {
 
 type HoldOutcome = { kind: 'ok'; result: HoldSlotResult } | { kind: 'refused'; code: RefusalCode; reason: string }
 
+const IDEMPOTENCY_CLAIM_TIMEOUT_MS = 30_000
+
 /**
  * `hold_slot` — docs/01-architecture.md §3: moves NO money.
  *
@@ -47,11 +49,29 @@ type HoldOutcome = { kind: 'ok'; result: HoldSlotResult } | { kind: 'refused'; c
  * every `hold_slot` call from the same agent. See dev-logs/004.
  */
 export async function holdSlot(cmd: HoldSlotCommand, deps: AppDeps): Promise<HoldSlotResult> {
-  const cached = await deps.idempotencyStore.get<HoldSlotResult>('hold_slot', cmd.idempotencyKey)
-  if (cached) {
-    return cached
+  const claim = await deps.idempotencyStore.claim<HoldSlotResult>('hold_slot', cmd.idempotencyKey, {
+    timeoutMs: deps.idempotencyClaimTimeoutMs ?? IDEMPOTENCY_CLAIM_TIMEOUT_MS,
+  })
+  if (claim.kind === 'completed') {
+    return claim.response
+  }
+  if (claim.kind === 'timed_out') {
+    return refuseStandalone(deps, {
+      attemptedType: 'hold_slot',
+      code: 'IDEMPOTENT_REPLAY',
+      reason: `a hold_slot request with idempotency key ${cmd.idempotencyKey} is already in progress and did not complete in time`,
+    })
   }
 
+  try {
+    return await holdSlotClaimed(cmd, deps)
+  } catch (err) {
+    await deps.idempotencyStore.release('hold_slot', cmd.idempotencyKey)
+    throw err
+  }
+}
+
+async function holdSlotClaimed(cmd: HoldSlotCommand, deps: AppDeps): Promise<HoldSlotResult> {
   const practitioner = await deps.catalogRepo.getPractitioner(cmd.practitionerId)
   if (!practitioner) {
     throw new UnknownPractitionerError(`unknown practitioner: ${cmd.practitionerId}`)

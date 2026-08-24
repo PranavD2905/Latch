@@ -52,3 +52,28 @@ export async function refuseStandalone(deps: AppDeps, params: { attemptedType: s
   })
   throw new Refusal(params.code, params.reason)
 }
+
+/**
+ * Same as `refuseStandalone`, but against a booking that already exists
+ * (e.g. an `IDEMPOTENT_REPLAY` timeout on `confirm_with_deposit`/
+ * `charge_no_show`/`cancel`, all of which are called with a real
+ * `bookingId`) — appends the `ACTION_REFUSED` event against that booking's
+ * own row and sequence, rather than an ephemeral one. dev-logs/013.
+ */
+export async function refuseAgainstBooking(deps: AppDeps, bookingId: string, params: { attemptedType: string; code: RefusalCode; reason: string }): Promise<never> {
+  await deps.eventStore.transaction(async (tx) => {
+    const fresh = await tx.loadSnapshotForUpdate(bookingId)
+    const sequence = (fresh?.lastEventSequence ?? 0) + 1
+    await appendRefusalEvent({
+      tx,
+      clock: deps.clock,
+      bookingId,
+      sequence,
+      attemptedType: params.attemptedType,
+      code: params.code,
+      reason: params.reason,
+      ...(fresh ? { projection: { ...fresh, lastEventSequence: sequence } } : {}),
+    })
+  })
+  throw new Refusal(params.code, params.reason)
+}
