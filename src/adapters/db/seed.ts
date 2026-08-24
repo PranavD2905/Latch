@@ -1,14 +1,18 @@
 /**
- * One-command demo-ready seed: a clinic, Dr. Rao, one service, and policy v1
- * matching the worked example in docs/03-domain-model.md §2. Fixed IDs so
- * re-running is safe (`onConflictDoNothing`) and the MCP client / tests can
- * refer to them by name instead of looking them up first.
+ * One-command demo-ready seed: a clinic, Dr. Rao, one service, and policy v4
+ * — the exact numbers of the worked example in docs/03-domain-model.md §2
+ * (which literally quotes `policy_version: 4`; the ladder/deposit/no-show
+ * figures were already identical to this seed pre-Slice-7, only the version
+ * number and policyId are new). Fixed IDs so re-running is safe
+ * (`onConflictDoNothing`) and the MCP client / tests can refer to them by
+ * name instead of looking them up first.
  */
+import { loadEnvFile } from '../load-env.js'
 import { createDbClient } from './client.js'
 import { merchants, policies, practitioners, services } from './schema.js'
 import { SEED_MERCHANT_ID, SEED_PRACTITIONER_ID, SEED_SERVICE_ID } from './seed-data.js'
 
-process.loadEnvFile?.('.env')
+loadEnvFile()
 
 const databaseUrl = process.env['DATABASE_URL']
 if (!databaseUrl) {
@@ -61,9 +65,9 @@ async function seed() {
   await db
     .insert(policies)
     .values({
-      policyId: 'pol_v1',
+      policyId: 'pol_v4',
       merchantId: SEED_MERCHANT_ID,
-      version: 1,
+      version: 4,
       depositType: 'fixed',
       depositAmountPaise: 30000, // ₹300
       cancellationLadder: [

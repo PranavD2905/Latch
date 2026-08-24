@@ -281,7 +281,9 @@ in-process background worker.
 **Rejected — AWS.** Correct at scale, wrong for a two-week build. Time spent on IAM and VPCs is time
 not spent on the product.
 
-Costs are modelled in full in `05-cost-model.md`.
+Costs are modelled in full in `05-cost-model.md`. The actual Slice 7 service topology — three small
+Railway services (MCP, merchant API, audit-trail/viewer) sharing one managed Postgres, and why that beat
+one combined process — is in `07-deployment.md`.
 
 ---
 

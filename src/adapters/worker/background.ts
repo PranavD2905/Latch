@@ -14,8 +14,9 @@ import { runHoldExpiryWorker } from '../../app/hold-expiry-worker.js'
 import { runNoShowEligibilityWorker } from '../../app/no-show-eligibility-worker.js'
 import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
 import { createDbClient } from '../db/client.js'
+import { loadEnvFile } from '../load-env.js'
 
-process.loadEnvFile?.('.env')
+loadEnvFile()
 
 const { db } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db)

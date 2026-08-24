@@ -8,9 +8,10 @@
  */
 import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
 import { createDbClient } from '../db/client.js'
+import { loadEnvFile } from '../load-env.js'
 import { createMerchantApiServer } from './server.js'
 
-process.loadEnvFile?.('.env')
+loadEnvFile()
 
 const merchantToken = process.env['MERCHANT_API_TOKEN']
 if (!merchantToken) {
@@ -21,6 +22,8 @@ const { db } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db)
 
 const app = createMerchantApiServer(deps, { merchantToken })
-const port = Number(process.env['MERCHANT_API_PORT'] ?? 4001)
+// Railway assigns the public port via $PORT for whichever service this
+// process is deployed as; MERCHANT_API_PORT stays the local-dev default.
+const port = Number(process.env['PORT'] ?? process.env['MERCHANT_API_PORT'] ?? 4001)
 await app.listen({ port, host: '0.0.0.0' })
 console.log(`merchant API listening on :${port}`)

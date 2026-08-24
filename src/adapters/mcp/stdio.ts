@@ -18,9 +18,10 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
 import { createDbClient } from '../db/client.js'
+import { loadEnvFile } from '../load-env.js'
 import { createServer } from './server.js'
 
-process.loadEnvFile?.('.env')
+loadEnvFile()
 
 const { db } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db)

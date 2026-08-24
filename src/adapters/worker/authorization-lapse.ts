@@ -9,8 +9,9 @@
 import { runAuthorizationLapseWorker } from '../../app/authorization-lapse-worker.js'
 import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
 import { createDbClient } from '../db/client.js'
+import { loadEnvFile } from '../load-env.js'
 
-process.loadEnvFile?.('.env')
+loadEnvFile()
 
 const { db } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db)

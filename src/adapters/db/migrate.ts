@@ -1,8 +1,9 @@
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import { fileURLToPath } from 'node:url'
+import { loadEnvFile } from '../load-env.js'
 import { createDbClient } from './client.js'
 
-process.loadEnvFile?.('.env')
+loadEnvFile()
 
 const databaseUrl = process.env['DATABASE_URL']
 if (!databaseUrl) {
