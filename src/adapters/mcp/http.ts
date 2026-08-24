@@ -49,7 +49,12 @@ async function backgroundTick(): Promise<void> {
 }
 
 console.log(`background worker started, polling every ${backgroundIntervalMs}ms`)
-await backgroundTick()
+// Deliberately not `await`ed unguarded: an unhandled rejection here (e.g. a
+// first-tick race against migrations not having run yet on a fresh deploy)
+// would crash this entire process — taking the public MCP endpoint down
+// over a background-job failure, exactly the opposite of what folding the
+// workers into this process was supposed to buy.
+backgroundTick().catch((err) => console.error('background worker tick failed:', err))
 setInterval(() => {
   backgroundTick().catch((err) => console.error('background worker tick failed:', err))
 }, backgroundIntervalMs)
@@ -64,7 +69,7 @@ async function authorizationLapseTick(): Promise<void> {
 }
 
 console.log(`authorization-lapse worker started, polling every ${authLapseIntervalMs}ms`)
-await authorizationLapseTick()
+authorizationLapseTick().catch((err) => console.error('authorization-lapse worker tick failed:', err))
 setInterval(() => {
   authorizationLapseTick().catch((err) => console.error('authorization-lapse worker tick failed:', err))
 }, authLapseIntervalMs)
