@@ -51,6 +51,18 @@ export function createAuditTrailServer(deps: AppDeps, options: AuditTrailServerO
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     })
+    // Node doesn't actually put the status line + headers on the wire at
+    // `writeHead()` — by default it waits for the first `write()`/`end()`
+    // and piggybacks the header block on that. On a fresh deploy with a
+    // genuinely empty `events` table, `sendBatch()` below writes zero bytes
+    // on connect, so without this the client (curl, `EventSource`, Railway's
+    // own proxy) sees no response at all — not slow, not buffered, nothing —
+    // until an actual event eventually gets appended. `EventSource.onopen`
+    // never fires, so the viewer would sit on "CONNECTING" forever the very
+    // first time anyone opens it against a fresh deploy. Verified against
+    // the real Railway deployment, not simulated: `curl -N` hung
+    // indefinitely against `/events` with an empty table before this fix.
+    reply.raw.flushHeaders()
 
     // `EventSource` sends this automatically on reconnect after a dropped
     // connection — resuming from it (rather than always replaying
