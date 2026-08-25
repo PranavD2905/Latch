@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createDbClient } from './client.js'
@@ -140,12 +140,18 @@ describe('policies_immutable (raw DB, not application logic)', () => {
     await db.insert(policies).values(policyRow(4))
 
     // deletePoliciesForTest sets `latch.allow_policy_mutation` with SET LOCAL.
-    await expect(deletePoliciesForTest(db, eq(policies.version, 4))).resolves.not.toThrow()
+    // Scoped to THIS test's merchant. A bare `eq(policies.version, 4)` would
+    // delete every merchant's v4 — including the seed clinic's active policy.
+    await expect(
+      deletePoliciesForTest(db, and(eq(policies.merchantId, merchantId), eq(policies.version, 4))!),
+    ).resolves.not.toThrow()
 
     // The critical half: `LOCAL` scopes it to that transaction, so the pooled
     // connection it borrowed must come back guarded. Without this, one cleanup
     // would silently disarm the trigger for whatever ran next.
     await db.insert(policies).values(policyRow(5))
-    await expect(db.delete(policies).where(eq(policies.version, 5))).rejects.toThrow(/append-only/i)
+    await expect(
+      db.delete(policies).where(and(eq(policies.merchantId, merchantId), eq(policies.version, 5))),
+    ).rejects.toThrow(/append-only/i)
   })
 })
