@@ -1,4 +1,4 @@
-import type { AuthorizeParams, AuthorizeResult, CaptureAuthorizationParams, CaptureAuthorizationResult, PaymentRail } from '../../ports/payment-rail.js'
+import type { AuthorizationStatus, AuthorizeParams, AuthorizeResult, CaptureAuthorizationParams, CaptureAuthorizationResult, PaymentRail } from '../../ports/payment-rail.js'
 
 /**
  * The documented, unbuilt production rail (dev-logs/005/007). UPI Reserve
@@ -29,6 +29,10 @@ export class ReservePayRail implements PaymentRail {
   }
 
   async captureAuthorization(_params: CaptureAuthorizationParams): Promise<CaptureAuthorizationResult> {
+    throw new Error('ReservePayRail is not built — see authorize() for why.')
+  }
+
+  async fetchAuthorizationStatus(_authorizationId: string): Promise<AuthorizationStatus> {
     throw new Error('ReservePayRail is not built — see authorize() for why.')
   }
 }

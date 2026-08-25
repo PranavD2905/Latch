@@ -296,6 +296,34 @@ export interface NoShowChargedEvent extends EventBase, MoneyFields {
   rail: PaymentRail
 }
 
+/**
+ * The reconciliation worker / webhook handler's finding (docs/01-architecture.md
+ * §1 Idea 1 taken one hop further out — dev-logs/014, the gap a Razorpay-
+ * senior-SDE code review named: "if the response from Razorpay to Latch's own
+ * server is lost after a capture actually succeeded, no event ever lands in
+ * the trail." Not a `MoneyFields` event — it doesn't itself move money, it
+ * *reports* a disagreement between what the trail says and what Razorpay's
+ * own API (periodic worker) or an incoming webhook (real-time) currently
+ * reports. `expectedStatus`/`expectedAmountPaise` are `'not_recorded'`/
+ * `undefined` for the specific gap-1 case: Razorpay reports money moved for
+ * this booking and the trail has no corresponding event at all.
+ */
+export interface ReconciliationMismatchEvent extends EventBase {
+  type: 'RECONCILIATION_MISMATCH'
+  /** Which leg of the booking's money this finding is about. */
+  subject: 'deposit' | 'authorization' | 'unrecorded_payment'
+  /** Razorpay's own id for the payment/authorization in question. */
+  razorpayId: string
+  /** What the trail currently says — `'not_recorded'` if nothing is there at all. */
+  expectedStatus: string
+  expectedAmountPaise: Paise | undefined
+  /** What Razorpay's own API (or the webhook payload that triggered this check) reports right now. */
+  actualStatus: string
+  actualAmountPaise: Paise | undefined
+  /** `'periodic_worker'` (docs/01-architecture.md §8, reconciliation worker) or `'webhook'` (real-time, POST /webhooks/razorpay). */
+  detectedVia: 'periodic_worker' | 'webhook'
+}
+
 // ---------------------------------------------------------------------------
 // The union. This is the type `fold()` folds over.
 // ---------------------------------------------------------------------------
@@ -322,6 +350,7 @@ export type BookingEvent =
   | BookingCompletedEvent
   | NoShowChargedEvent
   | ActionRefusedEvent
+  | ReconciliationMismatchEvent
 
 export const MONEY_EVENT_TYPES = [
   'DEPOSIT_CAPTURED',

@@ -66,5 +66,6 @@ function rowToPolicy(row: typeof policies.$inferSelect) {
     noShowGraceMinutes: row.noShowGraceMinutes,
     holdTtlSeconds: row.holdTtlSeconds,
     maxConcurrentHoldsPerAgent: row.maxConcurrentHoldsPerAgent,
+    holdRateLimitPerMinute: row.holdRateLimitPerMinute,
   }
 }

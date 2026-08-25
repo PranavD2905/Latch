@@ -153,6 +153,7 @@ export class PostgresEventStore implements EventStore {
         countLiveHoldsForAgent: (agentId) => countLiveHoldsFor(trxDb, agentId),
         claimHeldBookingsWithExpiredHold: (now, limit) => claimHeldBookingsWithExpiredHoldFor(trxDb, now, limit),
         claimConfirmedBookingsPastStart: (now, limit) => claimConfirmedBookingsPastStartFor(trxDb, now, limit),
+        countBookingsCreatedByAgentSince: (agentId, since) => countBookingsCreatedByAgentSinceFor(trxDb, agentId, since),
         lockAgent: async (agentId) => {
           // pg_advisory_xact_lock: held until this transaction commits or
           // rolls back, and serializes against any other transaction taking
@@ -170,6 +171,15 @@ export class PostgresEventStore implements EventStore {
     const rows = await this.db.select().from(bookings).where(eq(bookings.bookingId, bookingId)).limit(1)
     const row = rows[0]
     return row ? rowToSnapshot(row) : undefined
+  }
+
+  async loadEvents(bookingId: string): Promise<readonly BookingEvent[]> {
+    return loadEventsFor(this.db, bookingId)
+  }
+
+  async listOpenBookingsForReconciliation(limit: number): Promise<readonly BookingSnapshot[]> {
+    const rows = await this.db.select().from(bookings).where(eq(bookings.status, 'confirmed')).orderBy(bookings.updatedAt).limit(limit)
+    return rows.map(rowToSnapshot)
   }
 
   async listLiveIntervals(practitionerId: string, from: Date, to: Date): Promise<readonly BusyInterval[]> {
@@ -266,6 +276,32 @@ async function countLiveHoldsFor(db: Queryable, agentId: string): Promise<number
     .select({ count: sql<number>`count(*)::int` })
     .from(bookings)
     .where(and(eq(bookings.agentId, agentId), eq(bookings.status, 'held')))
+  return rows[0]?.count ?? 0
+}
+
+/**
+ * dev-logs/014, gap 2's request-rate ceiling. Counts every `HOLD_CREATED`
+ * event attributed to this agent since `since`, regardless of what that
+ * booking's *current* status is — a hold that has since expired or been
+ * released still counts against the rate, since the point is bounding
+ * *request volume*, not currently-live holds (that's `countLiveHoldsFor`, a
+ * different bound). Deliberately joins on `events.occurredAt`, not
+ * `bookings.createdAt`/`updatedAt`: those two projection columns are set
+ * from real wall-clock time (`new Date()` in `appendFor`, below) rather than
+ * `Clock.now()` — the one exception to docs/01-architecture.md §5's "the
+ * server clock is the only clock," because they're DB bookkeeping metadata,
+ * not a domain-meaningful timestamp. `since` here is derived from
+ * `deps.clock.now()` in `hold-slot.ts`, so comparing it against wall-clock
+ * `createdAt` would silently compare two different timelines — invisible in
+ * production (where `Clock` *is* the wall clock) but wrong against a
+ * `FrozenClock` in tests, which is how this was actually caught.
+ */
+async function countBookingsCreatedByAgentSinceFor(db: Queryable, agentId: string, since: Date): Promise<number> {
+  const rows = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(events)
+    .innerJoin(bookings, eq(bookings.bookingId, events.bookingId))
+    .where(and(eq(bookings.agentId, agentId), eq(events.type, 'HOLD_CREATED'), gte(events.occurredAt, since)))
   return rows[0]?.count ?? 0
 }
 

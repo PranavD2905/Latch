@@ -7,6 +7,20 @@ export interface RunningTotals {
   netMerchantRetentionPaise: number
   /** Sum, across every still-open authorisation, of ceiling minus whatever has been captured against it. */
   authorizationHeadroomPaise: number
+  /**
+   * dev-logs/014, item 5: docs/05-cost-model.md's "−₹7.08 sunk MDR" made
+   * live rather than doc-only. Razorpay's platform fee (2% + 18% GST =
+   * 2.36%, `RAZORPAY_MDR_RATE` below) is charged at capture and is *not*
+   * reversed on a refund (docs/05-cost-model.md Part 2's own sourced quote)
+   * — every `REFUND_ISSUED` event therefore represents a real, unrecoverable
+   * cost to the merchant equal to 2.36% of whatever amount is being
+   * refunded, on top of the ₹0 the customer nets. This is a number the
+   * trail's own events don't carry directly (no event field says "MDR") —
+   * it's derived here, from the same rate the cost model doc already
+   * publishes, the same way the viewer already derives running totals from
+   * event *type* rather than reading a pre-summed field.
+   */
+  sunkMdrPaise: number
 }
 
 export interface RunningPoint extends RunningTotals {
@@ -14,7 +28,10 @@ export interface RunningPoint extends RunningTotals {
   index: number
 }
 
-const EMPTY_TOTALS: RunningTotals = { netCustomerCostPaise: 0, netMerchantRetentionPaise: 0, authorizationHeadroomPaise: 0 }
+/** docs/05-cost-model.md Part 2: 2% platform fee × 1.18 GST. ₹300 × this rate = ₹7.08, exactly the worked example. */
+export const RAZORPAY_MDR_RATE = 0.0236
+
+const EMPTY_TOTALS: RunningTotals = { netCustomerCostPaise: 0, netMerchantRetentionPaise: 0, authorizationHeadroomPaise: 0, sunkMdrPaise: 0 }
 
 /**
  * Folds `events` (oldest first) into a running snapshot at every step —
@@ -31,6 +48,7 @@ const EMPTY_TOTALS: RunningTotals = { netCustomerCostPaise: 0, netMerchantRetent
 export function computeRunningSeries(events: readonly BookingEvent[]): RunningPoint[] {
   let netCustomerCostPaise = 0
   let netMerchantRetentionPaise = 0
+  let sunkMdrPaise = 0
   const headroomByBooking = new Map<string, number>()
 
   return events.map((event, index) => {
@@ -41,6 +59,11 @@ export function computeRunningSeries(events: readonly BookingEvent[]): RunningPo
       }
       case 'REFUND_ISSUED': {
         netCustomerCostPaise -= event.action?.amountPaise ?? 0
+        // The fee charged at capture is never returned on refund (docs/05-
+        // cost-model.md Part 2) — every refunded rupee carries this sunk
+        // cost regardless of *why* it was refunded (customer cancellation
+        // inside the free tier, or a merchant decline).
+        sunkMdrPaise += Math.round((event.action?.amountPaise ?? 0) * RAZORPAY_MDR_RATE)
         break
       }
       case 'RETENTION_APPLIED': {
@@ -68,7 +91,7 @@ export function computeRunningSeries(events: readonly BookingEvent[]): RunningPo
     }
 
     const authorizationHeadroomPaise = [...headroomByBooking.values()].reduce((sum, v) => sum + v, 0)
-    return { event, index, netCustomerCostPaise, netMerchantRetentionPaise, authorizationHeadroomPaise }
+    return { event, index, netCustomerCostPaise, netMerchantRetentionPaise, authorizationHeadroomPaise, sunkMdrPaise }
   })
 }
 

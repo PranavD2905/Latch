@@ -1,4 +1,6 @@
+import { createHmac } from 'node:crypto'
 import { eq } from 'drizzle-orm'
+import type Razorpay from 'razorpay'
 import { ulid } from 'ulid'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { confirmWithDeposit } from '../../app/confirm-with-deposit.js'
@@ -35,6 +37,30 @@ const deps: AppDeps = {
 
 const app = createMerchantApiServer(deps, { merchantToken: MERCHANT_TOKEN })
 
+// dev-logs/014, item 2: a second server instance with the webhook configured
+// — a fake `Razorpay` client (only `.orders.fetch` is ever called by
+// `handleRazorpayWebhookPayload`) so this stays a real-Postgres integration
+// test without a real Razorpay network dependency, same spirit as
+// `FakePaymentProvider`/`FakePaymentRail` elsewhere in this codebase.
+const WEBHOOK_SECRET = 'test-webhook-secret'
+const orderNotesById = new Map<string, { bookingId: string }>()
+const fakeRazorpay = {
+  orders: {
+    fetch: async (orderId: string) => {
+      const notes = orderNotesById.get(orderId)
+      if (!notes) throw new Error(`no such order: ${orderId}`)
+      return { id: orderId, notes }
+    },
+  },
+} as unknown as Razorpay
+const webhookApp = createMerchantApiServer(deps, { merchantToken: MERCHANT_TOKEN, webhook: { secret: WEBHOOK_SECRET, razorpay: fakeRazorpay } })
+
+function signedWebhookRequest(body: unknown): { payload: string; signature: string } {
+  const payload = JSON.stringify(body)
+  const signature = createHmac('sha256', WEBHOOK_SECRET).update(payload).digest('hex')
+  return { payload, signature }
+}
+
 // Wednesday 2026-09-16, a day no other integration-test file books against.
 const BASE_DAY = '2026-09-16'
 function slotAt(hhmm: string): Date {
@@ -66,10 +92,12 @@ beforeAll(async () => {
     throw new Error('seed data missing — run `npm run db:seed` before this test suite')
   }
   await app.ready()
+  await webhookApp.ready()
 })
 
 afterAll(async () => {
   await app.close()
+  await webhookApp.close()
   for (const bookingId of createdBookingIds) {
     await db.delete(events).where(eq(events.bookingId, bookingId))
     await db.delete(bookings).where(eq(bookings.bookingId, bookingId))
@@ -240,5 +268,129 @@ describe('merchant API — mark_no_show, the second of charge_no_show’s two in
       payload: { idempotencyKey: freshKey() },
     })
     expect(response.statusCode).toBe(404)
+  })
+})
+
+describe('GET /slots — dev-logs/014 item 4, the second inbound adapter', () => {
+  it('is reachable with no Authorization header at all — same posture as MCP find_slots', async () => {
+    const response = await app.inject({ method: 'GET', url: `/slots?practitionerId=${SEED_PRACTITIONER_ID}&serviceId=${SEED_SERVICE_ID}` })
+    expect(response.statusCode).toBe(200)
+    const body = response.json()
+    expect(body.practitionerId).toBe(SEED_PRACTITIONER_ID)
+    expect(Array.isArray(body.slots)).toBe(true)
+  })
+
+  it('returns exactly what findSlots (the same function find_slots calls) returns — not a parallel implementation', async () => {
+    const { findSlots } = await import('../../app/find-slots.js')
+    const direct = await findSlots({ practitionerId: SEED_PRACTITIONER_ID, serviceId: SEED_SERVICE_ID, days: undefined }, deps)
+
+    const response = await app.inject({ method: 'GET', url: `/slots?practitionerId=${SEED_PRACTITIONER_ID}&serviceId=${SEED_SERVICE_ID}` })
+    expect(response.json()).toEqual(direct)
+  })
+
+  it('400s missing required query params, before ever reaching findSlots', async () => {
+    const response = await app.inject({ method: 'GET', url: '/slots' })
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('404s an unknown practitioner', async () => {
+    const response = await app.inject({ method: 'GET', url: `/slots?practitionerId=prac_does_not_exist&serviceId=${SEED_SERVICE_ID}` })
+    expect(response.statusCode).toBe(404)
+  })
+})
+
+describe('POST /webhooks/razorpay — dev-logs/014 item 2, signature-verified and idempotent', () => {
+  it('503s when the webhook is not configured on this instance', async () => {
+    const { payload, signature } = signedWebhookRequest({ event: 'payment.captured', payload: {} })
+    const response = await app.inject({
+      method: 'POST',
+      url: '/webhooks/razorpay',
+      headers: { 'content-type': 'application/json', 'x-razorpay-signature': signature },
+      payload,
+    })
+    expect(response.statusCode).toBe(503)
+  })
+
+  it('400s a request with no signature header', async () => {
+    const response = await webhookApp.inject({
+      method: 'POST',
+      url: '/webhooks/razorpay',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({ event: 'payment.captured', payload: {} }),
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('400s a request signed with the wrong secret — security-critical: an unverified payload must never reach event-appending code', async () => {
+    const body = { event: 'payment.captured', payload: { payment: { entity: { id: 'pay_forged', order_id: 'order_x', status: 'captured', amount: 30000 } } } }
+    const wrongSignature = createHmac('sha256', 'not-the-real-secret').update(JSON.stringify(body)).digest('hex')
+    const response = await webhookApp.inject({
+      method: 'POST',
+      url: '/webhooks/razorpay',
+      headers: { 'content-type': 'application/json', 'x-razorpay-signature': wrongSignature },
+      payload: JSON.stringify(body),
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('200s and ignores an event outside the relevant set, correctly signed', async () => {
+    const { payload, signature } = signedWebhookRequest({ event: 'payment.failed', payload: {} })
+    const response = await webhookApp.inject({
+      method: 'POST',
+      url: '/webhooks/razorpay',
+      headers: { 'content-type': 'application/json', 'x-razorpay-signature': signature },
+      payload,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ ok: true, handled: false })
+  })
+
+  it('closes gap 1: a booking still HELD (as if the process crashed before appending DEPOSIT_CAPTURED) gets RECONCILIATION_MISMATCH when Razorpay reports the payment captured', async () => {
+    const startsAt = slotAt('16:00')
+    clock.set(new Date(startsAt.getTime() - 5 * 24 * 3_600_000))
+    const held = await holdSlot(
+      { agentId: `agent_${ulid()}`, practitionerId: SEED_PRACTITIONER_ID, serviceId: SEED_SERVICE_ID, startsAt, idempotencyKey: freshKey() },
+      deps,
+    )
+    createdBookingIds.push(held.bookingId)
+
+    const orderId = `order_${ulid()}`
+    orderNotesById.set(orderId, { bookingId: held.bookingId })
+    const body = {
+      event: 'payment.captured',
+      payload: { payment: { entity: { id: `pay_${ulid()}`, order_id: orderId, status: 'captured', amount: 30000 } } },
+    }
+    const { payload, signature } = signedWebhookRequest(body)
+
+    const response = await webhookApp.inject({
+      method: 'POST',
+      url: '/webhooks/razorpay',
+      headers: { 'content-type': 'application/json', 'x-razorpay-signature': signature },
+      payload,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ ok: true, handled: true, mismatch: true, bookingId: held.bookingId })
+
+    const trail = await db.select().from(events).where(eq(events.bookingId, held.bookingId))
+    const mismatch = trail.find((e) => e.type === 'RECONCILIATION_MISMATCH')
+    expect(mismatch?.payload).toMatchObject({ subject: 'unrecorded_payment', expectedStatus: 'not_recorded', actualStatus: 'captured', detectedVia: 'webhook' })
+
+    // The booking's own status is untouched — a mismatch is reported, not auto-repaired.
+    const snapshot = await deps.eventStore.loadSnapshot(held.bookingId)
+    expect(snapshot?.status).toBe('HELD')
+
+    // A redelivery of the identical event (Razorpay retries on anything but
+    // a 2xx) is a safe replay, not a second append.
+    const replay = await webhookApp.inject({
+      method: 'POST',
+      url: '/webhooks/razorpay',
+      headers: { 'content-type': 'application/json', 'x-razorpay-signature': signature },
+      payload,
+    })
+    expect(replay.statusCode).toBe(200)
+    expect(replay.json()).toMatchObject({ ok: true, replayed: true })
+
+    const trailAfterReplay = await db.select().from(events).where(eq(events.bookingId, held.bookingId))
+    expect(trailAfterReplay.filter((e) => e.type === 'RECONCILIATION_MISMATCH')).toHaveLength(1)
   })
 })

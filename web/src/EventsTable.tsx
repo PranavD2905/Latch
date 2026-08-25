@@ -1,5 +1,6 @@
 import { Fragment, useState } from 'react'
 import { EnforcedByBadge } from './EnforcedByBadge'
+import { RAZORPAY_MDR_RATE } from './totals'
 import type { BookingEvent, BoundEnforcer } from './types'
 import { eventCategory, formatRupees, shortId } from './types'
 
@@ -45,6 +46,8 @@ function synopsis(event: BookingEvent): string {
       return 'merchant marked attendance'
     case 'ACTION_REFUSED':
       return `${String(event['attemptedType'])} → ${String(event['refusalCode'])}`
+    case 'RECONCILIATION_MISMATCH':
+      return `${String(event['subject'])}: trail said ${String(event['expectedStatus'])}, Razorpay says ${String(event['actualStatus'])} (via ${String(event['detectedVia'])})`
     default:
       return ''
   }
@@ -95,6 +98,15 @@ function DetailPanel({ event }: { event: BookingEvent }) {
               {event.authority.razorpayPaymentId ? ` · ${shortId(event.authority.razorpayPaymentId)}` : ''}
               {event.authority.razorpayRefundId ? ` · ${shortId(event.authority.razorpayRefundId)}` : ''}
             </div>
+            {event.type === 'REFUND_ISSUED' && (
+              // dev-logs/014, item 5 — docs/05-cost-model.md's "−₹7.08 sunk
+              // MDR" made live: the platform fee charged at capture is never
+              // reversed on a refund, regardless of why the refund happened.
+              <div className="text-[var(--warning-text)]">
+                <span className="text-[var(--text-faint)]">note</span> MDR {formatRupees(Math.round(event.action.amountPaise * RAZORPAY_MDR_RATE))} not
+                recovered — borne by merchant
+              </div>
+            )}
           </div>
           <EnforcedByBadge enforcedBy={event.bound.enforcedBy} />
         </div>

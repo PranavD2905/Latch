@@ -64,6 +64,13 @@
       "when": 1787559600000,
       "tag": "0008_aberrant_annihilus",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787664182206,
+      "tag": "0009_stiff_lethal_legion",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,6 @@
 import type { Instrument, PaymentRail as PaymentRailName } from '../domain/events.js'
 import type { Paise } from '../domain/money.js'
+import type { PaymentStatusValue } from './payment-provider.js'
 
 export interface AuthorizeParams {
   /** Exactly the no-show fee — docs/01-architecture.md Idea 3: authorised at the ceiling itself, no headroom. */
@@ -96,8 +97,15 @@ function describeCause(cause: unknown): string {
  * app layer records the release as a pure bookkeeping event
  * (`AUTHORIZATION_RELEASED`) with no corresponding rail call at all.
  */
+export interface AuthorizationStatus {
+  status: PaymentStatusValue
+  amountPaise: Paise
+}
+
 export interface PaymentRail {
   readonly name: PaymentRailName
   authorize(params: AuthorizeParams): Promise<AuthorizeResult>
   captureAuthorization(params: CaptureAuthorizationParams): Promise<CaptureAuthorizationResult>
+  /** dev-logs/014 — the rail-side twin of `PaymentProvider.fetchPaymentStatus`, for the reconciliation worker. */
+  fetchAuthorizationStatus(authorizationId: string): Promise<AuthorizationStatus>
 }

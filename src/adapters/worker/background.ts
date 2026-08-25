@@ -12,6 +12,7 @@
  */
 import { runHoldExpiryWorker } from '../../app/hold-expiry-worker.js'
 import { runNoShowEligibilityWorker } from '../../app/no-show-eligibility-worker.js'
+import { runReconciliationWorker } from '../../app/reconciliation-worker.js'
 import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
@@ -32,6 +33,15 @@ async function tick(): Promise<void> {
   const { eligibleBookingIds } = await runNoShowEligibilityWorker(deps)
   if (eligibleBookingIds.length > 0) {
     console.log(`background worker: NO_SHOW_ELIGIBLE for ${eligibleBookingIds.length} booking(s): ${eligibleBookingIds.join(', ')}`)
+  }
+
+  // dev-logs/014, item 1 — folded in here rather than its own interval so
+  // this file stays "the one process for periodic, non-authorisation-lapse
+  // background work," same reasoning docs/07-deployment.md already gives for
+  // combining hold-expiry and no-show-eligibility.
+  const { mismatchedBookingIds } = await runReconciliationWorker(deps)
+  if (mismatchedBookingIds.length > 0) {
+    console.log(`background worker: RECONCILIATION_MISMATCH for ${mismatchedBookingIds.length} booking(s): ${mismatchedBookingIds.join(', ')}`)
   }
 }
 

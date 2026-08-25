@@ -40,6 +40,10 @@ export default defineRailway(() => {
     env: {
       ...sharedEnv,
       MERCHANT_API_TOKEN: preserve(),
+      // dev-logs/014, item 2: the secret Razorpay signs POST /webhooks/razorpay
+      // deliveries with — registered against this exact service's public URL
+      // via the Webhooks API (see dev-logs/014 for how), not the Dashboard.
+      RAZORPAY_WEBHOOK_SECRET: preserve(),
     },
   });
 

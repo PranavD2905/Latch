@@ -4,13 +4,14 @@ import {
   AuthorizationNotFoundError,
   CaptureAmountMismatchError,
   PaymentRailError,
+  type AuthorizationStatus,
   type AuthorizeParams,
   type AuthorizeResult,
   type CaptureAuthorizationParams,
   type CaptureAuthorizationResult,
   type PaymentRail,
 } from '../../ports/payment-rail.js'
-import { DEFAULT_CAPTURE_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, receiptFor, sleep, toInstrument, type RazorpayPaymentLike } from './razorpay-shared.js'
+import { DEFAULT_CAPTURE_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, isNotFound, receiptFor, sleep, toInstrument, toPaymentStatusValue, type RazorpayPaymentLike } from './razorpay-shared.js'
 
 export interface ManualCaptureRailOptions {
   keyId: string
@@ -74,6 +75,11 @@ export class ManualCaptureRail implements PaymentRail {
               refund_speed: 'normal',
             },
           },
+          // dev-logs/014 — same reasoning as RazorpayPaymentProvider: the
+          // webhook handler resolves a bookingId from these notes, by
+          // fetching the order a `payment.authorized`/`payment.captured`
+          // event's `order_id` points at.
+          notes: { bookingId: params.reference },
         })
       }
     } catch (err) {
@@ -127,6 +133,17 @@ export class ManualCaptureRail implements PaymentRail {
         throw new AuthorizationNotFoundError(params.authorizationId)
       }
       throw new PaymentRailError(params.reference, err)
+    }
+  }
+
+  /** dev-logs/014 — the rail-side twin of `RazorpayPaymentProvider.fetchPaymentStatus`. Read-only, no side effect. */
+  async fetchAuthorizationStatus(authorizationId: string): Promise<AuthorizationStatus> {
+    try {
+      const payment = await this.client.payments.fetch(authorizationId)
+      return { status: toPaymentStatusValue(payment.status), amountPaise: toPaise(Number(payment.amount)) }
+    } catch (err) {
+      if (isNotFound(err)) return { status: 'unknown', amountPaise: toPaise(0) }
+      throw new PaymentRailError(authorizationId, err)
     }
   }
 

@@ -14,8 +14,8 @@ at the deployment layer too, rather than merging them into one process:
 
 | Railway service | Runs | Public? | Why |
 |---|---|---|---|
-| `latch-mcp` | `npm run start:mcp` (`src/adapters/mcp/http.ts`) | Yes | The public HTTPS MCP endpoint a remote agent connects to. Also runs both Slice 5 background jobs (hold-expiry, no-show-eligibility) and the Slice 4 authorisation-lapse worker as in-process `setInterval` loops — none of the three bind a port or hold per-connection state, so folding them in here satisfies "the background worker running in the deployed process" without a fourth service. |
-| `latch-merchant-api` | `npm run start:merchant-api` (`src/adapters/merchant-api/http.ts`) | Yes | The merchant-only decline/mark-no-show routes, exercised during the demo from outside the deployed environment (curl / a script on the presenter's machine, not the agent). |
+| `latch-mcp` | `npm run start:mcp` (`src/adapters/mcp/http.ts`) | Yes | The public HTTPS MCP endpoint a remote agent connects to. Also runs both Slice 5 background jobs (hold-expiry, no-show-eligibility), the Slice 4 authorisation-lapse worker, and (dev-logs/014) the reconciliation worker as in-process `setInterval` loops — none of the four bind a port or hold per-connection state, so folding them in here satisfies "the background worker running in the deployed process" without a fifth service. |
+| `latch-merchant-api` | `npm run start:merchant-api` (`src/adapters/merchant-api/http.ts`) | Yes | The merchant-only decline/mark-no-show routes, exercised during the demo from outside the deployed environment (curl / a script on the presenter's machine, not the agent). Also hosts `GET /slots` (dev-logs/014, item 4 — public, read-only, same posture as MCP's `find_slots`) and `POST /webhooks/razorpay` (dev-logs/014, item 2 — HMAC-signature-gated, not the merchant Bearer token), both mounted on this same already-public Fastify instance rather than provisioning a fourth service. |
 | `latch-viewer` | `npm run start:viewer` (`src/adapters/audit-trail/http.ts`) | Yes | The SSE feed **and** the built `web/dist` viewer, served from the same origin — no CORS handling needed, same reasoning `web/vite.config.ts`'s dev-time proxy already used. |
 | Postgres | Railway managed Postgres | No (internal) | Shared `DATABASE_URL` across all three services. |
 
@@ -46,7 +46,12 @@ All three services need:
   15 connections against Postgres at rest, before `db:migrate`/`db:seed` one-off runs stack on top.
   Lower it if the managed instance's connection limit is tight.
 
-`latch-merchant-api` additionally needs `MERCHANT_API_TOKEN`. `latch-viewer` additionally needs
+`latch-merchant-api` additionally needs `MERCHANT_API_TOKEN` and, for `POST /webhooks/razorpay` to be
+enabled rather than return `503` (dev-logs/014), `RAZORPAY_WEBHOOK_SECRET` — the secret registered
+against this exact service's public URL via Razorpay's Webhooks API (`client.webhooks.create`, real
+test-mode keys, no manual Dashboard step needed — see dev-logs/014 for the registration itself and the
+one caveat: `events` must be passed as an `{eventName: boolean}` map, not an array, despite the SDK's
+own TypeScript signature accepting `any`). `latch-viewer` additionally needs
 `AUDIT_TRAIL_TOKEN` **and**, at build time only, a matching `VITE_AUDIT_TRAIL_TOKEN` (Vite bakes it into
 the static bundle — see `web/src/App.tsx`). `latch-mcp` needs neither: the MCP endpoint is deliberately
 unauthenticated (`src/adapters/mcp/streamable-http-server.ts`'s own comment explains why — gating it

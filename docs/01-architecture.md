@@ -179,6 +179,20 @@ production rail was exercised when it was not.
    Orders · Payments · Refunds · card manual-capture authorisations
 ```
 
+**Not redrawn above, added in dev-logs/014, both riding on the existing three-service topology
+(`docs/07-deployment.md`) rather than a new one:**
+
+- **`GET /slots`** — a fourth inbound adapter box, conceptually next to "Merchant API": plain REST,
+  read-only, mounted on the merchant API's own Fastify instance. Calls the identical `findSlots`
+  app-layer function `find_slots` calls — see §1's "architecture is the argument" callout above, now
+  demonstrated rather than only claimed.
+- **`POST /webhooks/razorpay`** — an inbound arrow from Razorpay itself (the box at the bottom of this
+  diagram), not from an agent. Signature-verified, and its only possible effect is a
+  `RECONCILIATION_MISMATCH` event via the same path the periodic reconciliation worker uses — see §11.
+- **Reconciliation worker** — a fifth outbound-adapter consumer, reusing `PaymentProvider`/`PaymentRail`
+  read-only (`fetchPaymentStatus`/`fetchAuthorizationStatus`) to verify the trail against Razorpay's own
+  record — see §8.
+
 ### Why the domain core is isolated
 
 Two reasons, and the second is strategic rather than technical.
@@ -194,6 +208,16 @@ Razorpay SDK calls, that claim would be rhetoric. Because the core is transport-
 provider-agnostic, the claim is demonstrable: the same domain could be exposed over UCP, A2A, or plain
 REST by writing another inbound adapter, and could settle over any provider by writing another
 outbound one. **The architecture is the argument.**
+
+**Demonstrated, not just asserted, as of dev-logs/014.** `GET /slots`
+(`src/adapters/rest/slots.ts`) is a second inbound adapter — plain REST, no MCP, no JSON-RPC — that
+calls the exact same `findSlots` app-layer function (`src/app/find-slots.ts`) the MCP `find_slots` tool
+calls, with zero changes to `src/domain/` or `src/app/` to add it. `registerSlotsRoute` is a plain
+function that mounts onto any `FastifyInstance`; `src/adapters/rest/server.ts` uses it for a genuinely
+standalone REST server, and `src/adapters/merchant-api/server.ts` mounts the identical function onto
+its own already-deployed, already-public Fastify instance for real reachability without provisioning a
+fourth Railway service. A judge can now `curl` both surfaces and confirm they return byte-identical
+results for the same query, because there is only one implementation underneath.
 
 ---
 
@@ -330,17 +354,34 @@ something inferred.
 
 ## 8. What runs in the background
 
-Two things happen without anyone calling a tool:
+Four things happen without anyone calling a tool:
 
 | Job | Trigger | Action |
 |---|---|---|
 | Hold expiry | TTL elapsed | Append `HOLD_EXPIRED`, release slot |
 | No-show window | Appointment start elapsed + grace | Append `NO_SHOW_ELIGIBLE` — **does not charge** |
 | Authorisation lapse | 5-day `manual_expiry_period` passed | Append `AUTHORIZATION_LAPSED` — records that authority was lost |
+| Reconciliation | Every tick, over open (CONFIRMED) bookings | Diffs the trail against Razorpay's own record via `PaymentProvider.fetchPaymentStatus`/`PaymentRail.fetchAuthorizationStatus`; appends `RECONCILIATION_MISMATCH` on disagreement |
 
 Note the second carefully. Elapsed time makes a booking *eligible* for a no-show charge. It does not
 execute one. The charge still requires the merchant to affirmatively mark non-attendance. Time alone
 never moves money — that would be a money action firing on inference, which B4 forbids.
+
+**The reconciliation worker exists to close a gap the original design left open** (dev-logs/014, from a
+code review): Idea 1 says the trail *is* the truth, but that was only ever proven internally consistent
+— every money-moving command handler appends its own event as part of the same transaction that made
+the money move, real, and provable against Postgres. What it never proved is that Razorpay's own record
+still agrees with that trail *later* — if Latch's server crashed between a capture actually succeeding
+at Razorpay and the local transaction that appends `DEPOSIT_CAPTURED`, nothing would ever notice. The
+reconciliation worker (`src/app/reconciliation-worker.ts`) is the periodic, poll-based half of the fix:
+it asks Razorpay directly, on every tick, whether the trail's claims about a `CONFIRMED` booking's
+deposit and authorisation still hold. `POST /webhooks/razorpay`
+(`src/adapters/merchant-api/server.ts`, §12 below) is the real-time half of the same fix, triggered by
+Razorpay's own webhook delivery rather than a poll — both funnel into the same
+`RECONCILIATION_MISMATCH` event and the same append path (`src/app/reconciliation.ts`), reusing the
+existing `PaymentProvider`/`PaymentRail` ports rather than inventing a new outbound integration. This is
+what upgrades "the trail is the truth" from an internally consistent claim to an externally verified
+one.
 
 ---
 
@@ -371,3 +412,64 @@ Named here so they read as decisions rather than gaps. Full treatment in
   a human on the phone. It makes the merchant reachable by everybody else's agents.
 - **No agent identity verification.** That layer is occupied — Web Bot Auth, Visa TAP, NPCI UAP
   (brief Appendix A). We assume an authenticated agent and compose with those rather than reinvent.
+
+---
+
+## 11. Webhooks — verified, not trusted blindly
+
+`POST /webhooks/razorpay` (`src/adapters/merchant-api/server.ts`) is Latch's one inbound surface that
+is neither an agent tool nor a merchant action — the caller is Razorpay's own infrastructure. That makes
+it a different kind of trust boundary from everything else in §9's table, so it gets its own section
+rather than being folded into the merchant API's write-up.
+
+**Every delivery is signature-verified before anything else happens.** Razorpay signs the raw request
+body with HMAC-SHA256 against a webhook secret, sent as `X-Razorpay-Signature`
+(`src/adapters/payment/razorpay-shared.ts`'s `verifyRazorpayWebhookSignature`, compared with
+`timingSafeEqual`). An unsigned or wrongly-signed request is rejected with `400` before the payload is
+even parsed as a Razorpay event — dev-logs/014's own framing of the risk: an endpoint that appends trail
+events on request, without verifying who sent them, is a real attack surface in a money system, strictly
+worse than the gap it closes, if built carelessly.
+
+**What a verified delivery is actually allowed to do is narrow.** It never appends `DEPOSIT_CAPTURED`,
+`AUTHORIZATION_HELD`, or any other money event directly — that would mean reconstructing a gate/bound/
+authority quad from a webhook payload alone, outside the domain core's own decision path, which is
+exactly the kind of unaccountable money movement Idea 2 exists to make impossible. The only thing a
+webhook can ever cause is a `RECONCILIATION_MISMATCH` — a *report* that Razorpay's own record disagrees
+with the trail, via the same `reconcileObservedPayment`/`appendReconciliationFindings` path §8's
+reconciliation worker uses (`src/app/reconciliation.ts`). Resolving a real mismatch, if one is ever
+found, is a human/merchant action outside this system's automated authority — the same posture as every
+`Nothing`-response refusal in `03-domain-model.md` §5.
+
+**Idempotent by Razorpay's own event identity, not by trusting a single delivery.** Razorpay retries a
+webhook on anything but a `2xx`, so a redelivery is expected, not exceptional. The handler claims
+`(scope: 'razorpay_webhook', key: '{event}:{entityId}')` via the same `IdempotencyStore.claim`/`put`/
+`release` primitive dev-logs/013 added for money-moving commands, and replays the stored outcome on a
+repeat rather than re-processing.
+
+---
+
+## 12. Inventory-denial — hold-spam and the rate ceiling
+
+Gap named in dev-logs/014's code review: `04-features-and-limitations.md`'s existing "no agent identity
+verification" answer covers *identity*, not *abuse rate*, and the two are separate questions.
+`hold_slot` moves no money by design (§3, §4 above) — that is exactly what makes it cheap to abuse. A
+hostile agent sitting at `max_concurrent_holds_per_agent` and re-holding as fast as each TTL lapses can
+lock a merchant's calendar against legitimate agents indefinitely, and because no money ever moves,
+**it leaves zero payment trail** — the failure mode B3/B5 are built to make visible doesn't apply here at
+all, because nothing about it looks like a money bound being tested.
+
+**The fix is a second, independent bound: a request-rate ceiling, not just a concurrent-count ceiling.**
+`Policy.holdRateLimitPerMinute` (`src/domain/policy.ts`) caps how many `HOLD_CREATED` events one agent
+may accumulate in a rolling 60-second window, regardless of how many of those holds are still live —
+release-and-re-hold no longer resets the clock the way it resets `max_concurrent_holds_per_agent`.
+Checked inside the exact same `lockAgent` advisory-lock transaction `hold_slot` already opens for the
+concurrent-hold check (`src/app/hold-slot.ts`), so the two bounds are enforced atomically against one
+serialised window per agent — no new race to close. A breach is refused with the new `RATE_LIMITED` code
+and recorded as `ACTION_REFUSED`, same as every other bound in this system: an attempted breach is a
+permanent, demonstrable event, not a silent 429.
+
+This was a genuine judgement call between building the ceiling for real and naming it as a documented,
+deliberately-unmitigated risk (the review's own explicit guidance — see dev-logs/014 for the reasoning
+recorded at the time). The ceiling was built: the query it needs (count of `HOLD_CREATED` events for an
+agent since a timestamp) was cheap against the existing schema, and it closes the gap rather than merely
+describing it.

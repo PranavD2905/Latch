@@ -98,7 +98,18 @@ export function StatCards({
           icon={<RefundIcon />}
           label="Merchant retention"
           value={formatRupees(totals.netMerchantRetentionPaise)}
-          sub="kept from cancellations + no-shows"
+          sub={
+            totals.sunkMdrPaise > 0 ? (
+              <>
+                kept from cancellations + no-shows ·{' '}
+                <span className="font-mono font-semibold text-[var(--warning-text)]" title="Razorpay's platform fee is charged at capture and never reversed on a refund — docs/05-cost-model.md.">
+                  −{formatRupees(totals.sunkMdrPaise)} sunk MDR
+                </span>
+              </>
+            ) : (
+              'kept from cancellations + no-shows'
+            )
+          }
         />
         <MiniCard
           icon={<AlertIcon />}

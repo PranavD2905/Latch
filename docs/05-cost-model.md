@@ -79,6 +79,14 @@ than hiding:
 So a graceful failure is not a free failure. It costs the merchant ₹7.08 and the customer nothing —
 which is the correct allocation, since the merchant caused it, but it should be stated honestly.
 
+**No longer doc-only, as of dev-logs/014.** The live audit-trail viewer (`web/`) computes this same
+figure — `RAZORPAY_MDR_RATE` (2.36%) applied to the amount on every `REFUND_ISSUED` event — and renders
+it both as a per-event note ("MDR ₹X not recovered — borne by merchant") and as a running total on the
+"Merchant retention" stat card, exactly the number this table works out by hand. This is a number no
+event field carries directly; the viewer derives it from the same published rate this document already
+sources, the same way it already derives running totals from event *type* rather than reading a
+pre-summed field (dev-logs/011).
+
 **This retroactively validates the core design decision.** Brief §6.3 says *"Holds move no money. All
 risk is pushed into the cheap, reversible phase."* The fee structure is exactly why that is right: if
 `hold_slot` captured money, every expired hold would burn ₹7.08 of irrecoverable MDR. Holds are

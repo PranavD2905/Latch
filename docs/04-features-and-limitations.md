@@ -16,18 +16,22 @@ Everything below the line in §2 is deliberate. Nothing there is an accident bei
 
 ### 1.1 The agent-facing surface
 
-Seven MCP tools, exposed over Streamable HTTP so any remote agent can reach a deployed merchant
+Eight MCP tools, exposed over Streamable HTTP so any remote agent can reach a deployed merchant
 without a partnership or an integration deal.
 
 | Tool | Does |
 |---|---|
 | `find_slots` | Live availability as (service × practitioner × start × duration), computed from working hours |
-| `get_policy` | The machine-readable cancellation ladder, deposit rule, no-show terms, and authorisation ceiling |
-| `hold_slot` | Reserves capacity for a TTL. **No money.** Idempotency-keyed |
+| `get_policy` | The machine-readable cancellation ladder, deposit rule, no-show terms, hold TTL, and hold rate ceiling |
+| `get_booking` | Read-only status for one booking — no gate, no money, always safe to retry |
+| `hold_slot` | Reserves capacity for a TTL. **No money.** Idempotency-keyed, and rate-limited per agent (dev-logs/014) |
 | `confirm_with_deposit` | Captures the deposit, registers the no-show authorisation, confirms the booking |
 | `reschedule` | Moves a booking. Same money, new time. Not a cancel-and-rebook |
 | `cancel` | Applies the ladder from the server clock, refunds or retains accordingly |
 | `charge_no_show` | Debits against the registered authorisation after a missed appointment |
+
+Plus a second, read-only inbound surface proving the domain core is transport-agnostic (dev-logs/014):
+`GET /slots`, plain REST, calling the identical `findSlots` function `find_slots` calls.
 
 ### 1.2 The properties that make it defensible
 
@@ -42,14 +46,19 @@ without a partnership or an integration deal.
 | **Refusals are recorded** | An attempted breach is a permanent event, so bounds can be *demonstrated*, not just claimed |
 | **Merchant decline unwinds autonomously** | Refund, authorisation released, slot release, alternatives — one transaction, no human |
 | **Policy is versioned** | A booking is judged under the ladder in force when it was made |
+| **The trail is externally verified, not just internally consistent** | A reconciliation worker and a signature-verified Razorpay webhook both diff the trail against Razorpay's own record and append `RECONCILIATION_MISMATCH` on disagreement (dev-logs/014) |
+| **Hold-spam has a named, mitigated bound** | `holdRateLimitPerMinute` caps request *rate*, not just concurrent-hold count — closes an inventory-denial gap the original design left unaddressed (dev-logs/014) |
 
 ### 1.3 What ships in the buildathon build
 
 - MCP server, all eight tools, deployed at a public HTTPS endpoint
+- A second, read-only REST inbound adapter (`GET /slots`), the same domain core underneath (dev-logs/014)
 - Postgres event store with the partial unique index and `FOR UPDATE` locking
 - Razorpay test-mode integration: orders, capture, refunds, card manual-capture authorisation registration and debit
-- Background worker: hold expiry, no-show eligibility
-- Live audit trail viewer over SSE
+- Background workers: hold expiry, no-show eligibility, authorisation lapse, and reconciliation against Razorpay's own record (dev-logs/014)
+- A signature-verified `POST /webhooks/razorpay`, idempotent on Razorpay's own event identity, feeding the same reconciliation path in real time (dev-logs/014)
+- A per-agent hold-request-rate ceiling, independent of the concurrent-hold ceiling (dev-logs/014)
+- Live audit trail viewer over SSE, including the sunk-MDR cost line on every refund
 - A minimal merchant control surface — enough to decline a booking and mark non-attendance
 - Test suite: ladder boundaries on a frozen clock, concurrency race, full failure-path integration test
 
@@ -84,6 +93,8 @@ These are real constraints on what will exist on submission day. Stated plainly.
 | **No DPDP compliance work** | Clinic appointment data is health-adjacent under India's DPDP Act | Zero risk during the buildathon (synthetic data, test mode). A genuine cost before any real merchant — named in the cost model |
 | **Reschedule price delta is simplified** | Handles a delta but does not model practitioner-tier pricing changes | The event carries the delta; richer pricing is a policy-schema change, not a state-machine change |
 | **Merchant surface is minimal** | Enough to decline and mark non-attendance. Not a product | Demo surface was scoped to agent chat + live trail. The merchant controls exist to trigger the failure honestly |
+| **The periodic reconciliation worker only scans CONFIRMED bookings** | A `HELD` booking whose deposit actually captured at Razorpay right before a crash (the exact gap-1 shape) is not found by the *periodic* pass — only by the webhook, and only if Razorpay's webhook delivery reaches Latch | The webhook is real-time and Razorpay retries non-2xx deliveries for days, so this is a narrow, bounded window, not an open gap — widening the periodic scan to `HELD` bookings too is a small follow-up, not a redesign |
+| **The rate ceiling is a fixed 60s lookback, not a true sliding/leaky bucket** | An agent could in principle cluster requests right at a window boundary to get slightly more than `holdRateLimitPerMinute` in a worst case | Real, DB-verified, and closes the actual abuse shape (unbounded re-holding) — a token-bucket refinement is a tuning change, not a new mechanism |
 
 ### 2.3 The three questions a judge is most likely to ask
 

@@ -1,10 +1,12 @@
 import { ulid } from 'ulid'
+import { toPaise } from '../../domain/money.js'
 import {
   PaymentDeclinedError,
   PaymentTimeoutError,
   type CaptureDepositParams,
   type CaptureDepositResult,
   type PaymentProvider,
+  type PaymentStatus,
   type RefundDepositParams,
   type RefundDepositResult,
 } from '../../ports/payment-provider.js'
@@ -31,6 +33,8 @@ export class FakePaymentProvider implements PaymentProvider {
   private readonly scenarios = new Map<string, PaymentScenario>()
   private readonly captured = new Map<string, CaptureDepositResult>()
   private readonly refunded = new Map<string, RefundDepositResult>()
+  /** dev-logs/014: mirrors what a real Razorpay lookup would report for a paymentId, kept in sync by captureDeposit/refundDeposit. */
+  private readonly statusByPaymentId = new Map<string, PaymentStatus>()
 
   setScenario(idempotencyKey: string, scenario: PaymentScenario): void {
     this.scenarios.set(idempotencyKey, scenario)
@@ -51,6 +55,7 @@ export class FakePaymentProvider implements PaymentProvider {
       case 'success': {
         const result: CaptureDepositResult = { paymentId: `pay_${ulid()}`, amountPaise: params.amountPaise, instrument: 'upi' }
         this.captured.set(params.idempotencyKey, result)
+        this.statusByPaymentId.set(result.paymentId, { status: 'captured', amountPaise: result.amountPaise })
         return result
       }
     }
@@ -64,6 +69,11 @@ export class FakePaymentProvider implements PaymentProvider {
 
     const result: RefundDepositResult = { refundId: `rfnd_${ulid()}`, amountPaise: params.amountPaise }
     this.refunded.set(params.idempotencyKey, result)
+    this.statusByPaymentId.set(params.paymentId, { status: 'refunded', amountPaise: params.amountPaise })
     return result
+  }
+
+  async fetchPaymentStatus(paymentId: string): Promise<PaymentStatus> {
+    return this.statusByPaymentId.get(paymentId) ?? { status: 'unknown', amountPaise: toPaise(0) }
   }
 }

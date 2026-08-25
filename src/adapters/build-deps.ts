@@ -1,3 +1,4 @@
+import Razorpay from 'razorpay'
 import type { AppDeps } from '../app/types.js'
 import type { PaymentProvider } from '../ports/payment-provider.js'
 import type { PaymentRail } from '../ports/payment-rail.js'
@@ -69,4 +70,24 @@ export function buildAppDeps(db: Db): AppDeps {
     idempotencyStore: new PostgresIdempotencyStore(db),
     merchantId: process.env['MERCHANT_ID'] ?? SEED_MERCHANT_ID,
   }
+}
+
+/**
+ * dev-logs/014, item 2: `RAZORPAY_WEBHOOK_SECRET` — separate from
+ * `RAZORPAY_KEY_ID`/`_SECRET` because it's issued by a different action
+ * (registering the webhook URL, in the Dashboard or via the Webhooks API,
+ * not generating API keys). Undefined disables the webhook route rather than
+ * crashing `merchant-api` on boot — see `MerchantApiOptions.webhook`'s own
+ * comment. The `Razorpay` client here is used only to fetch an order's
+ * `notes.bookingId` (`src/adapters/webhook/razorpay-webhook.ts`) — a
+ * read-only lookup, never a payment/order-creating call, so building one
+ * independent of `PAYMENT_PROVIDER=razorpay` is safe even if this service
+ * happens to run with the fake provider in some other environment.
+ */
+export function buildWebhookOptions(): { secret: string; razorpay: Razorpay } | undefined {
+  const secret = process.env['RAZORPAY_WEBHOOK_SECRET']
+  const keyId = process.env['RAZORPAY_KEY_ID']
+  const keySecret = process.env['RAZORPAY_KEY_SECRET']
+  if (!secret || !keyId || !keySecret) return undefined
+  return { secret, razorpay: new Razorpay({ key_id: keyId, key_secret: keySecret }) }
 }

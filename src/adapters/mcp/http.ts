@@ -17,6 +17,7 @@
 import { runAuthorizationLapseWorker } from '../../app/authorization-lapse-worker.js'
 import { runHoldExpiryWorker } from '../../app/hold-expiry-worker.js'
 import { runNoShowEligibilityWorker } from '../../app/no-show-eligibility-worker.js'
+import { runReconciliationWorker } from '../../app/reconciliation-worker.js'
 import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
@@ -45,6 +46,13 @@ async function backgroundTick(): Promise<void> {
   const { eligibleBookingIds } = await runNoShowEligibilityWorker(deps)
   if (eligibleBookingIds.length > 0) {
     console.log(`background worker: NO_SHOW_ELIGIBLE for ${eligibleBookingIds.length} booking(s): ${eligibleBookingIds.join(', ')}`)
+  }
+
+  // dev-logs/014, item 1 — see docs/07-deployment.md: folded into this same
+  // process for the same reason the other two workers are.
+  const { mismatchedBookingIds } = await runReconciliationWorker(deps)
+  if (mismatchedBookingIds.length > 0) {
+    console.log(`background worker: RECONCILIATION_MISMATCH for ${mismatchedBookingIds.length} booking(s): ${mismatchedBookingIds.join(', ')}`)
   }
 }
 

@@ -21,6 +21,7 @@ import type {
   NoShowChargedEvent,
   NoShowEligibleEvent,
   PolicyAcknowledgedEvent,
+  ReconciliationMismatchEvent,
   RefundIssuedEvent,
   RetentionAppliedEvent,
   SlotReleasedEvent,
@@ -60,6 +61,7 @@ export const createNoShowEligibleEvent = eventFactory<NoShowEligibleEvent>('NO_S
 export const createNonAttendanceMarkedEvent = eventFactory<NonAttendanceMarkedEvent>('NON_ATTENDANCE_MARKED')
 export const createBookingCompletedEvent = eventFactory<BookingCompletedEvent>('BOOKING_COMPLETED')
 export const createActionRefusedEvent = eventFactory<ActionRefusedEvent>('ACTION_REFUSED')
+export const createReconciliationMismatchEvent = eventFactory<ReconciliationMismatchEvent>('RECONCILIATION_MISMATCH')
 
 // The four money-moving events — action/gate/bound/authority are required by `fields`.
 export const createDepositCapturedEvent = eventFactory<DepositCapturedEvent>('DEPOSIT_CAPTURED')

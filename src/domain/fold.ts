@@ -115,6 +115,10 @@ function applyEvent(state: BookingState, event: BookingEvent): BookingState {
     case 'ALTERNATIVES_OFFERED':
     case 'NON_ATTENDANCE_MARKED':
     case 'ACTION_REFUSED':
+    // dev-logs/014: a reported disagreement, not a state transition — it
+    // never changes what a pure replay believes the booking's status is,
+    // same as ACTION_REFUSED above.
+    case 'RECONCILIATION_MISMATCH':
       return next
   }
 }

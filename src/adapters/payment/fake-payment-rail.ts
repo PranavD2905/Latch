@@ -4,6 +4,7 @@ import {
   AuthorizationNotFoundError,
   CaptureAmountMismatchError,
   PaymentRailError,
+  type AuthorizationStatus,
   type AuthorizeParams,
   type AuthorizeResult,
   type CaptureAuthorizationParams,
@@ -76,5 +77,11 @@ export class FakePaymentRail implements PaymentRail {
     }
     heldAuth.captured = true
     return { paymentId: params.authorizationId, amountPaise: heldAuth.amountPaise, instrument: 'card' }
+  }
+
+  async fetchAuthorizationStatus(authorizationId: string): Promise<AuthorizationStatus> {
+    const heldAuth = this.held.get(authorizationId)
+    if (!heldAuth) return { status: 'unknown', amountPaise: toPaise(0) }
+    return { status: heldAuth.captured ? 'captured' : 'authorized', amountPaise: heldAuth.amountPaise }
   }
 }

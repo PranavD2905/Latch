@@ -29,6 +29,7 @@ export const eventTypeEnum = pgEnum('event_type', [
   'NO_SHOW_CHARGED',
   'BOOKING_COMPLETED',
   'ACTION_REFUSED',
+  'RECONCILIATION_MISMATCH',
 ])
 
 export const bookingStatusEnum = pgEnum('booking_status', [
@@ -179,6 +180,8 @@ export const policies = pgTable(
     noShowGraceMinutes: integer('no_show_grace_minutes').notNull(),
     holdTtlSeconds: integer('hold_ttl_seconds').notNull(),
     maxConcurrentHoldsPerAgent: integer('max_concurrent_holds_per_agent').notNull(),
+    /** dev-logs/014, gap 2: the request-rate ceiling — see `src/domain/policy.ts`'s `holdRateLimitPerMinute` doc comment. */
+    holdRateLimitPerMinute: integer('hold_rate_limit_per_minute').notNull().default(10),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   },
   (table) => [unique('policies_merchant_version_unique').on(table.merchantId, table.version)],

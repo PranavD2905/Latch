@@ -6,7 +6,7 @@
  * explicit) — see that file's comment for why the Razorpay provider is
  * opt-in rather than automatic.
  */
-import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
+import { buildAppDeps, buildWebhookOptions, requireDatabaseUrl } from '../build-deps.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
 import { createMerchantApiServer } from './server.js'
@@ -21,7 +21,11 @@ if (!merchantToken) {
 const { db } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db)
 
-const app = createMerchantApiServer(deps, { merchantToken })
+const webhook = buildWebhookOptions()
+if (!webhook) {
+  console.log('RAZORPAY_WEBHOOK_SECRET not set — POST /webhooks/razorpay will return 503 (dev-logs/014)')
+}
+const app = createMerchantApiServer(deps, webhook ? { merchantToken, webhook } : { merchantToken })
 // Railway assigns the public port via $PORT for whichever service this
 // process is deployed as; MERCHANT_API_PORT stays the local-dev default.
 const port = Number(process.env['PORT'] ?? process.env['MERCHANT_API_PORT'] ?? 4001)

@@ -7,10 +7,11 @@ import {
   type CaptureDepositParams,
   type CaptureDepositResult,
   type PaymentProvider,
+  type PaymentStatus,
   type RefundDepositParams,
   type RefundDepositResult,
 } from '../../ports/payment-provider.js'
-import { DEFAULT_CAPTURE_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, receiptFor, sleep, toInstrument, type RazorpayPaymentLike } from './razorpay-shared.js'
+import { DEFAULT_CAPTURE_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, isNotFound, receiptFor, sleep, toInstrument, toPaymentStatusValue, type RazorpayPaymentLike } from './razorpay-shared.js'
 
 export interface RazorpayPaymentProviderOptions {
   keyId: string
@@ -64,6 +65,13 @@ export class RazorpayPaymentProvider implements PaymentProvider {
           currency: 'INR',
           receipt,
           payment_capture: true,
+          // dev-logs/014: the webhook handler correlates an incoming
+          // `payment.captured`/`payment.failed` event back to a bookingId by
+          // fetching the order these notes are attached to — Razorpay's own
+          // `notes` object round-trips verbatim, unlike a payment method
+          // string, which is why this is read from the order rather than
+          // guessed from the payment entity.
+          notes: { bookingId: params.reference },
         })
       }
     } catch (err) {
@@ -114,6 +122,23 @@ export class RazorpayPaymentProvider implements PaymentProvider {
       return { refundId: refund.id, amountPaise: toPaise(Number(refund.amount ?? params.amountPaise)) }
     } catch (err) {
       throw new PaymentProviderError(params.reference, err)
+    }
+  }
+
+  /**
+   * dev-logs/014 — the reconciliation worker's read. No side effect: a plain
+   * fetch of whatever Razorpay's own record currently says, independent of
+   * what `DEPOSIT_CAPTURED` in the trail claims. `'unknown'` covers a
+   * paymentId Razorpay genuinely cannot resolve (not itself a mismatch —
+   * the caller decides what that means).
+   */
+  async fetchPaymentStatus(paymentId: string): Promise<PaymentStatus> {
+    try {
+      const payment = await this.client.payments.fetch(paymentId)
+      return { status: toPaymentStatusValue(payment.status), amountPaise: toPaise(Number(payment.amount)) }
+    } catch (err) {
+      if (isNotFound(err)) return { status: 'unknown', amountPaise: toPaise(0) }
+      throw new PaymentProviderError(paymentId, err)
     }
   }
 

@@ -105,6 +105,19 @@ export interface EventStoreTx {
    * `reschedule`/`cancel` on the same booking.
    */
   claimConfirmedBookingsPastStart(now: Date, limit: number): Promise<readonly BookingSnapshot[]>
+  /**
+   * dev-logs/014, gap 2: how many `HOLD_CREATED` events this agent has
+   * accumulated since `since` (any current booking status — a
+   * released/expired hold still counts, since the point is request *rate*,
+   * not current live count). Compared against `since` on the *domain*
+   * clock's timeline (`events.occurredAt`, from `Clock.now()`), not DB
+   * wall-clock insert time — see the Postgres adapter's own comment for why
+   * that distinction matters. The request-rate ceiling's read, taken inside
+   * the same `lockAgent` transaction `hold_slot` already opens for the
+   * concurrent-hold check, so the two bounds are enforced atomically against
+   * the same serialised window per agent.
+   */
+  countBookingsCreatedByAgentSince(agentId: string, since: Date): Promise<number>
 }
 
 /**
@@ -119,6 +132,25 @@ export interface EventStore {
 
   /** Read-only, unlocked. For display / non-gating reads. */
   loadSnapshot(bookingId: string): Promise<BookingSnapshot | undefined>
+
+  /**
+   * Read-only, unlocked — the top-level twin of `EventStoreTx.loadEvents`,
+   * for callers that need one booking's history outside any transaction
+   * (dev-logs/014: the reconciliation worker and the webhook handler both
+   * read history strictly outside a DB lock, the same discipline every
+   * payment-call site in this codebase already follows — never hold a row
+   * lock across a network call, and a Razorpay lookup is a network call).
+   */
+  loadEvents(bookingId: string): Promise<readonly BookingEvent[]>
+
+  /**
+   * CONFIRMED bookings — the reconciliation worker's candidate list
+   * (docs/01-architecture.md §8, dev-logs/014). Read-only, unlocked; the
+   * worker re-locks each candidate individually before appending a finding,
+   * exactly the two-transaction shape `confirm_with_deposit`/`decline_booking`
+   * already use around a real payment-provider network call.
+   */
+  listOpenBookingsForReconciliation(limit: number): Promise<readonly BookingSnapshot[]>
 
   /** Live (held/confirmed) booking intervals for a practitioner in `[from, to)` — slot computation input. */
   listLiveIntervals(practitionerId: string, from: Date, to: Date): Promise<readonly BusyInterval[]>

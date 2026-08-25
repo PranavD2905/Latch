@@ -36,6 +36,20 @@ export interface RefundDepositResult {
   amountPaise: Paise
 }
 
+/**
+ * dev-logs/014: the reconciliation worker's vocabulary for "what does
+ * Razorpay's own record currently say", independent of what Latch's trail
+ * believes. Deliberately not the same union as `MoneyDirection`/instrument —
+ * this is a payment *lifecycle* status, the thing that can drift from the
+ * trail, not the shape of a settled action.
+ */
+export type PaymentStatusValue = 'created' | 'authorized' | 'captured' | 'refunded' | 'failed' | 'unknown'
+
+export interface PaymentStatus {
+  status: PaymentStatusValue
+  amountPaise: Paise
+}
+
 export class PaymentDeclinedError extends Error {
   constructor(reference: string) {
     super(`Payment declined for ${reference}`)
@@ -83,4 +97,13 @@ function describeCause(cause: unknown): string {
 export interface PaymentProvider {
   captureDeposit(params: CaptureDepositParams): Promise<CaptureDepositResult>
   refundDeposit(params: RefundDepositParams): Promise<RefundDepositResult>
+  /**
+   * dev-logs/014: read-only, no side effect — asks Razorpay directly what a
+   * previously-captured payment's status actually is *right now*, rather
+   * than trusting that the trail's `DEPOSIT_CAPTURED` still matches reality.
+   * The reconciliation worker's core primitive. `'unknown'` covers a
+   * paymentId the provider genuinely cannot resolve (never treated as a
+   * mismatch by itself — the caller decides what an unresolvable id means).
+   */
+  fetchPaymentStatus(paymentId: string): Promise<PaymentStatus>
 }

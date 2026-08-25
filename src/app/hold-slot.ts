@@ -33,6 +33,18 @@ type HoldOutcome = { kind: 'ok'; result: HoldSlotResult } | { kind: 'refused'; c
 const IDEMPOTENCY_CLAIM_TIMEOUT_MS = 30_000
 
 /**
+ * dev-logs/014, gap 2: the window `policy.holdRateLimitPerMinute` is measured
+ * over. A fixed 60s lookback rather than a true sliding/leaky bucket — the
+ * simplest thing that is still a real, DB-verified ceiling rather than an
+ * in-memory guess, and correctly survives this process restarting (unlike an
+ * in-memory counter, which single-instance deployment would otherwise make
+ * tempting — docs/07-deployment.md's single-instance shape is exactly why an
+ * in-memory limiter would have been defensible, but a real one was cheap
+ * enough not to need that excuse).
+ */
+const RATE_LIMIT_WINDOW_MS = 60_000
+
+/**
  * `hold_slot` — docs/01-architecture.md §3: moves NO money.
  *
  * Gate: slot free at request time — enforced by the DB partial unique
@@ -128,6 +140,30 @@ async function holdSlotClaimed(cmd: HoldSlotCommand, deps: AppDeps): Promise<Hol
           // No projection: this bookingId never became a live hold.
         })
         return { kind: 'refused', code: 'HOLD_LIMIT_REACHED', reason }
+      }
+
+      // dev-logs/014, gap 2: bounds *rate*, not just concurrent count — a
+      // hostile agent sitting at the concurrent-hold ceiling and
+      // re-holding as fast as TTLs lapse passes the check above every
+      // single time while still locking out legitimate agents, with zero
+      // money moved and therefore zero payment trail. Checked inside the
+      // same `lockAgent` transaction, so the two bounds are atomic against
+      // the same serialised window per agent — no separate race to close.
+      const windowStart = new Date(now.getTime() - RATE_LIMIT_WINDOW_MS)
+      const recentHolds = await tx.countBookingsCreatedByAgentSince(cmd.agentId, windowStart)
+      if (recentHolds >= policy.holdRateLimitPerMinute) {
+        const reason = `agent ${cmd.agentId} created ${recentHolds} booking(s) in the last ${RATE_LIMIT_WINDOW_MS / 1000}s, limit is ${policy.holdRateLimitPerMinute}/min`
+        await appendRefusalEvent({
+          tx,
+          clock: deps.clock,
+          bookingId,
+          sequence: 1,
+          attemptedType: 'hold_slot',
+          code: 'RATE_LIMITED',
+          reason,
+          // No projection: this bookingId never became a live hold.
+        })
+        return { kind: 'refused', code: 'RATE_LIMITED', reason }
       }
 
       const event = createHoldCreatedEvent(bookingId, 1, deps.clock, {

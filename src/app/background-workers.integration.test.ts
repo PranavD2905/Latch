@@ -49,6 +49,9 @@ class DelayedPaymentProvider implements PaymentProvider {
   async refundDeposit(params: RefundDepositParams): Promise<RefundDepositResult> {
     return this.inner.refundDeposit(params)
   }
+  async fetchPaymentStatus(paymentId: string) {
+    return this.inner.fetchPaymentStatus(paymentId)
+  }
 }
 
 class DelayedPaymentRail implements PaymentRailPort {
@@ -65,6 +68,9 @@ class DelayedPaymentRail implements PaymentRailPort {
   }
   async captureAuthorization(params: CaptureAuthorizationParams): Promise<CaptureAuthorizationResult> {
     return this.inner.captureAuthorization(params)
+  }
+  async fetchAuthorizationStatus(authorizationId: string) {
+    return this.inner.fetchAuthorizationStatus(authorizationId)
   }
 }
 

@@ -1,11 +1,31 @@
-import Fastify, { type FastifyInstance } from 'fastify'
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify'
+import type Razorpay from 'razorpay'
 import { BookingNotDeclinableError, BookingNotFoundError, NoAuthorizationFoundError, NoDepositFoundError, declineBooking } from '../../app/decline-booking.js'
 import { BookingNotMarkableError, BookingNotFoundError as MarkBookingNotFoundError, markNoShow } from '../../app/mark-no-show.js'
 import type { AppDeps } from '../../app/types.js'
+import { verifyRazorpayWebhookSignature } from '../payment/razorpay-shared.js'
+import { registerSlotsRoute } from '../rest/slots.js'
+import { handleRazorpayWebhookPayload, type RazorpayWebhookPayload } from '../webhook/razorpay-webhook.js'
 
 export interface MerchantApiOptions {
   /** docs/02-tech-stack.md §12: "One merchant, one static merchant token." No auth framework — a plain equality check. */
   merchantToken: string
+  /**
+   * dev-logs/014, item 2. Undefined disables `POST /webhooks/razorpay`
+   * (returns 503) rather than crashing this whole service on boot — a
+   * webhook secret is a real external-registration step (see the route's own
+   * comment), and every other route here should keep working without it,
+   * exactly the same "opt-in, don't crash the process over an optional
+   * capability" discipline `buildPaymentProvider()`/`buildPaymentRail()`
+   * already use for `PAYMENT_PROVIDER=razorpay`.
+   */
+  webhook?: { secret: string; razorpay: Razorpay }
+}
+
+/** Query-string-stripped exact/prefix match — `request.url` includes the query string, `/healthz`'s check never needed to care before this file had a route that does. */
+function isPublicRoute(url: string): boolean {
+  const path = url.split('?')[0]
+  return path === '/healthz' || path === '/slots' || path === '/webhooks/razorpay'
 }
 
 /**
@@ -16,23 +36,100 @@ export interface MerchantApiOptions {
  * (src/adapters/mcp/server.ts), which has no decline route and never will —
  * this Fastify instance is a wholly separate process/port with its own auth.
  *
- * Scoped to exactly what Slice 3 needs — one route. `mark_no_show` and
- * `set_policy` (also named in the architecture diagram) are later slices'
- * work; this file is not the place to stub them ahead of time.
+ * `set_policy` (also named in the architecture diagram) is not built —
+ * docs/06-build-sequence.md never scoped a merchant policy-editor UI, and
+ * `04-features-and-limitations.md` §3 names it as the first thing cut. Also
+ * hosts two routes that are not merchant-authenticated at all, each with its
+ * own narrower gate instead of the Bearer token: `GET /slots` (dev-logs/014,
+ * item 4 — public and read-only, the same posture as MCP's `find_slots`) and
+ * `POST /webhooks/razorpay` (dev-logs/014, item 2 — gated by an HMAC
+ * signature, not a bearer token, because the caller is Razorpay's own
+ * servers, not a merchant operator). Mounting both here rather than
+ * provisioning dedicated services keeps the deployed topology at the three
+ * Railway services docs/07-deployment.md already describes.
  */
 export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptions): FastifyInstance {
   const app = Fastify({ logger: false })
+
+  // Captures the raw request body alongside the parsed JSON — signature
+  // verification (below) must run against the exact bytes Razorpay signed,
+  // not a re-serialised `JSON.stringify(request.body)`, which is not
+  // guaranteed byte-identical (key order, whitespace). Every other route's
+  // `request.body` is unaffected — this parser still returns the same parsed
+  // object they already relied on, just with the raw buffer attached too.
+  app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (request, body: Buffer, done) => {
+    ;(request as FastifyRequest & { rawBody?: Buffer }).rawBody = body
+    if (body.length === 0) {
+      done(null, {})
+      return
+    }
+    try {
+      done(null, JSON.parse(body.toString('utf8')))
+    } catch (err) {
+      done(err as Error, undefined)
+    }
+  })
 
   // Unauthenticated on purpose — Railway's own health check (docs/07-deployment.md)
   // needs to reach this without a merchant token.
   app.get('/healthz', async () => ({ ok: true }))
 
+  // dev-logs/014, item 4 — see registerSlotsRoute's own doc comment for why
+  // this is the identical function/route the standalone REST adapter uses.
+  registerSlotsRoute(app, deps)
+
   app.addHook('onRequest', async (request, reply) => {
-    if (request.url === '/healthz') return
+    if (isPublicRoute(request.url)) return
     const header = request.headers.authorization
     const token = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined
     if (token !== options.merchantToken) {
       await reply.code(401).send({ error: 'unauthorized' })
+    }
+  })
+
+  // dev-logs/014, item 2. Gated by HMAC signature (verified below), not the
+  // Bearer token above — Razorpay's own servers are the caller, and they
+  // cannot present a merchant token. Security-critical: an endpoint that
+  // appends trail events on request without verifying who sent them is a
+  // real attack surface in a money system, worse than the gap it closes, if
+  // built carelessly (dev-logs/014's own framing of this risk).
+  app.post('/webhooks/razorpay', async (request, reply) => {
+    if (!options.webhook) {
+      return reply.code(503).send({ error: 'webhook not configured — RAZORPAY_WEBHOOK_SECRET is not set' })
+    }
+
+    const signatureHeader = request.headers['x-razorpay-signature']
+    const rawBody = (request as FastifyRequest & { rawBody?: Buffer }).rawBody
+    if (typeof signatureHeader !== 'string' || !rawBody || !verifyRazorpayWebhookSignature(rawBody, signatureHeader, options.webhook.secret)) {
+      return reply.code(400).send({ error: 'invalid or missing X-Razorpay-Signature' })
+    }
+
+    const payload = request.body as RazorpayWebhookPayload
+    const entityId =
+      payload.payload?.payment?.entity?.id ?? `${payload.event}:${payload.created_at ?? Date.now()}` // best-effort fallback for an event shape this handler doesn't otherwise read
+    const idempotencyKey = `${payload.event}:${entityId}`
+
+    // Same claim/put/release pattern as every money-moving command handler
+    // (src/ports/idempotency-store.ts, dev-logs/013) — keyed on Razorpay's
+    // own event identity so a redelivered webhook (Razorpay retries on
+    // anything but a 2xx) is a safe replay, not a repeated append.
+    const claim = await deps.idempotencyStore.claim<{ handled: boolean }>('razorpay_webhook', idempotencyKey, { timeoutMs: 10_000 })
+    if (claim.kind === 'completed') {
+      return reply.code(200).send({ ok: true, replayed: true })
+    }
+    if (claim.kind === 'timed_out') {
+      // A sibling delivery is still being processed — ack with a retry-later
+      // status rather than doing the work twice; Razorpay will redeliver.
+      return reply.code(202).send({ ok: true, pending: true })
+    }
+
+    try {
+      const result = await handleRazorpayWebhookPayload(payload, deps, options.webhook.razorpay)
+      await deps.idempotencyStore.put('razorpay_webhook', idempotencyKey, { handled: result.handled })
+      return await reply.code(200).send({ ok: true, ...result })
+    } catch (err) {
+      await deps.idempotencyStore.release('razorpay_webhook', idempotencyKey)
+      throw err
     }
   })
 

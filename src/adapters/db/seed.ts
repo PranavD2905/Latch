@@ -79,6 +79,12 @@ async function seed() {
       noShowGraceMinutes: 15,
       holdTtlSeconds: 600,
       maxConcurrentHoldsPerAgent: 3,
+      // dev-logs/014, gap 2: 10 holds/minute/agent — generous for a real
+      // browsing agent exploring options (well above the 3-concurrent-hold
+      // ceiling even at a brisk hold/release/re-hold pace), tight enough to
+      // make sitting at the ceiling indefinitely via rapid re-holding costly
+      // for a hostile one.
+      holdRateLimitPerMinute: 10,
       createdAt: now,
     })
     .onConflictDoNothing()

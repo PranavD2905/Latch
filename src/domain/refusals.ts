@@ -15,6 +15,7 @@ export const REFUSAL_CODES = [
   'MERCHANT_ACTION_REQUIRED',
   'AUTHORIZATION_EXPIRED',
   'IDEMPOTENT_REPLAY',
+  'RATE_LIMITED',
 ] as const
 
 export type RefusalCode = (typeof REFUSAL_CODES)[number]

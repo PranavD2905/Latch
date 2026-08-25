@@ -61,7 +61,8 @@ never be observed out of sync."
     "grace_minutes": 15
   },
   "hold_ttl_seconds": 600,                // 10 minutes
-  "max_concurrent_holds_per_agent": 3
+  "max_concurrent_holds_per_agent": 3,
+  "hold_rate_limit_per_minute": 10        // dev-logs/014: request-rate ceiling, independent of the concurrent-hold count above
 }
 ```
 
@@ -236,6 +237,7 @@ The append-only log. Every row is immutable.
 | `NO_SHOW_CHARGED` | **in** | Debit against authorisation succeeded |
 | `BOOKING_COMPLETED` | — | Merchant marks attendance; booking finishes normally |
 | `ACTION_REFUSED` | — | A gate or bound rejected a command ★★ |
+| `RECONCILIATION_MISMATCH` | — | The reconciliation worker or the Razorpay webhook found the trail disagreeing with Razorpay's own record ★★★ |
 
 ★ the B5 failure path. `AUTHORIZATION_RELEASED` is also part of it. Slice 3 appended it as a stub
 (`rail`, a free-text `note`, no `authorizationId`) because no-show authorisation registration was
@@ -248,6 +250,13 @@ transaction never changed.
 recorded permanently. This is what lets the demo *show the bound working* rather than merely assert it
 exists — a judge can watch an over-limit charge be refused and see the refusal land in the trail with
 its reason.
+
+★★★ **dev-logs/014.** Not a money event, and it never changes a booking's projected `status` (see
+`fold()`'s treatment, same as `ACTION_REFUSED`) — it *reports* a disagreement, it does not resolve one.
+Carries `subject` (`deposit` | `authorization` | `unrecorded_payment`), the Razorpay id in question,
+what the trail expected, what was actually observed, and `detectedVia` (`periodic_worker` | `webhook`).
+Deduplicated against the most recently recorded finding for the same subject+id, so a persistent,
+unresolved mismatch is recorded once, not every tick.
 
 **A note on ordering the log for display, added in Slice 6.** `occurredAt` is a domain timestamp off the
 `Clock` port, and integration tests legitimately run a `FrozenClock` far into the future to simulate
@@ -329,6 +338,7 @@ humans need prose.
 | `MERCHANT_ACTION_REQUIRED` | No-show charge without merchant marking | **Nothing.** Agent cannot self-serve |
 | `AUTHORIZATION_EXPIRED` | The 5-day authorisation window lapsed before the appointment | **Nothing.** Authority is gone; the no-show is uncollectable and the trail says why |
 | `IDEMPOTENT_REPLAY` | Duplicate key | Use the returned prior result |
+| `RATE_LIMITED` | Too many `hold_slot` successes from this agent in the rolling window | Wait for the window to roll forward |
 
 The two `Nothing` rows are the interesting ones. Most API errors tell a caller how to succeed. These
 two tell it that no path exists — which is what a *bound* means, as opposed to a *validation error*.
