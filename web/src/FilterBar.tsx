@@ -1,7 +1,7 @@
 import type { BoundEnforcer, EventCategory } from './types'
 
 export type SearchField = 'bookingId' | 'eventId' | 'type'
-export type ViewTab = 'events' | 'bookings' | 'policy'
+export type ViewTab = 'events' | 'bookings'
 
 export interface Filters {
   category: EventCategory | 'all'
@@ -68,7 +68,7 @@ export function FilterBar({
     <div>
       {/* tabs */}
       <div className="flex gap-6 border-b border-[var(--border)] px-6">
-        {(['events', 'bookings', 'policy'] as const).map((t) => (
+        {(['events', 'bookings'] as const).map((t) => (
           <button
             key={t}
             onClick={() => onTab(t)}

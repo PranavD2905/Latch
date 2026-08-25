@@ -8,6 +8,8 @@ import { MoneyFlowChart } from './MoneyFlowChart'
 import { PolicyEditor } from './PolicyEditor'
 import { StatCards } from './StatCards'
 import { computeRunningSeries, computeTotals, countByEnforcement, countRefusals } from './totals'
+import type { Section } from './TopNav'
+import { TopNav } from './TopNav'
 import type { BookingEvent } from './types'
 import { eventCategory } from './types'
 import { useEventStream } from './useEventStream'
@@ -38,6 +40,7 @@ function matchesSearch(event: BookingEvent, filters: Filters): boolean {
 
 export default function App() {
   const { events, connection } = useEventStream(streamUrl)
+  const [section, setSection] = useState<Section>('audits')
   const [tab, setTab] = useState<ViewTab>('events')
   const [filters, setFilters] = useState<Filters>({
     category: 'all',
@@ -76,12 +79,29 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[var(--bg)] pb-24">
-      {/* top bar */}
+      <TopNav
+        section={section}
+        onSection={setSection}
+        liveCount={events.length}
+        refusalCount={refusalCount}
+        onSearch={(query) => {
+          setSection('audits')
+          setTab('events')
+          // Global search has no field dropdown of its own — guess it from
+          // the query's shape: SCREAMING_SNAKE_CASE reads as an event type,
+          // "bkg_"/"evt_" prefixes as their respective ids, anything else
+          // falls back to booking id (the common case).
+          const looksLikeType = /^[A-Z][A-Z0-9_]*$/.test(query.trim())
+          const searchField = looksLikeType ? 'type' : query.startsWith('evt_') ? 'eventId' : 'bookingId'
+          setFilters((f) => ({ ...f, search: query, searchField }))
+        }}
+      />
+
+      {/* secondary bar */}
       <header className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--surface)] px-6 py-3.5">
         <div className="flex items-center gap-2.5">
-          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--text)] font-mono text-[13px] font-bold text-white">L</span>
           <span className="text-[15px] font-semibold text-[var(--text)]">Overview</span>
-          <span className="text-[15px] text-[var(--text-muted)]">Audit Trail</span>
+          <span className="text-[15px] text-[var(--text-muted)]">{section === 'policy' ? 'Policy' : 'Audit Trail'}</span>
         </div>
         <div className="flex items-center gap-2 rounded-full border border-[var(--border-strong)] bg-white px-3 py-1.5">
           <span className={`h-2 w-2 rounded-full ${connLabel.dot} ${connection === 'open' ? 'animate-pulse' : ''}`} />
@@ -91,7 +111,11 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-[1200px] px-6 py-6">
-        {tab !== 'policy' && (
+        {section === 'policy' ? (
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+            <PolicyEditor />
+          </div>
+        ) : (
           <>
             <StatCards totals={totals} refusalCount={refusalCount} bookingCount={bookingCount} onFilterRefusals={() => setFilters((f) => ({ ...f, category: 'refused' }))} />
 
@@ -106,43 +130,41 @@ export default function App() {
                 <EnforcementBreakdown counts={enforcementCounts} />
               </div>
             </div>
+
+            {/* table */}
+            <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--surface)]">
+              <FilterBar
+                tab={tab}
+                onTab={setTab}
+                filters={filters}
+                onFilters={setFilters}
+                allTypes={allTypes}
+                totalCount={dateScoped.length}
+                shownCount={tableFiltered.length}
+              />
+
+              {!token && (
+                <div className="mx-6 mt-4 rounded-lg border border-[var(--warning)] bg-[var(--warning-bg)] px-3 py-2 font-mono text-xs text-[var(--warning-text)]">
+                  VITE_AUDIT_TRAIL_TOKEN is not set in web/.env — the SSE connection will be refused (401).
+                </div>
+              )}
+
+              {tab === 'events' ? (
+                newestFirst.length === 0 ? (
+                  <div className="px-6 py-16 text-center font-mono text-sm text-[var(--text-faint)]">
+                    {events.length === 0 ? 'waiting for events — drive an agent through the MCP tools to see the trail populate live' : 'no events match these filters'}
+                  </div>
+                ) : (
+                  <div className="mt-2">
+                    <EventsTable events={newestFirst} />
+                  </div>
+                )
+              ) : (
+                <BookingsTable events={dateScoped} />
+              )}
+            </div>
           </>
         )}
-
-        {/* table / editor */}
-        <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--surface)]">
-          <FilterBar
-            tab={tab}
-            onTab={setTab}
-            filters={filters}
-            onFilters={setFilters}
-            allTypes={allTypes}
-            totalCount={dateScoped.length}
-            shownCount={tableFiltered.length}
-          />
-
-          {tab !== 'policy' && !token && (
-            <div className="mx-6 mt-4 rounded-lg border border-[var(--warning)] bg-[var(--warning-bg)] px-3 py-2 font-mono text-xs text-[var(--warning-text)]">
-              VITE_AUDIT_TRAIL_TOKEN is not set in web/.env — the SSE connection will be refused (401).
-            </div>
-          )}
-
-          {tab === 'events' ? (
-            newestFirst.length === 0 ? (
-              <div className="px-6 py-16 text-center font-mono text-sm text-[var(--text-faint)]">
-                {events.length === 0 ? 'waiting for events — drive an agent through the MCP tools to see the trail populate live' : 'no events match these filters'}
-              </div>
-            ) : (
-              <div className="mt-2">
-                <EventsTable events={newestFirst} />
-              </div>
-            )
-          ) : tab === 'bookings' ? (
-            <BookingsTable events={dateScoped} />
-          ) : (
-            <PolicyEditor />
-          )}
-        </div>
       </main>
 
       {/* floating live indicator */}
