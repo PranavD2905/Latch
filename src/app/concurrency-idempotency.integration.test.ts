@@ -8,6 +8,7 @@ import { PostgresEventStore } from '../adapters/db/postgres-event-store.js'
 import { PostgresIdempotencyStore } from '../adapters/db/postgres-idempotency-store.js'
 import { SEED_MERCHANT_ID, SEED_PRACTITIONER_ID, SEED_SERVICE_ID } from '../adapters/db/seed-data.js'
 import { bookings, events, policies } from '../adapters/db/schema.js'
+import { deletePoliciesForTest } from '../adapters/db/policy-test-cleanup.js'
 import { FakePaymentProvider } from '../adapters/payment/fake-payment-provider.js'
 import { FakePaymentRail } from '../adapters/payment/fake-payment-rail.js'
 import type { BookingEvent } from '../domain/events.js'
@@ -227,7 +228,7 @@ describe('POLICY_VERSION_STALE (docs/03-domain-model.md §5)', () => {
   const STALE_TEST_POLICY_VERSION = 999
 
   afterAll(async () => {
-    await db.delete(policies).where(eq(policies.version, STALE_TEST_POLICY_VERSION))
+    await deletePoliciesForTest(db, eq(policies.version, STALE_TEST_POLICY_VERSION))
   })
 
   it('refuses confirm_with_deposit when the acknowledged version is not the merchant\'s current one, and records it', async () => {

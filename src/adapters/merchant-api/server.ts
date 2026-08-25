@@ -1,8 +1,13 @@
+import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify'
 import type Razorpay from 'razorpay'
 import { BookingNotDeclinableError, BookingNotFoundError, NoAuthorizationFoundError, NoDepositFoundError, declineBooking } from '../../app/decline-booking.js'
+import { getPolicy, NoActivePolicyError } from '../../app/get-policy.js'
 import { BookingNotMarkableError, BookingNotFoundError as MarkBookingNotFoundError, markNoShow } from '../../app/mark-no-show.js'
+import { setPolicy, type SetPolicyCommand } from '../../app/set-policy.js'
 import type { AppDeps } from '../../app/types.js'
+import { PolicyValidationError } from '../../domain/policy-validation.js'
+import { PolicyVersionConflictError } from '../../ports/catalog-repo.js'
 import { verifyRazorpayWebhookSignature } from '../payment/razorpay-shared.js'
 import { registerSlotsRoute } from '../rest/slots.js'
 import { handleRazorpayWebhookPayload, type RazorpayWebhookPayload } from '../webhook/razorpay-webhook.js'
@@ -36,10 +41,11 @@ function isPublicRoute(url: string): boolean {
  * (src/adapters/mcp/server.ts), which has no decline route and never will —
  * this Fastify instance is a wholly separate process/port with its own auth.
  *
- * `set_policy` (also named in the architecture diagram) is not built —
- * docs/06-build-sequence.md never scoped a merchant policy-editor UI, and
- * `04-features-and-limitations.md` §3 names it as the first thing cut. Also
- * hosts two routes that are not merchant-authenticated at all, each with its
+ * `set_policy` (also named in the architecture diagram) lives here too —
+ * `GET`/`POST /policy`, same bearer-token gate as decline/mark-no-show below.
+ * Originally cut (`04-features-and-limitations.md` §3, item 1) and reinstated
+ * once the schedule allowed it — see dev-logs/015. Also hosts two routes
+ * that are not merchant-authenticated at all, each with its
  * own narrower gate instead of the Bearer token: `GET /slots` (dev-logs/014,
  * item 4 — public and read-only, the same posture as MCP's `find_slots`) and
  * `POST /webhooks/razorpay` (dev-logs/014, item 2 — gated by an HMAC
@@ -69,6 +75,16 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
       done(err as Error, undefined)
     }
   })
+
+  // dev-logs/015: the merchant policy editor (web viewer) calls /policy
+  // directly from the browser, and in production the viewer and this API are
+  // two different Railway services (docs/07-deployment.md) — genuinely
+  // cross-origin, unlike the SSE feed's same-origin design. CORS only
+  // governs which origins JavaScript is allowed to *read* a response; actual
+  // authorization is still the Bearer-token hook below, so reflecting the
+  // caller's own Origin here doesn't loosen who can act, only who can see
+  // the result of an already-gated call.
+  app.register(cors, { origin: true, methods: ['GET', 'POST'] })
 
   // Unauthenticated on purpose — Railway's own health check (docs/07-deployment.md)
   // needs to reach this without a merchant token.
@@ -187,6 +203,66 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
       } catch (err) {
         if (err instanceof MarkBookingNotFoundError) return reply.code(404).send({ error: err.message })
         if (err instanceof BookingNotMarkableError) return reply.code(409).send({ error: err.message })
+        throw err
+      }
+    },
+  )
+
+  // dev-logs/015: the policy editor's read side — same bearer-token gate as
+  // every other merchant-only route here, not a public read like GET /slots.
+  // Nothing an agent needs; get_policy (MCP) already covers the agent-facing
+  // read and is untouched by this task.
+  app.get('/policy', async (request, reply) => {
+    try {
+      const result = await getPolicy(deps)
+      return await reply.code(200).send(result)
+    } catch (err) {
+      if (err instanceof NoActivePolicyError) return reply.code(404).send({ error: err.message })
+      throw err
+    }
+  })
+
+  // `set_policy` — dev-logs/015. An INSERT of a new version, never an UPDATE
+  // (`src/app/set-policy.ts`'s own doc comment); the version itself is never
+  // read from the body — `SetPolicyCommand` has no such field, and the
+  // server derives it inside `CatalogRepo.publishPolicy`. Fastify's schema
+  // here only checks shape (right fields, right JSON types); every actual
+  // money-rule check — ladder ordering, monotonic retention, the floor tier,
+  // positive amounts, sane bounds — is `validatePolicyInput`'s job, so it
+  // runs identically no matter what calls this route.
+  app.post<{ Body: SetPolicyCommand }>(
+    '/policy',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['depositAmountPaise', 'cancellationLadder', 'noShowFeePaise', 'noShowGraceMinutes', 'holdTtlSeconds', 'maxConcurrentHoldsPerAgent', 'holdRateLimitPerMinute'],
+          properties: {
+            depositAmountPaise: { type: 'number' },
+            cancellationLadder: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['hoursBefore', 'retainPct'],
+                properties: { hoursBefore: { type: 'number' }, retainPct: { type: 'number' } },
+              },
+            },
+            noShowFeePaise: { type: 'number' },
+            noShowGraceMinutes: { type: 'number' },
+            holdTtlSeconds: { type: 'number' },
+            maxConcurrentHoldsPerAgent: { type: 'number' },
+            holdRateLimitPerMinute: { type: 'number' },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const result = await setPolicy(request.body, deps)
+        return await reply.code(200).send(result)
+      } catch (err) {
+        if (err instanceof PolicyValidationError) return reply.code(422).send({ error: err.message, code: err.code })
+        if (err instanceof PolicyVersionConflictError) return reply.code(409).send({ error: err.message })
         throw err
       }
     },

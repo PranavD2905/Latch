@@ -40,6 +40,7 @@
     "start:viewer": "node dist/adapters/audit-trail/http.js"
   },
   "dependencies": {
+    "@fastify/cors": "^11.3.0",
     "@fastify/static": "^10.1.3",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "drizzle-orm": "^0.36.4",

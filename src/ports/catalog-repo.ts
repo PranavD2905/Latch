@@ -1,5 +1,5 @@
 import type { Paise } from '../domain/money.js'
-import type { Policy } from '../domain/policy.js'
+import type { Policy, PolicyInput } from '../domain/policy.js'
 import type { WorkingHours } from '../domain/slots.js'
 
 export interface PractitionerRecord {
@@ -38,4 +38,25 @@ export interface CatalogRepo {
    * no-show fee (dev-logs/009).
    */
   getPolicyVersion(merchantId: string, version: number): Promise<Policy | undefined>
+  /**
+   * `set_policy`'s write path (this task). An INSERT, never an UPDATE — see
+   * `docs/03-domain-model.md` §2. `version` is not a parameter: the adapter
+   * derives it itself as `currentActiveVersion + 1` and relies on the
+   * `policies_merchant_version_unique` constraint, not a check-then-insert,
+   * to make a concurrent double-publish fail loudly rather than race
+   * silently (the same discipline `hold_slot` already applies to
+   * `one_live_booking_per_slot` — see `isUniqueViolation`). Throws
+   * `PolicyVersionConflictError` when that constraint fires.
+   */
+  publishPolicy(merchantId: string, input: PolicyInput, publishedAt: Date): Promise<Policy>
 }
+
+/**
+ * Thrown when two publishes race and both compute the same next version —
+ * the `policies_merchant_version_unique` constraint fired, so the loser's
+ * insert never happened. Not a `RefusalCode`/`Refusal` (that vocabulary is
+ * for agent-facing gates; no agent can ever reach `set_policy`) — this is a
+ * merchant-facing conflict, and the correct next step is "reload the current
+ * policy and resubmit," not "retry blindly."
+ */
+export class PolicyVersionConflictError extends Error {}

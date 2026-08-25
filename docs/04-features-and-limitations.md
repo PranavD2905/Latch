@@ -60,6 +60,9 @@ Plus a second, read-only inbound surface proving the domain core is transport-ag
 - A per-agent hold-request-rate ceiling, independent of the concurrent-hold ceiling (dev-logs/014)
 - Live audit trail viewer over SSE, including the sunk-MDR cost line on every refund
 - A minimal merchant control surface — enough to decline a booking and mark non-attendance
+- A merchant policy editor in the viewer (`POST`/`GET /policy`, dev-logs/015 — reinstated, see §3): publishing is
+  an INSERT of a new version, never an UPDATE, so a booking confirmed under vN keeps cancelling under vN even
+  after the merchant publishes vN+1
 - Test suite: ladder boundaries on a frozen clock, concurrency race, full failure-path integration test
 
 ---
@@ -92,7 +95,7 @@ These are real constraints on what will exist on submission day. Stated plainly.
 | **Single region, single instance** | No HA. A Railway outage takes Latch down | Stateless app over one Postgres; horizontal scaling is a config change, not a rewrite |
 | **No DPDP compliance work** | Clinic appointment data is health-adjacent under India's DPDP Act | Zero risk during the buildathon (synthetic data, test mode). A genuine cost before any real merchant — named in the cost model |
 | **Reschedule price delta is simplified** | Handles a delta but does not model practitioner-tier pricing changes | The event carries the delta; richer pricing is a policy-schema change, not a state-machine change |
-| **Merchant surface is minimal** | Enough to decline and mark non-attendance. Not a product | Demo surface was scoped to agent chat + live trail. The merchant controls exist to trigger the failure honestly |
+| **Merchant surface is minimal** | Decline, mark non-attendance, and (dev-logs/015) publish a new policy version. Not a product | Demo surface was scoped to agent chat + live trail, plus the one write path (`set_policy`) worth making visible — see §3 |
 | **The periodic reconciliation worker only scans CONFIRMED bookings** | A `HELD` booking whose deposit actually captured at Razorpay right before a crash (the exact gap-1 shape) is not found by the *periodic* pass — only by the webhook, and only if Razorpay's webhook delivery reaches Latch | The webhook is real-time and Razorpay retries non-2xx deliveries for days, so this is a narrow, bounded window, not an open gap — widening the periodic scan to `HELD` bookings too is a small follow-up, not a redesign |
 | **The rate ceiling is a fixed 60s lookback, not a true sliding/leaky bucket** | An agent could in principle cluster requests right at a window boundary to get slightly more than `holdRateLimitPerMinute` in a worst case | Real, DB-verified, and closes the actual abuse shape (unbounded re-holding) — a token-bucket refinement is a tuning change, not a new mechanism |
 
@@ -150,7 +153,11 @@ idea.
 
 Ordered. If the timeline compresses, cut from the top.
 
-1. Merchant policy *editor* UI → seed the policy in SQL
+1. ~~Merchant policy *editor* UI → seed the policy in SQL~~ **Reinstated, dev-logs/015.** The schedule
+   allowed it, and it was worth building for real: it's the only way to make `policy_version`'s
+   retroactivity claim (§2's B2 discussion, `docs/03-domain-model.md` §2) demonstrable rather than
+   asserted — before this, nothing could ever publish a v5, so "a booking made under v4 keeps cancelling
+   under v4" had no second version to actually test against.
 2. Reschedule price delta → reschedule at identical price only
 3. Viewer polish (filtering, expandable detail) → flat live list
 4. `find_slots` filters (practitioner preference, time windows) → next-available only

@@ -53,7 +53,12 @@ test-mode keys, no manual Dashboard step needed — see dev-logs/014 for the reg
 one caveat: `events` must be passed as an `{eventName: boolean}` map, not an array, despite the SDK's
 own TypeScript signature accepting `any`). `latch-viewer` additionally needs
 `AUDIT_TRAIL_TOKEN` **and**, at build time only, a matching `VITE_AUDIT_TRAIL_TOKEN` (Vite bakes it into
-the static bundle — see `web/src/App.tsx`). `latch-mcp` needs neither: the MCP endpoint is deliberately
+the static bundle — see `web/src/App.tsx`) **and**, also at build time, `VITE_MERCHANT_API_URL` set to
+`latch-merchant-api`'s own public URL (dev-logs/015: the policy editor's `GET`/`POST /policy` calls are
+genuinely cross-origin in production, unlike `/events` — `latch-merchant-api` now runs `@fastify/cors` to
+allow it). Unlike `VITE_AUDIT_TRAIL_TOKEN`, this is a public base URL, not a secret — the merchant's actual
+bearer token is entered into the editor at runtime and kept only in that browser tab's `sessionStorage`,
+never baked into the bundle. `latch-mcp` needs neither: the MCP endpoint is deliberately
 unauthenticated (`src/adapters/mcp/streamable-http-server.ts`'s own comment explains why — gating it
 behind a token would contradict the "no partnership required" thesis).
 

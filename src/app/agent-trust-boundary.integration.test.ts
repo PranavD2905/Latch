@@ -35,10 +35,16 @@ import type { AppDeps } from './types.js'
  * concurrency test in `booking-flow.integration.test.ts` ("under real
  * concurrent hold_slot calls from one agent, at most
  * maxConcurrentHoldsPerAgent ever succeed"). This file covers the remaining
- * three, plus a merchant-API-level check that "set policy" has no live path
- * at all (not even merchant-authenticated) — the features doc names it as a
- * declared non-goal, so proving its absence closes the trust-table row
- * completely rather than just at the agent's own surface.
+ * three, plus a merchant-API-level check on `set_policy` itself.
+ *
+ * **Updated, dev-logs/015**: `set_policy` was cut at Slice 8 time
+ * (`docs/04-features-and-limitations.md` §3, item 1) and this file's own test
+ * once proved its absence outright — `POST /policy` 404ing even with a valid
+ * token. It is reinstated now that the schedule allows it, so the equivalent
+ * trust-boundary claim is narrower but still real: the route exists, but
+ * still has no agent-facing path to it at all (same MCP-tool-list absence
+ * above) and still 401s without the merchant's own token — the credential an
+ * agent is never issued.
  */
 
 process.loadEnvFile?.('.env')
@@ -84,18 +90,37 @@ afterAll(async () => {
 })
 
 describe('agent trust boundary (docs/01-architecture.md §9)', () => {
-  it('no live route — agent-facing or merchant-authenticated — can set the merchant policy', async () => {
-    const app = createMerchantApiServer(deps, { merchantToken: 'irrelevant-for-this-check' })
-    // Even with a well-formed bearer token, there is no /policy route to hit —
-    // "set_policy" was never built (docs/04-features-and-limitations.md §1.3:
-    // "enough to decline a booking and mark non-attendance," nothing more).
-    const response = await app.inject({
+  it('set_policy exists now (dev-logs/015), but still cannot be reached without the merchant token — no agent-facing credential unlocks it', async () => {
+    const realToken = 'the-real-merchant-token'
+    const app = createMerchantApiServer(deps, { merchantToken: realToken })
+    const validBody = {
+      depositAmountPaise: 30_000,
+      cancellationLadder: [
+        { hoursBefore: 48, retainPct: 0 },
+        { hoursBefore: 0, retainPct: 100 },
+      ],
+      noShowFeePaise: 40_000,
+      noShowGraceMinutes: 15,
+      holdTtlSeconds: 600,
+      maxConcurrentHoldsPerAgent: 3,
+      holdRateLimitPerMinute: 10,
+    }
+
+    // No Authorization header at all — the shape an agent, which is never
+    // issued this token, would actually present.
+    const noAuth = await app.inject({ method: 'POST', url: '/policy', payload: validBody })
+    expect(noAuth.statusCode).toBe(401)
+
+    // A well-formed but wrong bearer token — not a credential an agent could
+    // ever forge into the real one.
+    const wrongAuth = await app.inject({
       method: 'POST',
       url: '/policy',
-      headers: { authorization: 'Bearer irrelevant-for-this-check' },
-      payload: { depositAmountPaise: 1 },
+      headers: { authorization: 'Bearer not-the-real-token' },
+      payload: validBody,
     })
-    expect(response.statusCode).toBe(404)
+    expect(wrongAuth.statusCode).toBe(401)
+
     await app.close()
   })
 

@@ -37,3 +37,32 @@ export interface Policy {
    */
   holdRateLimitPerMinute: number
 }
+
+/**
+ * The raw shape `set_policy` accepts off the wire — every `Policy` field
+ * except `policyVersion` (which the server always derives, never takes from
+ * a caller), with un-branded `number` amounts because this is exactly what
+ * `validatePolicyInput` must check *before* anything is safe to brand as
+ * `Paise` (a negative or fractional amount is a validation error, not a
+ * `toPaise` throw a merchant never sees a clean code for).
+ */
+export interface PolicyDraft {
+  depositAmountPaise: number
+  cancellationLadder: readonly LadderTier[]
+  noShowFeePaise: number
+  noShowGraceMinutes: number
+  holdTtlSeconds: number
+  maxConcurrentHoldsPerAgent: number
+  holdRateLimitPerMinute: number
+}
+
+/**
+ * A `PolicyDraft` that has passed `validatePolicyInput` and had its amounts
+ * branded — what `CatalogRepo.publishPolicy` actually accepts.
+ * `docs/03-domain-model.md` §2: publishing is an INSERT of a new version,
+ * never an UPDATE of an existing one.
+ */
+export type PolicyInput = Omit<PolicyDraft, 'depositAmountPaise' | 'noShowFeePaise'> & {
+  depositAmountPaise: Paise
+  noShowFeePaise: Paise
+}

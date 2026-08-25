@@ -5,6 +5,7 @@ import { EventsTable } from './EventsTable'
 import type { Filters, ViewTab } from './FilterBar'
 import { FilterBar } from './FilterBar'
 import { MoneyFlowChart } from './MoneyFlowChart'
+import { PolicyEditor } from './PolicyEditor'
 import { StatCards } from './StatCards'
 import { computeRunningSeries, computeTotals, countByEnforcement, countRefusals } from './totals'
 import type { BookingEvent } from './types'
@@ -90,21 +91,25 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-[1200px] px-6 py-6">
-        <StatCards totals={totals} refusalCount={refusalCount} bookingCount={bookingCount} onFilterRefusals={() => setFilters((f) => ({ ...f, category: 'refused' }))} />
+        {tab !== 'policy' && (
+          <>
+            <StatCards totals={totals} refusalCount={refusalCount} bookingCount={bookingCount} onFilterRefusals={() => setFilters((f) => ({ ...f, category: 'refused' }))} />
 
-        {/* charts */}
-        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6 lg:col-span-2">
-            <div className="mb-3 text-[14px] font-semibold text-[var(--text)]">Cumulative money flow</div>
-            <MoneyFlowChart series={series} />
-          </div>
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6">
-            <div className="mb-4 text-[14px] font-semibold text-[var(--text)]">Events by enforcement tier</div>
-            <EnforcementBreakdown counts={enforcementCounts} />
-          </div>
-        </div>
+            {/* charts */}
+            <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6 lg:col-span-2">
+                <div className="mb-3 text-[14px] font-semibold text-[var(--text)]">Cumulative money flow</div>
+                <MoneyFlowChart series={series} />
+              </div>
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6">
+                <div className="mb-4 text-[14px] font-semibold text-[var(--text)]">Events by enforcement tier</div>
+                <EnforcementBreakdown counts={enforcementCounts} />
+              </div>
+            </div>
+          </>
+        )}
 
-        {/* table */}
+        {/* table / editor */}
         <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--surface)]">
           <FilterBar
             tab={tab}
@@ -116,7 +121,7 @@ export default function App() {
             shownCount={tableFiltered.length}
           />
 
-          {!token && (
+          {tab !== 'policy' && !token && (
             <div className="mx-6 mt-4 rounded-lg border border-[var(--warning)] bg-[var(--warning-bg)] px-3 py-2 font-mono text-xs text-[var(--warning-text)]">
               VITE_AUDIT_TRAIL_TOKEN is not set in web/.env — the SSE connection will be refused (401).
             </div>
@@ -132,8 +137,10 @@ export default function App() {
                 <EventsTable events={newestFirst} />
               </div>
             )
-          ) : (
+          ) : tab === 'bookings' ? (
             <BookingsTable events={dateScoped} />
+          ) : (
+            <PolicyEditor />
           )}
         </div>
       </main>

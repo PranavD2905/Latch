@@ -6,13 +6,15 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { confirmWithDeposit } from '../../app/confirm-with-deposit.js'
 import { getPolicy } from '../../app/get-policy.js'
 import { holdSlot } from '../../app/hold-slot.js'
+import type { SetPolicyCommand } from '../../app/set-policy.js'
 import type { AppDeps } from '../../app/types.js'
 import { FrozenClock } from '../clock/frozen-clock.js'
 import { createDbClient } from '../db/client.js'
 import { PostgresCatalogRepo } from '../db/postgres-catalog-repo.js'
 import { PostgresEventStore } from '../db/postgres-event-store.js'
 import { PostgresIdempotencyStore } from '../db/postgres-idempotency-store.js'
-import { bookings, events } from '../db/schema.js'
+import { bookings, events, merchants, policies } from '../db/schema.js'
+import { deletePoliciesForTest } from '../db/policy-test-cleanup.js'
 import { SEED_MERCHANT_ID, SEED_PRACTITIONER_ID, SEED_SERVICE_ID } from '../db/seed-data.js'
 import { FakePaymentProvider } from '../payment/fake-payment-provider.js'
 import { FakePaymentRail } from '../payment/fake-payment-rail.js'
@@ -55,6 +57,15 @@ const fakeRazorpay = {
 } as unknown as Razorpay
 const webhookApp = createMerchantApiServer(deps, { merchantToken: MERCHANT_TOKEN, webhook: { secret: WEBHOOK_SECRET, razorpay: fakeRazorpay } })
 
+// dev-logs/015: `/policy` on an isolated merchant, not SEED_MERCHANT_ID —
+// publishing changes which version `getActivePolicy` returns, and this repo's
+// convention (dev-logs/013) is that several Claude Code sessions can share
+// one local Postgres at once. Isolating this merchant means these tests can
+// never perturb `mer_clinic`'s active policy for an unrelated test file.
+const POLICY_TEST_MERCHANT_ID = `mer_test_merchant_api_policy_${ulid()}`
+const policyDeps: AppDeps = { ...deps, merchantId: POLICY_TEST_MERCHANT_ID }
+const policyApp = createMerchantApiServer(policyDeps, { merchantToken: MERCHANT_TOKEN })
+
 function signedWebhookRequest(body: unknown): { payload: string; signature: string } {
   const payload = JSON.stringify(body)
   const signature = createHmac('sha256', WEBHOOK_SECRET).update(payload).digest('hex')
@@ -93,15 +104,20 @@ beforeAll(async () => {
   }
   await app.ready()
   await webhookApp.ready()
+  await policyApp.ready()
+  await db.insert(merchants).values({ merchantId: POLICY_TEST_MERCHANT_ID, name: '/policy test merchant', razorpayAccountId: 'acc_test', createdAt: new Date() })
 })
 
 afterAll(async () => {
   await app.close()
   await webhookApp.close()
+  await policyApp.close()
   for (const bookingId of createdBookingIds) {
     await db.delete(events).where(eq(events.bookingId, bookingId))
     await db.delete(bookings).where(eq(bookings.bookingId, bookingId))
   }
+  await deletePoliciesForTest(db, eq(policies.merchantId, POLICY_TEST_MERCHANT_ID))
+  await db.delete(merchants).where(eq(merchants.merchantId, POLICY_TEST_MERCHANT_ID))
   await sql.end()
 })
 
@@ -392,5 +408,134 @@ describe('POST /webhooks/razorpay — dev-logs/014 item 2, signature-verified an
 
     const trailAfterReplay = await db.select().from(events).where(eq(events.bookingId, held.bookingId))
     expect(trailAfterReplay.filter((e) => e.type === 'RECONCILIATION_MISMATCH')).toHaveLength(1)
+  })
+})
+
+function validPolicyBody(overrides: Partial<SetPolicyCommand> = {}): SetPolicyCommand {
+  return {
+    depositAmountPaise: 30_000,
+    cancellationLadder: [
+      { hoursBefore: 48, retainPct: 0 },
+      { hoursBefore: 12, retainPct: 50 },
+      { hoursBefore: 0, retainPct: 100 },
+    ],
+    noShowFeePaise: 40_000,
+    noShowGraceMinutes: 15,
+    holdTtlSeconds: 600,
+    maxConcurrentHoldsPerAgent: 3,
+    holdRateLimitPerMinute: 10,
+    ...overrides,
+  }
+}
+
+describe('merchant API — GET/POST /policy, dev-logs/015 (originally cut, reinstated)', () => {
+  it('GET /policy rejects a request with no Authorization header', async () => {
+    const response = await policyApp.inject({ method: 'GET', url: '/policy' })
+    expect(response.statusCode).toBe(401)
+  })
+
+  it('GET /policy 404s before any policy has ever been published for this merchant', async () => {
+    const response = await policyApp.inject({ method: 'GET', url: '/policy', headers: { authorization: `Bearer ${MERCHANT_TOKEN}` } })
+    expect(response.statusCode).toBe(404)
+  })
+
+  it('POST /policy rejects a request with no Authorization header', async () => {
+    const response = await policyApp.inject({ method: 'POST', url: '/policy', payload: validPolicyBody() })
+    expect(response.statusCode).toBe(401)
+  })
+
+  it('POST /policy rejects a request with the wrong token', async () => {
+    const response = await policyApp.inject({
+      method: 'POST',
+      url: '/policy',
+      headers: { authorization: 'Bearer not-the-real-token' },
+      payload: validPolicyBody(),
+    })
+    expect(response.statusCode).toBe(401)
+  })
+
+  it('with the correct merchant token, publishes version 1 and GET /policy then returns it', async () => {
+    const publish = await policyApp.inject({
+      method: 'POST',
+      url: '/policy',
+      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
+      payload: validPolicyBody(),
+    })
+    expect(publish.statusCode).toBe(200)
+    expect(publish.json()).toMatchObject({ policy: { policyVersion: 1, depositAmountPaise: 30_000 } })
+
+    const read = await policyApp.inject({ method: 'GET', url: '/policy', headers: { authorization: `Bearer ${MERCHANT_TOKEN}` } })
+    expect(read.statusCode).toBe(200)
+    expect(read.json()).toMatchObject({ policy: { policyVersion: 1 } })
+  })
+
+  it('a second publish becomes version 2 — an INSERT, not an UPDATE of version 1', async () => {
+    const publish = await policyApp.inject({
+      method: 'POST',
+      url: '/policy',
+      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
+      payload: validPolicyBody({ depositAmountPaise: 50_000 }),
+    })
+    expect(publish.statusCode).toBe(200)
+    expect(publish.json()).toMatchObject({ policy: { policyVersion: 2, depositAmountPaise: 50_000 } })
+
+    const stillV1 = await policyDeps.catalogRepo.getPolicyVersion(POLICY_TEST_MERCHANT_ID, 1)
+    expect(stillV1).toMatchObject({ policyVersion: 1, depositAmountPaise: 30_000 })
+  })
+
+  it('422s a ladder missing the floor tier, with the specific validation code — and does not publish a new version', async () => {
+    const before = await policyDeps.catalogRepo.getActivePolicy(POLICY_TEST_MERCHANT_ID)
+    const response = await policyApp.inject({
+      method: 'POST',
+      url: '/policy',
+      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
+      payload: validPolicyBody({ cancellationLadder: [{ hoursBefore: 48, retainPct: 0 }] }),
+    })
+    expect(response.statusCode).toBe(422)
+    expect(response.json()).toMatchObject({ code: 'LADDER_MISSING_FLOOR_TIER' })
+
+    const after = await policyDeps.catalogRepo.getActivePolicy(POLICY_TEST_MERCHANT_ID)
+    expect(after?.policyVersion).toBe(before?.policyVersion)
+  })
+
+  it('422s retention that decreases closer to the appointment', async () => {
+    const response = await policyApp.inject({
+      method: 'POST',
+      url: '/policy',
+      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
+      payload: validPolicyBody({
+        cancellationLadder: [
+          { hoursBefore: 48, retainPct: 50 },
+          { hoursBefore: 0, retainPct: 20 },
+        ],
+      }),
+    })
+    expect(response.statusCode).toBe(422)
+    expect(response.json()).toMatchObject({ code: 'LADDER_RETAIN_PCT_NOT_MONOTONIC' })
+  })
+
+  it('400s a request missing a required field, before it ever reaches setPolicy', async () => {
+    const { noShowFeePaise: _omit, ...incomplete } = validPolicyBody()
+    const response = await policyApp.inject({
+      method: 'POST',
+      url: '/policy',
+      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
+      payload: incomplete,
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('a smuggled policyVersion field in the request body is ignored — the server still derives its own', async () => {
+    const before = await policyDeps.catalogRepo.getActivePolicy(POLICY_TEST_MERCHANT_ID)
+    const response = await policyApp.inject({
+      method: 'POST',
+      url: '/policy',
+      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
+      payload: { ...validPolicyBody(), policyVersion: 999 },
+    })
+    expect(response.statusCode).toBe(200)
+    const body = response.json() as { policy: { policyVersion: number } }
+    expect(body.policy.policyVersion).toBe((before?.policyVersion ?? 0) + 1)
+    expect(body.policy.policyVersion).not.toBe(999)
   })
 })

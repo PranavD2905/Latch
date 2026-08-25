@@ -71,6 +71,14 @@ merchant has since published v5. Money rules cannot change retroactively on a cu
 committed. Every event carries the `policy_version` it acted under, so the trail explains itself years
 later without needing to know what the policy is *today*.
 
+**Demonstrated, not just asserted, as of dev-logs/015.** `set_policy` (`src/app/set-policy.ts`) is the
+write path that makes this claim testable end to end: it publishes a new version as an INSERT, never an
+UPDATE, so an old version's row — and every event that cites it — is untouched forever.
+`src/app/set-policy-retroactivity.integration.test.ts` books and confirms under whatever version is
+active, publishes a new version with a deliberately different ladder, and then cancels the original
+booking — the retained/refunded amounts, and the `authority.policyVersion` on the resulting
+`RETENTION_APPLIED`/`REFUND_ISSUED` events, all still cite the *original* version, never the new one.
+
 This single field is most of bar clause **B2**. "Why was ₹400 retained?" is answered by "ladder v4,
 tier `hours_before: 12`, `retain_pct: 50`, on a ₹800 service" — a complete causal account, with no
 database lookup required.
