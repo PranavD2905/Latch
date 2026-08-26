@@ -5,6 +5,7 @@ import { ZERO_PAISE } from '../domain/money.js'
 import { Refusal, type RefusalCode } from '../domain/refusals.js'
 import type { BookingSnapshot } from '../ports/event-store.js'
 import { appendRefusalEvent, refuseAgainstBooking } from './refusal.js'
+import { ownedByMerchant } from './tenant-guard.js'
 import type { AppDeps } from './types.js'
 
 const IDEMPOTENCY_CLAIM_TIMEOUT_MS = 30_000
@@ -88,7 +89,7 @@ async function rescheduleBookingClaimed(cmd: RescheduleBookingCommand, deps: App
   let outcome: GateOutcome
   try {
     outcome = await deps.eventStore.transaction<GateOutcome>(async (tx) => {
-      const snapshot = await tx.loadSnapshotForUpdate(cmd.bookingId)
+      const snapshot = ownedByMerchant(await tx.loadSnapshotForUpdate(cmd.bookingId), deps.merchantId)
       if (!snapshot) {
         return { kind: 'not_found' }
       }
@@ -109,6 +110,7 @@ async function rescheduleBookingClaimed(cmd: RescheduleBookingCommand, deps: App
           attemptedType: 'reschedule',
           code,
           reason,
+          merchantId: deps.merchantId,
           projection: { ...snapshot, lastEventSequence: nextSequence },
         })
         return { kind: 'refused', code, reason }
@@ -134,7 +136,7 @@ async function rescheduleBookingClaimed(cmd: RescheduleBookingCommand, deps: App
         priceDeltaPaise: ZERO_PAISE,
       })
       const projection: BookingSnapshot = { ...snapshot, startsAt: cmd.newStartsAt, lastEventSequence: nextSequence }
-      await tx.append([event], projection) // may throw a unique-violation — caught below
+      await tx.append([event], projection, deps.merchantId) // may throw a unique-violation — caught below
 
       return { kind: 'ok', previousStartsAt: snapshot.startsAt }
     })
@@ -159,6 +161,7 @@ async function rescheduleBookingClaimed(cmd: RescheduleBookingCommand, deps: App
           attemptedType: 'reschedule',
           code: 'SLOT_TAKEN',
           reason,
+          merchantId: deps.merchantId,
           projection: { ...fresh, lastEventSequence: sequence },
         })
       })

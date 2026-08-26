@@ -138,6 +138,7 @@ describe('decline_booking against real Razorpay test mode', () => {
 
       const projection: BookingSnapshot = {
         bookingId,
+        merchantId: SEED_MERCHANT_ID,
         practitionerId: SEED_PRACTITIONER_ID,
         serviceId: SEED_SERVICE_ID,
         startsAt,
@@ -153,7 +154,7 @@ describe('decline_booking against real Razorpay test mode', () => {
         holdExpiresAt: undefined,
         lastEventSequence: 5,
       }
-      await tx.append([holdEvent, ackEvent, depositEvent, authorizationEvent, confirmedEvent], projection)
+      await tx.append([holdEvent, ackEvent, depositEvent, authorizationEvent, confirmedEvent], projection, SEED_MERCHANT_ID)
     })
 
     const declined = await declineBooking({ bookingId, reason: 'practitioner_unavailable', idempotencyKey: REFUND_IDEMPOTENCY_KEY }, deps)

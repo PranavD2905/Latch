@@ -44,7 +44,14 @@ export async function runNoShowEligibilityWorker(deps: AppDeps): Promise<NoShowE
     for (const snapshot of claimed) {
       if (snapshot.policyVersion === undefined) continue // defensive: a CONFIRMED booking always has one
 
-      const policy = await deps.catalogRepo.getPolicyVersion(deps.merchantId, snapshot.policyVersion)
+      // Migration 0011: this worker scans across every merchant in one tick
+      // (see the module doc comment — it's cross-tenant infra maintenance,
+      // not a merchant-facing read), so the policy lookup must use *this
+      // candidate's own* merchantId, never `deps.merchantId` (a fixed
+      // boot-time default that's only meaningful for a single-merchant
+      // process). Using the wrong merchant here would silently apply another
+      // merchant's grace-period policy to this booking's eligibility check.
+      const policy = await deps.catalogRepo.getPolicyVersion(snapshot.merchantId, snapshot.policyVersion)
       if (!policy) continue // defensive: the version a CONFIRMED booking cites should never be gone
 
       const eligibleAt = new Date(snapshot.startsAt.getTime() + policy.noShowGraceMinutes * 60_000)
@@ -53,7 +60,7 @@ export async function runNoShowEligibilityWorker(deps: AppDeps): Promise<NoShowE
       const sequence = snapshot.lastEventSequence + 1
       const event = createNoShowEligibleEvent(snapshot.bookingId, sequence, deps.clock, {})
       const projection: BookingSnapshot = { ...snapshot, noShowEligibleMarkedAt: now, lastEventSequence: sequence }
-      await tx.append([event], projection)
+      await tx.append([event], projection, snapshot.merchantId)
       eligibleBookingIds.push(snapshot.bookingId)
     }
   })

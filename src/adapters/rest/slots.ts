@@ -26,14 +26,22 @@ import type { AppDeps } from '../../app/types.js'
  * same module, the same route, the same handler.
  */
 export function registerSlotsRoute(app: FastifyInstance, deps: AppDeps): void {
-  app.get<{ Querystring: { practitionerId?: string; serviceId?: string; days?: string } }>(
+  app.get<{ Querystring: { merchant?: string; practitionerId?: string; serviceId?: string; days?: string } }>(
     '/slots',
     {
       schema: {
         querystring: {
           type: 'object',
-          required: ['practitionerId', 'serviceId'],
+          // Migration 0011: `merchant` is required — this route is
+          // unauthenticated (dev-logs/014, item 4: public and read-only,
+          // same posture as MCP's find_slots), so with more than one
+          // merchant now able to exist, there is no other way for the
+          // caller to say whose calendar it's asking about. It is a public
+          // identifier, not a secret — the same role `/mcp/:merchantId`'s
+          // path segment plays for the MCP surface.
+          required: ['merchant', 'practitionerId', 'serviceId'],
           properties: {
+            merchant: { type: 'string', minLength: 1 },
             practitionerId: { type: 'string', minLength: 1 },
             serviceId: { type: 'string', minLength: 1 },
             days: { type: 'string' },
@@ -42,16 +50,23 @@ export function registerSlotsRoute(app: FastifyInstance, deps: AppDeps): void {
       },
     },
     async (request, reply) => {
-      const { practitionerId, serviceId, days } = request.query
+      const { merchant, practitionerId, serviceId, days } = request.query
       const parsedDays = days === undefined ? undefined : Number(days)
       if (parsedDays !== undefined && (!Number.isFinite(parsedDays) || parsedDays <= 0)) {
         return reply.code(400).send({ error: 'days must be a positive number' })
       }
 
+      const merchantRecord = await deps.catalogRepo.getMerchant(merchant!)
+      if (!merchantRecord) {
+        return reply.code(404).send({ error: `unknown merchant: ${merchant}` })
+      }
+
       try {
         // The exact same call `src/adapters/mcp/server.ts`'s find_slots tool
-        // makes — see the module comment above.
-        const result = await findSlots({ practitionerId: practitionerId!, serviceId: serviceId!, days: parsedDays }, deps)
+        // makes — see the module comment above. `merchantId` is this
+        // request's own, resolved just above, not whatever `deps` happened
+        // to be built with at process boot.
+        const result = await findSlots({ practitionerId: practitionerId!, serviceId: serviceId!, days: parsedDays }, { ...deps, merchantId: merchantRecord.merchantId })
         return await reply.code(200).send(result)
       } catch (err) {
         if (err instanceof UnknownPractitionerError || err instanceof UnknownServiceError) {

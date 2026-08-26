@@ -1,5 +1,6 @@
 import Razorpay from 'razorpay'
 import type { AppDeps } from '../app/types.js'
+import type { MerchantAuthStore } from '../ports/merchant-auth.js'
 import type { PaymentProvider } from '../ports/payment-provider.js'
 import type { PaymentRail } from '../ports/payment-rail.js'
 import { SystemClock } from './clock/system-clock.js'
@@ -7,6 +8,7 @@ import type { Db } from './db/client.js'
 import { PostgresCatalogRepo } from './db/postgres-catalog-repo.js'
 import { PostgresEventStore } from './db/postgres-event-store.js'
 import { PostgresIdempotencyStore } from './db/postgres-idempotency-store.js'
+import { PostgresMerchantAuthStore } from './db/postgres-merchant-auth.js'
 import { SEED_MERCHANT_ID } from './db/seed-data.js'
 import { FakePaymentProvider } from './payment/fake-payment-provider.js'
 import { FakePaymentRail } from './payment/fake-payment-rail.js'
@@ -60,6 +62,19 @@ function buildPaymentRail(): PaymentRail {
  * explicit — see dev-logs/006 for why this is opt-in rather than automatic
  * whenever keys are present.
  */
+/**
+ * Migration 0011. Deliberately not a field on `AppDeps`: command handlers
+ * (`src/app/*.ts`) never authenticate anything — they trust `deps.merchantId`
+ * because the inbound HTTP layer already resolved it before building that
+ * request's `AppDeps`. This store is that resolution step's own dependency,
+ * used only from `merchant-api/server.ts`, `audit-trail/server.ts`, and the
+ * onboarding scripts (`seed.ts`, `create-merchant.ts`) — never threaded any
+ * further in.
+ */
+export function buildMerchantAuthStore(db: Db): MerchantAuthStore {
+  return new PostgresMerchantAuthStore(db)
+}
+
 export function buildAppDeps(db: Db): AppDeps {
   return {
     clock: new SystemClock(),

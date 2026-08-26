@@ -19,13 +19,14 @@ import { runHoldExpiryWorker } from '../../app/hold-expiry-worker.js'
 import { runNoShowEligibilityWorker } from '../../app/no-show-eligibility-worker.js'
 import { runReconciliationWorker } from '../../app/reconciliation-worker.js'
 import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
+import { withGlobalLock } from '../db/advisory-lock.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
 import { createMcpHttpServer } from './streamable-http-server.js'
 
 loadEnvFile()
 
-const { db } = createDbClient(requireDatabaseUrl())
+const { db, sql } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db)
 
 const app = createMcpHttpServer(deps)
@@ -37,23 +38,37 @@ console.log(`MCP Streamable HTTP server listening on :${port}`)
 
 const backgroundIntervalMs = Number(process.env['BACKGROUND_WORKER_INTERVAL_MS'] ?? 60_000)
 
+/**
+ * Scalability: guarded by a single global advisory lock (`withGlobalLock`)
+ * so that setting `replicas > 1` on this service (docs/07-deployment.md
+ * never sets `replicas` today, precisely because nothing made that safe)
+ * doesn't turn one tick's worth of work — in particular the reconciliation
+ * leg's real Razorpay calls — into N replicas' worth of duplicated external
+ * calls every interval. Whichever replica's `sql.reserve()`d connection gets
+ * the lock first runs the tick; the rest see `ran: false` and skip this
+ * round, trying again next interval.
+ */
 async function backgroundTick(): Promise<void> {
-  const { expiredBookingIds } = await runHoldExpiryWorker(deps)
-  if (expiredBookingIds.length > 0) {
-    console.log(`background worker: HOLD_EXPIRED for ${expiredBookingIds.length} booking(s): ${expiredBookingIds.join(', ')}`)
-  }
+  // Not logging the `ran: false` case — with `replicas > 1` this fires on
+  // every idle replica every interval, which is noise, not signal.
+  await withGlobalLock(sql, 'latch:background-worker-tick', async () => {
+    const { expiredBookingIds } = await runHoldExpiryWorker(deps)
+    if (expiredBookingIds.length > 0) {
+      console.log(`background worker: HOLD_EXPIRED for ${expiredBookingIds.length} booking(s): ${expiredBookingIds.join(', ')}`)
+    }
 
-  const { eligibleBookingIds } = await runNoShowEligibilityWorker(deps)
-  if (eligibleBookingIds.length > 0) {
-    console.log(`background worker: NO_SHOW_ELIGIBLE for ${eligibleBookingIds.length} booking(s): ${eligibleBookingIds.join(', ')}`)
-  }
+    const { eligibleBookingIds } = await runNoShowEligibilityWorker(deps)
+    if (eligibleBookingIds.length > 0) {
+      console.log(`background worker: NO_SHOW_ELIGIBLE for ${eligibleBookingIds.length} booking(s): ${eligibleBookingIds.join(', ')}`)
+    }
 
-  // dev-logs/014, item 1 — see docs/07-deployment.md: folded into this same
-  // process for the same reason the other two workers are.
-  const { mismatchedBookingIds } = await runReconciliationWorker(deps)
-  if (mismatchedBookingIds.length > 0) {
-    console.log(`background worker: RECONCILIATION_MISMATCH for ${mismatchedBookingIds.length} booking(s): ${mismatchedBookingIds.join(', ')}`)
-  }
+    // dev-logs/014, item 1 — see docs/07-deployment.md: folded into this same
+    // process for the same reason the other two workers are.
+    const { mismatchedBookingIds } = await runReconciliationWorker(deps)
+    if (mismatchedBookingIds.length > 0) {
+      console.log(`background worker: RECONCILIATION_MISMATCH for ${mismatchedBookingIds.length} booking(s): ${mismatchedBookingIds.join(', ')}`)
+    }
+  })
 }
 
 console.log(`background worker started, polling every ${backgroundIntervalMs}ms`)
@@ -70,10 +85,12 @@ setInterval(() => {
 const authLapseIntervalMs = Number(process.env['AUTHORIZATION_LAPSE_WORKER_INTERVAL_MS'] ?? 60_000)
 
 async function authorizationLapseTick(): Promise<void> {
-  const { lapsedBookingIds } = await runAuthorizationLapseWorker(deps)
-  if (lapsedBookingIds.length > 0) {
-    console.log(`authorization-lapse worker: recorded AUTHORIZATION_LAPSED for ${lapsedBookingIds.length} booking(s): ${lapsedBookingIds.join(', ')}`)
-  }
+  await withGlobalLock(sql, 'latch:authorization-lapse-worker-tick', async () => {
+    const { lapsedBookingIds } = await runAuthorizationLapseWorker(deps)
+    if (lapsedBookingIds.length > 0) {
+      console.log(`authorization-lapse worker: recorded AUTHORIZATION_LAPSED for ${lapsedBookingIds.length} booking(s): ${lapsedBookingIds.join(', ')}`)
+    }
+  })
 }
 
 console.log(`authorization-lapse worker started, polling every ${authLapseIntervalMs}ms`)

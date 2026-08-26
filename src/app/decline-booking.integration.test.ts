@@ -205,7 +205,7 @@ describe('decline_booking (real Postgres + FakePaymentProvider + FrozenClock) â€
         })
         const duplicateSequenceEvent = createMerchantDeclinedEvent(bookingId, nextSequence + 2, clock, { reason: 'boom', cause: 'MERCHANT' })
 
-        await tx.append([declinedEvent, slotReleasedEvent, refundEvent, duplicateSequenceEvent], undefined)
+        await tx.append([declinedEvent, slotReleasedEvent, refundEvent, duplicateSequenceEvent], undefined, deps.merchantId)
       }),
     ).rejects.toThrow()
 

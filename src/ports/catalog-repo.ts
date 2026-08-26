@@ -24,6 +24,8 @@ export interface ServiceRecord {
  * event-sourced — it's plain rows a merchant configures, not a fold.
  */
 export interface CatalogRepo {
+  /** Migration 0011 — resolves a merchant id to its display name, or `undefined` if unknown. The check every merchant-scoped route (MCP's `/mcp/:merchantId`, `GET /slots?merchant=...`) makes before trusting a caller-supplied merchant id at all — a cheap indexed primary-key lookup, not a guess. */
+  getMerchant(merchantId: string): Promise<{ merchantId: string; name: string } | undefined>
   getPractitioner(practitionerId: string): Promise<PractitionerRecord | undefined>
   getService(serviceId: string): Promise<ServiceRecord | undefined>
   /** The current (highest-version) policy for a merchant — the authority `confirm_with_deposit` checks staleness against. */

@@ -43,7 +43,7 @@ export async function runAuthorizationLapseWorker(deps: AppDeps): Promise<Author
         rail: deps.paymentRail.name,
       })
       const projection: BookingSnapshot = { ...snapshot, authorizationLapsedAt: now, lastEventSequence: sequence }
-      await tx.append([event], projection)
+      await tx.append([event], projection, snapshot.merchantId)
       return true
     })
     if (didLapse) {

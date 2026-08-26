@@ -9,6 +9,8 @@ import type { Paise } from '../domain/money.js'
  */
 export interface BookingSnapshot {
   bookingId: string
+  /** Migration 0011 — which merchant owns this booking. Set once, at `hold_slot` time, from the authenticated request's merchant; every later projection update just carries it forward unchanged. */
+  merchantId: string
   practitionerId: string
   serviceId: string
   startsAt: Date
@@ -64,11 +66,16 @@ export interface EventStoreTx {
    * projection row, atomically. `projection` is `undefined` for a pure
    * refusal that never became a live booking (e.g. `SLOT_TAKEN` on a fresh
    * `hold_slot` attempt) — the event is still recorded, just with no
-   * corresponding `bookings` row.
+   * corresponding `bookings` row. `merchantId` is always explicit — even
+   * when `projection` is present and already carries its own `merchantId` —
+   * rather than read off the projection, so every call site names its
+   * tenant the same way `deps.clock`/`deps.merchantId` are always named
+   * explicitly elsewhere in this codebase, and a refusal with no projection
+   * still has somewhere to get it from (migration 0011).
    */
-  append(events: readonly BookingEvent[], projection: BookingSnapshot | undefined): Promise<void>
-  /** How many bookings this agent currently has HELD — read inside the transaction, after `lockAgent`. */
-  countLiveHoldsForAgent(agentId: string): Promise<number>
+  append(events: readonly BookingEvent[], projection: BookingSnapshot | undefined, merchantId: string): Promise<void>
+  /** How many bookings this agent currently has HELD for this merchant — read inside the transaction, after `lockAgent`. Scoped by merchant (migration 0011) so an `agentId` string reused across two unrelated merchants never shares a bound. */
+  countLiveHoldsForAgent(merchantId: string, agentId: string): Promise<number>
   /**
    * A Postgres advisory lock (`pg_advisory_xact_lock`), scoped to `key` and
    * held for the lifetime of this transaction — released automatically on
@@ -77,11 +84,19 @@ export interface EventStoreTx {
    * not just app logic (the "No — DB constraint" column). A plain
    * count-then-insert has a race: two concurrent `hold_slot` calls from the
    * same agent can both read a count under the limit before either inserts.
-   * Calling `lockAgent(agentId)` first serializes every `hold_slot` attempt
-   * from the same agent through this transaction, closing that race —
-   * exactly the DB-level guarantee the docs claim. See dev-logs/004.
+   * Calling `lockAgent(merchantId, agentId)` first serializes every
+   * `hold_slot` attempt from the same agent *against the same merchant*
+   * through this transaction, closing that race — exactly the DB-level
+   * guarantee the docs claim. See dev-logs/004. Keyed on `(merchantId,
+   * agentId)`, not `agentId` alone (migration 0011): an `agentId` is a
+   * caller-supplied string with no global-uniqueness guarantee, so without
+   * the merchant in the lock key, one agent transacting with two unrelated
+   * merchants — or two different agents that happen to reuse the same id
+   * string at different merchants — would serialize against each other for
+   * no reason, and worse, would share the same concurrent-hold/rate-limit
+   * bound across tenants that have nothing to do with each other.
    */
-  lockAgent(agentId: string): Promise<void>
+  lockAgent(merchantId: string, agentId: string): Promise<void>
   /**
    * `SELECT ... FOR UPDATE SKIP LOCKED` — held bookings whose `holdExpiresAt`
    * has passed. docs/01-architecture.md §9 / prompts/slice-5.md item 3: the
@@ -117,7 +132,7 @@ export interface EventStoreTx {
    * concurrent-hold check, so the two bounds are enforced atomically against
    * the same serialised window per agent.
    */
-  countBookingsCreatedByAgentSince(agentId: string, since: Date): Promise<number>
+  countBookingsCreatedByAgentSince(merchantId: string, agentId: string, since: Date): Promise<number>
 }
 
 /**
@@ -155,8 +170,8 @@ export interface EventStore {
   /** Live (held/confirmed) booking intervals for a practitioner in `[from, to)` — slot computation input. */
   listLiveIntervals(practitionerId: string, from: Date, to: Date): Promise<readonly BusyInterval[]>
 
-  /** How many bookings this agent currently has HELD — the concurrent-hold gate. */
-  countLiveHoldsForAgent(agentId: string): Promise<number>
+  /** How many bookings this agent currently has HELD for this merchant — the concurrent-hold gate. Merchant-scoped, see `EventStoreTx.countLiveHoldsForAgent`. */
+  countLiveHoldsForAgent(merchantId: string, agentId: string): Promise<number>
 
   /**
    * CONFIRMED bookings whose no-show authorisation has passed `expiresAt`
@@ -182,15 +197,23 @@ export interface EventStore {
    * (a previously-seen event's own value) to fetch only what's new since —
    * the same call serves both "replay everything on connect" (omit it) and
    * "catch up after a reconnect."
+   *
+   * Scoped to one `merchantId` (migration 0011) — the SSE feed is
+   * per-tenant, so this is the enforcement point that makes "merchant A's
+   * viewer can never see merchant B's events" a query-level guarantee (an
+   * indexed `WHERE merchant_id = ...`), not just something the caller is
+   * trusted to filter after the fact.
    */
-  listAllEvents(afterGlobalSequence?: number): Promise<readonly EventWithGlobalSequence[]>
+  listAllEvents(merchantId: string, afterGlobalSequence?: number): Promise<readonly EventWithGlobalSequence[]>
 
   /**
    * Resolves a bare `eventId` (all the SSE protocol's `Last-Event-ID`
    * header can carry) to its `globalSequence` — the one spot a reconnecting
-   * browser hands the server less than a full cursor.
+   * browser hands the server less than a full cursor. Scoped to `merchantId`
+   * so a reconnecting viewer can't use `Last-Event-ID` to fast-forward to
+   * (or merely confirm the existence of) another merchant's event.
    */
-  findGlobalSequence(eventId: string): Promise<number | undefined>
+  findGlobalSequence(merchantId: string, eventId: string): Promise<number | undefined>
 }
 
 /** One `listAllEvents` row: the event plus the insertion-order cursor value it landed at. */

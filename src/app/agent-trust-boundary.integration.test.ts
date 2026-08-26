@@ -6,6 +6,7 @@ import { createDbClient } from '../adapters/db/client.js'
 import { PostgresCatalogRepo } from '../adapters/db/postgres-catalog-repo.js'
 import { PostgresEventStore } from '../adapters/db/postgres-event-store.js'
 import { PostgresIdempotencyStore } from '../adapters/db/postgres-idempotency-store.js'
+import { PostgresMerchantAuthStore } from '../adapters/db/postgres-merchant-auth.js'
 import { SEED_MERCHANT_ID, SEED_PRACTITIONER_ID, SEED_SERVICE_ID } from '../adapters/db/seed-data.js'
 import { bookings, events } from '../adapters/db/schema.js'
 import { createMerchantApiServer } from '../adapters/merchant-api/server.js'
@@ -91,8 +92,11 @@ afterAll(async () => {
 
 describe('agent trust boundary (docs/01-architecture.md §9)', () => {
   it('set_policy exists now (dev-logs/015), but still cannot be reached without the merchant token — no agent-facing credential unlocks it', async () => {
-    const realToken = 'the-real-merchant-token'
-    const app = createMerchantApiServer(deps, { merchantToken: realToken })
+    // Migration 0011: real per-merchant auth — this test only exercises the
+    // no-auth and wrong-token refusal paths, so it never needs to issue a
+    // valid credential, only the store to check a presented one against.
+    const merchantAuthStore = new PostgresMerchantAuthStore(db)
+    const app = createMerchantApiServer(deps, { merchantAuthStore })
     const validBody = {
       depositAmountPaise: 30_000,
       cancellationLadder: [

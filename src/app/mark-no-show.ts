@@ -1,5 +1,6 @@
 import { createNonAttendanceMarkedEvent } from '../domain/event-factory.js'
 import type { BookingSnapshot } from '../ports/event-store.js'
+import { ownedByMerchant } from './tenant-guard.js'
 import type { AppDeps } from './types.js'
 
 export interface MarkNoShowCommand {
@@ -34,7 +35,7 @@ export async function markNoShow(cmd: MarkNoShowCommand, deps: AppDeps): Promise
   }
 
   const result = await deps.eventStore.transaction<MarkNoShowResult>(async (tx) => {
-    const snapshot = await tx.loadSnapshotForUpdate(cmd.bookingId)
+    const snapshot = ownedByMerchant(await tx.loadSnapshotForUpdate(cmd.bookingId), deps.merchantId)
     if (!snapshot) {
       throw new BookingNotFoundError(`unknown booking: ${cmd.bookingId}`)
     }
@@ -53,7 +54,7 @@ export async function markNoShow(cmd: MarkNoShowCommand, deps: AppDeps): Promise
     const sequence = snapshot.lastEventSequence + 1
     const event = createNonAttendanceMarkedEvent(cmd.bookingId, sequence, deps.clock, { markedBy: 'merchant' })
     const projection: BookingSnapshot = { ...snapshot, nonAttendanceMarkedAt: now, lastEventSequence: sequence }
-    await tx.append([event], projection)
+    await tx.append([event], projection, deps.merchantId)
 
     return { bookingId: cmd.bookingId, nonAttendanceMarkedAt: now.toISOString() }
   })

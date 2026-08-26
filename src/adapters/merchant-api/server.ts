@@ -8,13 +8,24 @@ import { setPolicy, type SetPolicyCommand } from '../../app/set-policy.js'
 import type { AppDeps } from '../../app/types.js'
 import { PolicyValidationError } from '../../domain/policy-validation.js'
 import { PolicyVersionConflictError } from '../../ports/catalog-repo.js'
+import type { MerchantAuthStore } from '../../ports/merchant-auth.js'
 import { verifyRazorpayWebhookSignature } from '../payment/razorpay-shared.js'
 import { registerSlotsRoute } from '../rest/slots.js'
 import { handleRazorpayWebhookPayload, type RazorpayWebhookPayload } from '../webhook/razorpay-webhook.js'
 
+type MerchantScopedRequest = FastifyRequest & { rawBody?: Buffer; merchantId?: string }
+
 export interface MerchantApiOptions {
-  /** docs/02-tech-stack.md §12: "One merchant, one static merchant token." No auth framework — a plain equality check. */
-  merchantToken: string
+  /**
+   * Migration 0011 — real multi-tenant auth, replacing docs/02-tech-stack.md
+   * §12's original "one merchant, one static merchant token" call. Every
+   * route below except the three public ones (`/healthz`, `/slots`,
+   * `/webhooks/razorpay`) resolves `request.merchantId` from whichever
+   * merchant's credential the caller presented — the same running process
+   * now serves every merchant, and the bearer token is what says which one a
+   * given request is for.
+   */
+  merchantAuthStore: MerchantAuthStore
   /**
    * dev-logs/014, item 2. Undefined disables `POST /webhooks/razorpay`
    * (returns 503) rather than crashing this whole service on boot — a
@@ -98,10 +109,26 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
     if (isPublicRoute(request.url)) return
     const header = request.headers.authorization
     const token = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined
-    if (token !== options.merchantToken) {
+    const resolved = token ? await options.merchantAuthStore.verifyToken(token, 'merchant_api') : undefined
+    if (!resolved) {
       await reply.code(401).send({ error: 'unauthorized' })
+      return
     }
+    ;(request as MerchantScopedRequest).merchantId = resolved.merchantId
   })
+
+  /** Every merchant-only route below calls this instead of closing over the shared `deps` — `merchantId` is the caller's own, resolved by the `onRequest` hook above, not a fixed process-wide default. */
+  function requestDeps(request: FastifyRequest): AppDeps {
+    const merchantId = (request as MerchantScopedRequest).merchantId
+    if (!merchantId) {
+      // Unreachable in practice — the onRequest hook above 401s first for
+      // every non-public route — but typed this way rather than asserted
+      // past, so a route registered after the hook by mistake fails loudly
+      // instead of silently running as whatever `deps.merchantId` defaults to.
+      throw new Error('requestDeps() called without an authenticated merchant on the request')
+    }
+    return { ...deps, merchantId }
+  }
 
   // dev-logs/014, item 2. Gated by HMAC signature (verified below), not the
   // Bearer token above — Razorpay's own servers are the caller, and they
@@ -170,7 +197,7 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
       const { reason, idempotencyKey } = request.body
 
       try {
-        const result = await declineBooking({ bookingId, reason, idempotencyKey }, deps)
+        const result = await declineBooking({ bookingId, reason, idempotencyKey }, requestDeps(request))
         return await reply.code(200).send(result)
       } catch (err) {
         if (err instanceof BookingNotFoundError) return reply.code(404).send({ error: err.message })
@@ -198,7 +225,7 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
       const { idempotencyKey } = request.body
 
       try {
-        const result = await markNoShow({ bookingId, idempotencyKey }, deps)
+        const result = await markNoShow({ bookingId, idempotencyKey }, requestDeps(request))
         return await reply.code(200).send(result)
       } catch (err) {
         if (err instanceof MarkBookingNotFoundError) return reply.code(404).send({ error: err.message })
@@ -214,7 +241,7 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
   // read and is untouched by this task.
   app.get('/policy', async (request, reply) => {
     try {
-      const result = await getPolicy(deps)
+      const result = await getPolicy(requestDeps(request))
       return await reply.code(200).send(result)
     } catch (err) {
       if (err instanceof NoActivePolicyError) return reply.code(404).send({ error: err.message })
@@ -258,7 +285,7 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
     },
     async (request, reply) => {
       try {
-        const result = await setPolicy(request.body, deps)
+        const result = await setPolicy(request.body, requestDeps(request))
         return await reply.code(200).send(result)
       } catch (err) {
         if (err instanceof PolicyValidationError) return reply.code(422).send({ error: err.message, code: err.code })

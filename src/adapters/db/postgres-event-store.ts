@@ -41,6 +41,7 @@ function hydrateDates(value: unknown): unknown {
 function rowToSnapshot(row: typeof bookings.$inferSelect): BookingSnapshot {
   return {
     bookingId: row.bookingId,
+    merchantId: row.merchantId,
     practitionerId: row.practitionerId,
     serviceId: row.serviceId,
     startsAt: row.startsAt,
@@ -69,7 +70,7 @@ async function loadEventsFor(db: Queryable, bookingId: string): Promise<readonly
   return rows.map((row) => hydrateDates(row.payload) as BookingEvent)
 }
 
-async function appendFor(db: Queryable, evts: readonly BookingEvent[], projection: BookingSnapshot | undefined): Promise<void> {
+async function appendFor(db: Queryable, evts: readonly BookingEvent[], projection: BookingSnapshot | undefined, merchantId: string): Promise<void> {
   if (evts.length === 0) {
     throw new Error('append() called with no events')
   }
@@ -82,6 +83,7 @@ async function appendFor(db: Queryable, evts: readonly BookingEvent[], projectio
       occurredAt: event.occurredAt,
       sequence: event.sequence,
       payload: event as unknown as Record<string, unknown>,
+      merchantId,
     })),
   )
 
@@ -94,6 +96,7 @@ async function appendFor(db: Queryable, evts: readonly BookingEvent[], projectio
     .insert(bookings)
     .values({
       bookingId: projection.bookingId,
+      merchantId: projection.merchantId,
       practitionerId: projection.practitionerId,
       serviceId: projection.serviceId,
       startsAt: projection.startsAt,
@@ -149,18 +152,23 @@ export class PostgresEventStore implements EventStore {
           const row = rows[0]
           return row ? rowToSnapshot(row) : undefined
         },
-        append: (evts, projection) => appendFor(trxDb, evts, projection),
-        countLiveHoldsForAgent: (agentId) => countLiveHoldsFor(trxDb, agentId),
+        append: (evts, projection, merchantId) => appendFor(trxDb, evts, projection, merchantId),
+        countLiveHoldsForAgent: (merchantId, agentId) => countLiveHoldsFor(trxDb, merchantId, agentId),
         claimHeldBookingsWithExpiredHold: (now, limit) => claimHeldBookingsWithExpiredHoldFor(trxDb, now, limit),
         claimConfirmedBookingsPastStart: (now, limit) => claimConfirmedBookingsPastStartFor(trxDb, now, limit),
-        countBookingsCreatedByAgentSince: (agentId, since) => countBookingsCreatedByAgentSinceFor(trxDb, agentId, since),
-        lockAgent: async (agentId) => {
+        countBookingsCreatedByAgentSince: (merchantId, agentId, since) => countBookingsCreatedByAgentSinceFor(trxDb, merchantId, agentId, since),
+        lockAgent: async (merchantId, agentId) => {
           // pg_advisory_xact_lock: held until this transaction commits or
           // rolls back, and serializes against any other transaction taking
           // the same key — including another connection's hold_slot call
-          // for this same agentId. hashtext() folds the string key to the
-          // bigint pg_advisory_xact_lock needs.
-          await trxDb.execute(sql`select pg_advisory_xact_lock(hashtext(${agentId}))`)
+          // for this same (merchantId, agentId) pair. Keying on the pair,
+          // not `agentId` alone (migration 0011), so an agent transacting
+          // with two unrelated merchants — or two different agents that
+          // happen to reuse the same id string at different merchants —
+          // never serialize against or rate-limit against each other.
+          // hashtext() folds the composite string key to the bigint
+          // pg_advisory_xact_lock needs.
+          await trxDb.execute(sql`select pg_advisory_xact_lock(hashtext(${`${merchantId}:${agentId}`}))`)
         },
       }
       return fn(tx)
@@ -205,8 +213,8 @@ export class PostgresEventStore implements EventStore {
     }))
   }
 
-  async countLiveHoldsForAgent(agentId: string): Promise<number> {
-    return countLiveHoldsFor(this.db, agentId)
+  async countLiveHoldsForAgent(merchantId: string, agentId: string): Promise<number> {
+    return countLiveHoldsFor(this.db, merchantId, agentId)
   }
 
   async listConfirmedBookingsWithExpiredAuthorization(now: Date): Promise<readonly BookingSnapshot[]> {
@@ -224,16 +232,28 @@ export class PostgresEventStore implements EventStore {
     return rows.map(rowToSnapshot)
   }
 
-  async listAllEvents(afterGlobalSequence?: number): Promise<readonly EventWithGlobalSequence[]> {
+  async listAllEvents(merchantId: string, afterGlobalSequence?: number): Promise<readonly EventWithGlobalSequence[]> {
     const rows =
       afterGlobalSequence === undefined
-        ? await this.db.select().from(events).orderBy(events.globalSequence)
-        : await this.db.select().from(events).where(gt(events.globalSequence, afterGlobalSequence)).orderBy(events.globalSequence)
+        ? await this.db
+            .select()
+            .from(events)
+            .where(eq(events.merchantId, merchantId))
+            .orderBy(events.globalSequence)
+        : await this.db
+            .select()
+            .from(events)
+            .where(and(eq(events.merchantId, merchantId), gt(events.globalSequence, afterGlobalSequence)))
+            .orderBy(events.globalSequence)
     return rows.map((row) => ({ event: hydrateDates(row.payload) as BookingEvent, globalSequence: row.globalSequence }))
   }
 
-  async findGlobalSequence(eventId: string): Promise<number | undefined> {
-    const rows = await this.db.select({ globalSequence: events.globalSequence }).from(events).where(eq(events.eventId, eventId)).limit(1)
+  async findGlobalSequence(merchantId: string, eventId: string): Promise<number | undefined> {
+    const rows = await this.db
+      .select({ globalSequence: events.globalSequence })
+      .from(events)
+      .where(and(eq(events.eventId, eventId), eq(events.merchantId, merchantId)))
+      .limit(1)
     return rows[0]?.globalSequence
   }
 }
@@ -271,11 +291,11 @@ async function claimConfirmedBookingsPastStartFor(db: Queryable, now: Date, limi
   return rows.map(rowToSnapshot)
 }
 
-async function countLiveHoldsFor(db: Queryable, agentId: string): Promise<number> {
+async function countLiveHoldsFor(db: Queryable, merchantId: string, agentId: string): Promise<number> {
   const rows = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(bookings)
-    .where(and(eq(bookings.agentId, agentId), eq(bookings.status, 'held')))
+    .where(and(eq(bookings.merchantId, merchantId), eq(bookings.agentId, agentId), eq(bookings.status, 'held')))
   return rows[0]?.count ?? 0
 }
 
@@ -296,12 +316,12 @@ async function countLiveHoldsFor(db: Queryable, agentId: string): Promise<number
  * production (where `Clock` *is* the wall clock) but wrong against a
  * `FrozenClock` in tests, which is how this was actually caught.
  */
-async function countBookingsCreatedByAgentSinceFor(db: Queryable, agentId: string, since: Date): Promise<number> {
+async function countBookingsCreatedByAgentSinceFor(db: Queryable, merchantId: string, agentId: string, since: Date): Promise<number> {
   const rows = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(events)
     .innerJoin(bookings, eq(bookings.bookingId, events.bookingId))
-    .where(and(eq(bookings.agentId, agentId), eq(events.type, 'HOLD_CREATED'), gte(events.occurredAt, since)))
+    .where(and(eq(bookings.merchantId, merchantId), eq(bookings.agentId, agentId), eq(events.type, 'HOLD_CREATED'), gte(events.occurredAt, since)))
   return rows[0]?.count ?? 0
 }
 

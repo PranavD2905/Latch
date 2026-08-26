@@ -39,7 +39,10 @@ export default defineRailway(() => {
     healthcheck: "/healthz",
     env: {
       ...sharedEnv,
-      MERCHANT_API_TOKEN: preserve(),
+      // Migration 0011: no MERCHANT_API_TOKEN env var anymore — merchant
+      // credentials are per-merchant and DB-issued. Run
+      // `railway run --service latch-merchant-api npm run db:seed` (or
+      // db:create-merchant) once after the first deploy to mint one.
       // dev-logs/014, item 2: the secret Razorpay signs POST /webhooks/razorpay
       // deliveries with — registered against this exact service's public URL
       // via the Webhooks API (see dev-logs/014 for how), not the Dashboard.
@@ -54,9 +57,10 @@ export default defineRailway(() => {
     healthcheck: "/healthz",
     env: {
       ...sharedEnv,
-      AUDIT_TRAIL_TOKEN: preserve(),
-      // Vite bakes this into the static bundle at build time — must match
-      // AUDIT_TRAIL_TOKEN exactly (web/src/App.tsx).
+      // Migration 0011: no AUDIT_TRAIL_TOKEN env var anymore either — the
+      // viewer's SSE feed is authenticated per-merchant now. VITE_AUDIT_TRAIL_TOKEN
+      // (below) is the one place a merchant's audit-trail token still needs
+      // to be set, since Vite bakes it into the static bundle at build time.
       VITE_AUDIT_TRAIL_TOKEN: preserve(),
     },
   });

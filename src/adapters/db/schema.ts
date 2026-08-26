@@ -69,6 +69,17 @@ export const events = pgTable(
      * column, never by `occurredAt`.
      */
     globalSequence: bigserial('global_sequence', { mode: 'number' }).notNull(),
+    /**
+     * Migration 0011 — which merchant this event belongs to. Stamped at
+     * append time from the request's authenticated `AppDeps.merchantId`
+     * (or, for background-worker/webhook appends against an existing
+     * booking, from that booking's own `BookingSnapshot.merchantId` — never
+     * re-derived by inference). This is what makes the SSE audit-trail feed
+     * (`src/adapters/audit-trail/server.ts`) safe to scope per tenant: a
+     * viewer authenticated as merchant A can never see merchant B's events,
+     * enforced by an indexed `WHERE`, not by trusting the query never to ask.
+     */
+    merchantId: text('merchant_id').notNull(),
   },
   (table) => [
     // One sequence number per booking, exactly once — makes a gap or a
@@ -128,6 +139,15 @@ export const bookings = pgTable('bookings', {
   lastEventSequence: integer('last_event_sequence').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+  /**
+   * Migration 0011 — same tenant-scoping role as `events.merchantId` above.
+   * Denormalised onto the projection (rather than derived via a join through
+   * `practitioners`) so every hot-path read that already hits this table —
+   * the agent hold-count/rate bounds, `get_booking`, the merchant-API's
+   * decline/mark-no-show lookups — can filter by tenant with the same
+   * indexed query it already runs, instead of a second join per request.
+   */
+  merchantId: text('merchant_id').notNull(),
 })
 
 // ---------------------------------------------------------------------------
@@ -194,6 +214,38 @@ export const policies = pgTable(
 // re-running the command. Only successful outcomes are stored — see
 // src/ports/idempotency-store.ts.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// merchant_credentials — migration 0011. Real multi-tenant auth: replaces
+// the single static `MERCHANT_API_TOKEN`/`AUDIT_TRAIL_TOKEN` env vars with
+// per-merchant, DB-issued API keys. Never stores the plaintext token — only
+// a SHA-256 hash, looked up by an indexed public prefix (same shape as
+// Stripe's `sk_live_...`: the prefix is safe to log/index, the suffix is the
+// actual secret material, hashed at rest). `scope` distinguishes a
+// merchant-API credential from an audit-trail-viewer credential — the two
+// grant access to different surfaces and are issued/rotated independently.
+// See `src/adapters/auth/merchant-credentials.ts` for issuance/verification.
+// ---------------------------------------------------------------------------
+
+// A merchant may hold at most one *active* credential per scope — enforced
+// by a partial unique index (`WHERE revoked_at IS NULL`) in the migration,
+// same reason `one_live_booking_per_slot` (docs/01-architecture.md §4) lives
+// in raw SQL rather than here: Drizzle's schema DSL has no native support
+// for an indexed WHERE clause. A plain `unique(merchantId, scope)` would
+// block rotation outright — the old row must stay (revoked, not deleted) so
+// "was this token ever valid" stays answerable — so it is deliberately not
+// declared here.
+export const merchantCredentials = pgTable('merchant_credentials', {
+  tokenPrefix: text('token_prefix').primaryKey(),
+  merchantId: text('merchant_id')
+    .notNull()
+    .references(() => merchants.merchantId),
+  tokenHash: text('token_hash').notNull(),
+  scope: text('scope').notNull(), // 'merchant_api' | 'audit_trail'
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  /** Null while active. Revocation is a soft-delete — never DELETE a credential row. */
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+})
 
 export const idempotencyKeys = pgTable(
   'idempotency_keys',

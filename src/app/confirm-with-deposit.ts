@@ -5,6 +5,7 @@ import { Refusal, type RefusalCode } from '../domain/refusals.js'
 import type { BookingSnapshot } from '../ports/event-store.js'
 import { NoActivePolicyError } from './get-policy.js'
 import { appendRefusalEvent, refuseAgainstBooking } from './refusal.js'
+import { ownedByMerchant } from './tenant-guard.js'
 import type { AppDeps } from './types.js'
 
 /**
@@ -127,7 +128,7 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
   }
 
   const gateOutcome = await deps.eventStore.transaction<GateOutcome>(async (tx) => {
-    const snapshot = await tx.loadSnapshotForUpdate(cmd.bookingId)
+    const snapshot = ownedByMerchant(await tx.loadSnapshotForUpdate(cmd.bookingId), deps.merchantId)
     if (!snapshot) {
       return { kind: 'not_found' }
     }
@@ -142,6 +143,7 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
         attemptedType: 'confirm_with_deposit',
         code,
         reason,
+        merchantId: deps.merchantId,
         projection: { ...snapshot, lastEventSequence: nextSequence },
       })
       return { kind: 'refused', code, reason }
@@ -176,7 +178,7 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
     })
     const claimedHoldExpiresAt = new Date(now.getTime() + CONFIRMATION_CLAIM_WINDOW_MS)
     const claimedSnapshot: BookingSnapshot = { ...snapshot, holdExpiresAt: claimedHoldExpiresAt, lastEventSequence: nextSequence }
-    await tx.append([ackEvent], claimedSnapshot)
+    await tx.append([ackEvent], claimedSnapshot, deps.merchantId)
 
     // Return the *original* (unbumped) snapshot — callers below only use it
     // for its bookingId and the hold-expiry value to cite as gate evidence;
@@ -270,7 +272,7 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
       lastEventSequence: sequence,
     }
 
-    await tx.append([depositEvent, authorizationEvent, confirmedEvent], projection)
+    await tx.append([depositEvent, authorizationEvent, confirmedEvent], projection, deps.merchantId)
   })
 
   const result: ConfirmWithDepositResult = {

@@ -15,22 +15,21 @@
 import fastifyStatic from '@fastify/static'
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
+import { buildAppDeps, buildMerchantAuthStore, requireDatabaseUrl } from '../build-deps.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
 import { createAuditTrailServer } from './server.js'
 
 loadEnvFile()
 
-const viewerToken = process.env['AUDIT_TRAIL_TOKEN']
-if (!viewerToken) {
-  throw new Error('AUDIT_TRAIL_TOKEN is not set — required so the viewer\'s SSE feed is not wide open')
-}
-
 const { db } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db)
+// Migration 0011: per-merchant, DB-issued credentials replace the old
+// AUDIT_TRAIL_TOKEN env var — see `src/adapters/db/seed.ts` /
+// `src/adapters/db/create-merchant.ts` for how a merchant gets one.
+const merchantAuthStore = buildMerchantAuthStore(db)
 
-const app = createAuditTrailServer(deps, { viewerToken })
+const app = createAuditTrailServer(deps, { merchantAuthStore })
 
 // `../../../web/dist` from this file's own directory (src/adapters/audit-trail/
 // or, compiled, dist/adapters/audit-trail/ — both 3 levels under the repo

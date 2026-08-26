@@ -406,8 +406,21 @@ Named here so they read as decisions rather than gaps. Full treatment in
 
 - **Not a calendar product.** We model slots minimally. Real merchants have a scheduler; the thesis is
   that the calendar and the money must be *one object to an agent*, not that we should rebuild Calendly.
-- **Not multi-tenant.** One merchant, one Razorpay account. Multi-tenancy is engineering volume, not
-  architectural insight, and it would consume the entire timeline.
+- **~~Not multi-tenant~~ — superseded by migration 0011.** The original call was right for the timeline
+  it was made under: multi-tenancy is engineering volume, not architectural insight, and building it
+  would have consumed the build window this project actually had. It is recorded here anyway, rather
+  than deleted, because that's this document's own convention for a decision later reversed (compare
+  dev-logs/005 superseding the rail choice in dev-logs/001). What made reversing it cheap later is the
+  same thing that made skipping it cheap at the time: `merchantId` was already threaded through every
+  catalog table and command handler from the start (`AppDeps.merchantId`, `CatalogRepo.getActivePolicy(merchantId)`,
+  etc.) — the schema and the domain core were never actually single-tenant, only the auth model and the
+  inbound routing were. Migration 0011 replaces the single static `MERCHANT_API_TOKEN`/`AUDIT_TRAIL_TOKEN`
+  env vars with real per-merchant, DB-issued credentials (`src/ports/merchant-auth.ts`,
+  `merchant_credentials` table), adds `merchant_id` to `bookings`/`events` for tenant-scoped reads (the
+  audit-trail SSE feed, the agent hold/rate bounds), and gives the MCP surface a `/mcp/:merchantId` path
+  so one running deployment serves any number of merchants — `npm run db:create-merchant` onboards a new
+  one with no redeploy. One Razorpay account per merchant remains true and unchanged; each merchant's
+  `merchants.razorpayAccountId` row is what that scopes to.
 - **Not an AI receptionist.** The arrow points the other way (brief §3, Layer 3). Latch never talks to
   a human on the phone. It makes the merchant reachable by everybody else's agents.
 - **No agent identity verification.** That layer is occupied — Web Bot Auth, Visa TAP, NPCI UAP

@@ -8,21 +8,26 @@
  */
 import { runAuthorizationLapseWorker } from '../../app/authorization-lapse-worker.js'
 import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
+import { withGlobalLock } from '../db/advisory-lock.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
 
 loadEnvFile()
 
-const { db } = createDbClient(requireDatabaseUrl())
+const { db, sql } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db)
 
 const intervalMs = Number(process.env['AUTHORIZATION_LAPSE_WORKER_INTERVAL_MS'] ?? 60_000)
 
+// Same global-advisory-lock guard as `mcp/http.ts`'s own copy of this tick —
+// see `advisory-lock.ts`.
 async function tick(): Promise<void> {
-  const { lapsedBookingIds } = await runAuthorizationLapseWorker(deps)
-  if (lapsedBookingIds.length > 0) {
-    console.log(`authorization-lapse worker: recorded AUTHORIZATION_LAPSED for ${lapsedBookingIds.length} booking(s): ${lapsedBookingIds.join(', ')}`)
-  }
+  await withGlobalLock(sql, 'latch:authorization-lapse-worker-tick', async () => {
+    const { lapsedBookingIds } = await runAuthorizationLapseWorker(deps)
+    if (lapsedBookingIds.length > 0) {
+      console.log(`authorization-lapse worker: recorded AUTHORIZATION_LAPSED for ${lapsedBookingIds.length} booking(s): ${lapsedBookingIds.join(', ')}`)
+    }
+  })
 }
 
 console.log(`authorization-lapse worker started, polling every ${intervalMs}ms`)

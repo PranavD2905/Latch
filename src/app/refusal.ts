@@ -20,6 +20,7 @@ export async function appendRefusalEvent(params: {
   attemptedType: string
   code: RefusalCode
   reason: string
+  merchantId: string
   /** Pass the current snapshot (with `lastEventSequence` bumped) to keep the projection's sequence in sync; omit for a refusal with no live booking. */
   projection?: BookingSnapshot
 }): Promise<void> {
@@ -28,7 +29,7 @@ export async function appendRefusalEvent(params: {
     refusalCode: params.code,
     reason: params.reason,
   })
-  await params.tx.append([event], params.projection)
+  await params.tx.append([event], params.projection, params.merchantId)
 }
 
 /**
@@ -48,6 +49,7 @@ export async function refuseStandalone(deps: AppDeps, params: { attemptedType: s
       attemptedType: params.attemptedType,
       code: params.code,
       reason: params.reason,
+      merchantId: deps.merchantId,
     })
   })
   throw new Refusal(params.code, params.reason)
@@ -72,6 +74,7 @@ export async function refuseAgainstBooking(deps: AppDeps, bookingId: string, par
       attemptedType: params.attemptedType,
       code: params.code,
       reason: params.reason,
+      merchantId: deps.merchantId,
       ...(fresh ? { projection: { ...fresh, lastEventSequence: sequence } } : {}),
     })
   })

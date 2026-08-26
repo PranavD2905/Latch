@@ -1,6 +1,7 @@
 import { addPaise, toPaise } from '../domain/money.js'
 import { CaptureAmountMismatchError } from '../ports/payment-rail.js'
 import { appendRefusalEvent } from './refusal.js'
+import { ownedByMerchant } from './tenant-guard.js'
 import type { AppDeps } from './types.js'
 
 export class BookingNotFoundError extends Error {}
@@ -30,7 +31,7 @@ export interface CeilingRefusalDemoResult {
  * existing one.
  */
 export async function demoCeilingRefusal(bookingId: string, deps: AppDeps): Promise<CeilingRefusalDemoResult> {
-  const snapshot = await deps.eventStore.loadSnapshot(bookingId)
+  const snapshot = ownedByMerchant(await deps.eventStore.loadSnapshot(bookingId), deps.merchantId)
   if (!snapshot) {
     throw new BookingNotFoundError(`unknown booking: ${bookingId}`)
   }
@@ -60,6 +61,7 @@ export async function demoCeilingRefusal(bookingId: string, deps: AppDeps): Prom
         attemptedType: 'charge_no_show',
         code: 'CAPTURE_AMOUNT_MISMATCH',
         reason: err.message,
+        merchantId: deps.merchantId,
         ...(fresh ? { projection: { ...fresh, lastEventSequence: sequence } } : {}),
       })
     })

@@ -1,4 +1,5 @@
 import type { BookingSnapshot } from '../ports/event-store.js'
+import { ownedByMerchant } from './tenant-guard.js'
 import type { AppDeps } from './types.js'
 
 export class BookingNotFoundError extends Error {}
@@ -24,7 +25,10 @@ export interface GetBookingResult {
  * tool that's always safe to retry.
  */
 export async function getBooking(cmd: GetBookingCommand, deps: AppDeps): Promise<GetBookingResult> {
-  const booking = await deps.eventStore.loadSnapshot(cmd.bookingId)
+  // Migration 0011: a bookingId belonging to another merchant is "unknown,"
+  // same treatment as a bookingId that never existed at all — see
+  // tenant-guard.ts.
+  const booking = ownedByMerchant(await deps.eventStore.loadSnapshot(cmd.bookingId), deps.merchantId)
   if (!booking) {
     throw new BookingNotFoundError(`unknown booking: ${cmd.bookingId}`)
   }

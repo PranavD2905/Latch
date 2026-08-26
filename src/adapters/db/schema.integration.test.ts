@@ -16,6 +16,7 @@ const serviceId = `svc_${ulid()}`
 function newBooking(overrides: { startsAt: Date; status: 'held' | 'confirmed' }) {
   return {
     bookingId: `bkg_${ulid()}`,
+    merchantId,
     practitionerId,
     serviceId,
     startsAt: overrides.startsAt,

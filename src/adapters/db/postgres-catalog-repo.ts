@@ -5,10 +5,15 @@ import type { LadderTier, Policy, PolicyInput } from '../../domain/policy.js'
 import { PolicyVersionConflictError, type CatalogRepo, type PractitionerRecord, type ServiceRecord } from '../../ports/catalog-repo.js'
 import type { Db } from './client.js'
 import { isUniqueViolation } from './postgres-errors.js'
-import { policies, practitioners, services } from './schema.js'
+import { merchants, policies, practitioners, services } from './schema.js'
 
 export class PostgresCatalogRepo implements CatalogRepo {
   constructor(private readonly db: Db) {}
+
+  async getMerchant(merchantId: string): Promise<{ merchantId: string; name: string } | undefined> {
+    const rows = await this.db.select({ merchantId: merchants.merchantId, name: merchants.name }).from(merchants).where(eq(merchants.merchantId, merchantId)).limit(1)
+    return rows[0]
+  }
 
   async getPractitioner(practitionerId: string): Promise<PractitionerRecord | undefined> {
     const rows = await this.db.select().from(practitioners).where(eq(practitioners.practitionerId, practitionerId)).limit(1)

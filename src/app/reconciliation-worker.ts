@@ -1,9 +1,25 @@
+import { mapWithConcurrency } from './concurrency.js'
 import { RECONCILIATION_BATCH_SIZE, appendReconciliationFindings, detectKnownReferenceMismatches } from './reconciliation.js'
 import type { AppDeps } from './types.js'
 
 export interface ReconciliationWorkerResult {
   mismatchedBookingIds: readonly string[]
 }
+
+/**
+ * Bounds how many candidates this worker checks against Razorpay
+ * concurrently, on one tick. A plain `for` loop over `RECONCILIATION_BATCH_SIZE`
+ * (50) candidates, each awaiting a real network call before starting the
+ * next, makes a tick's wall-clock cost scale linearly with confirmed-booking
+ * volume — fine at buildathon scale, the first thing to fall behind the
+ * 60s tick cadence at real volume. Unbounded `Promise.all` over the whole
+ * batch is the wrong fix in the other direction: it turns "up to 50
+ * candidates" into "up to 50 concurrent Razorpay requests from one process,
+ * every tick," which is how a legitimate reconciliation pass gets treated as
+ * abuse by the payment provider's own rate limiter. A bounded pool is the
+ * standard middle ground.
+ */
+const RECONCILIATION_CONCURRENCY = 8
 
 /**
  * dev-logs/014, item 1 — the periodic half of closing gap 1, a Razorpay
@@ -35,16 +51,16 @@ export interface ReconciliationWorkerResult {
  */
 export async function runReconciliationWorker(deps: AppDeps): Promise<ReconciliationWorkerResult> {
   const candidates = await deps.eventStore.listOpenBookingsForReconciliation(RECONCILIATION_BATCH_SIZE)
-  const mismatchedBookingIds: string[] = []
 
-  for (const candidate of candidates) {
+  const results = await mapWithConcurrency(candidates, RECONCILIATION_CONCURRENCY, async (candidate) => {
     const history = await deps.eventStore.loadEvents(candidate.bookingId)
     const findings = await detectKnownReferenceMismatches(candidate, history, deps)
-    if (findings.length === 0) continue
+    if (findings.length === 0) return undefined
 
     const appended = await appendReconciliationFindings(candidate.bookingId, findings, 'periodic_worker', deps)
-    if (appended) mismatchedBookingIds.push(candidate.bookingId)
-  }
+    return appended ? candidate.bookingId : undefined
+  })
 
+  const mismatchedBookingIds = results.filter((id): id is string => id !== undefined)
   return { mismatchedBookingIds }
 }

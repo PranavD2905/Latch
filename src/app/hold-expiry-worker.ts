@@ -38,7 +38,7 @@ export async function runHoldExpiryWorker(deps: AppDeps): Promise<HoldExpiryWork
       // actually frees the slot — flipping status to EXPIRED here is that
       // release, not a second mechanism alongside it.
       const projection: BookingSnapshot = { ...snapshot, status: 'EXPIRED', lastEventSequence: sequence }
-      await tx.append([event], projection)
+      await tx.append([event], projection, snapshot.merchantId)
       expiredBookingIds.push(snapshot.bookingId)
     }
   })

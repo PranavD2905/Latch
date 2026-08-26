@@ -158,7 +158,14 @@ export async function appendReconciliationFindings(
 
     let sequence = fresh.lastEventSequence
     const events = newFindings.map((f) => createReconciliationMismatchEvent(bookingId, ++sequence, deps.clock, { ...f, detectedVia }))
-    await tx.append(events, { ...fresh, lastEventSequence: sequence })
+    // The reconciliation worker scans across every merchant in one tick
+    // (`reconciliation-worker.ts`'s own doc comment); the webhook path
+    // (`reconcileObservedPayment`, above) resolves a booking purely by its
+    // own id, with no merchant in the request at all. Either way,
+    // `fresh.merchantId` — this booking's own recorded owner — is the only
+    // correct merchant to stamp the finding with, never a caller-supplied
+    // default.
+    await tx.append(events, { ...fresh, lastEventSequence: sequence }, fresh.merchantId)
     return true
   })
 }

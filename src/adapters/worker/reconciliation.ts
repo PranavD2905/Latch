@@ -14,21 +14,27 @@
  */
 import { runReconciliationWorker } from '../../app/reconciliation-worker.js'
 import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
+import { withGlobalLock } from '../db/advisory-lock.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
 
 loadEnvFile()
 
-const { db } = createDbClient(requireDatabaseUrl())
+const { db, sql } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db)
 
 const intervalMs = Number(process.env['RECONCILIATION_WORKER_INTERVAL_MS'] ?? 60_000)
 
+// Same global-advisory-lock guard as `mcp/http.ts`'s own copy of this tick
+// (the one that actually matters most here — this is the job with real
+// outbound Razorpay calls per candidate) — see `advisory-lock.ts`.
 async function tick(): Promise<void> {
-  const { mismatchedBookingIds } = await runReconciliationWorker(deps)
-  if (mismatchedBookingIds.length > 0) {
-    console.log(`reconciliation worker: RECONCILIATION_MISMATCH for ${mismatchedBookingIds.length} booking(s): ${mismatchedBookingIds.join(', ')}`)
-  }
+  await withGlobalLock(sql, 'latch:background-worker-tick', async () => {
+    const { mismatchedBookingIds } = await runReconciliationWorker(deps)
+    if (mismatchedBookingIds.length > 0) {
+      console.log(`reconciliation worker: RECONCILIATION_MISMATCH for ${mismatchedBookingIds.length} booking(s): ${mismatchedBookingIds.join(', ')}`)
+    }
+  })
 }
 
 console.log(`reconciliation worker started, polling every ${intervalMs}ms`)

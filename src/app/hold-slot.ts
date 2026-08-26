@@ -7,6 +7,7 @@ import type { BookingSnapshot } from '../ports/event-store.js'
 import { UnknownPractitionerError, UnknownServiceError } from './find-slots.js'
 import { NoActivePolicyError } from './get-policy.js'
 import { appendRefusalEvent, refuseStandalone } from './refusal.js'
+import { ownedByMerchant } from './tenant-guard.js'
 import type { AppDeps } from './types.js'
 
 export interface HoldSlotCommand {
@@ -84,11 +85,16 @@ export async function holdSlot(cmd: HoldSlotCommand, deps: AppDeps): Promise<Hol
 }
 
 async function holdSlotClaimed(cmd: HoldSlotCommand, deps: AppDeps): Promise<HoldSlotResult> {
-  const practitioner = await deps.catalogRepo.getPractitioner(cmd.practitionerId)
+  // Migration 0011: a practitioner/service id that exists but belongs to a
+  // different merchant is refused identically to one that doesn't exist at
+  // all — see tenant-guard.ts. Without this, an agent connected to merchant
+  // A's endpoint could hold a slot against merchant B's practitioner just by
+  // knowing (or guessing) their id.
+  const practitioner = ownedByMerchant(await deps.catalogRepo.getPractitioner(cmd.practitionerId), deps.merchantId)
   if (!practitioner) {
     throw new UnknownPractitionerError(`unknown practitioner: ${cmd.practitionerId}`)
   }
-  const service = await deps.catalogRepo.getService(cmd.serviceId)
+  const service = ownedByMerchant(await deps.catalogRepo.getService(cmd.serviceId), deps.merchantId)
   if (!service) {
     throw new UnknownServiceError(`unknown service: ${cmd.serviceId}`)
   }
@@ -103,6 +109,7 @@ async function holdSlotClaimed(cmd: HoldSlotCommand, deps: AppDeps): Promise<Hol
 
   const projection: BookingSnapshot = {
     bookingId,
+    merchantId: deps.merchantId,
     practitionerId: cmd.practitionerId,
     serviceId: cmd.serviceId,
     startsAt: cmd.startsAt,
@@ -124,9 +131,9 @@ async function holdSlotClaimed(cmd: HoldSlotCommand, deps: AppDeps): Promise<Hol
     outcome = await deps.eventStore.transaction<HoldOutcome>(async (tx) => {
       // Serializes concurrent hold_slot calls from this agent — see the
       // doc comment above. Held until this transaction commits or rolls back.
-      await tx.lockAgent(cmd.agentId)
+      await tx.lockAgent(deps.merchantId, cmd.agentId)
 
-      const liveHolds = await tx.countLiveHoldsForAgent(cmd.agentId)
+      const liveHolds = await tx.countLiveHoldsForAgent(deps.merchantId, cmd.agentId)
       if (liveHolds >= policy.maxConcurrentHoldsPerAgent) {
         const reason = `agent ${cmd.agentId} already has ${liveHolds} live hold(s), limit is ${policy.maxConcurrentHoldsPerAgent}`
         await appendRefusalEvent({
@@ -137,6 +144,7 @@ async function holdSlotClaimed(cmd: HoldSlotCommand, deps: AppDeps): Promise<Hol
           attemptedType: 'hold_slot',
           code: 'HOLD_LIMIT_REACHED',
           reason,
+          merchantId: deps.merchantId,
           // No projection: this bookingId never became a live hold.
         })
         return { kind: 'refused', code: 'HOLD_LIMIT_REACHED', reason }
@@ -150,7 +158,7 @@ async function holdSlotClaimed(cmd: HoldSlotCommand, deps: AppDeps): Promise<Hol
       // same `lockAgent` transaction, so the two bounds are atomic against
       // the same serialised window per agent — no separate race to close.
       const windowStart = new Date(now.getTime() - RATE_LIMIT_WINDOW_MS)
-      const recentHolds = await tx.countBookingsCreatedByAgentSince(cmd.agentId, windowStart)
+      const recentHolds = await tx.countBookingsCreatedByAgentSince(deps.merchantId, cmd.agentId, windowStart)
       if (recentHolds >= policy.holdRateLimitPerMinute) {
         const reason = `agent ${cmd.agentId} created ${recentHolds} booking(s) in the last ${RATE_LIMIT_WINDOW_MS / 1000}s, limit is ${policy.holdRateLimitPerMinute}/min`
         await appendRefusalEvent({
@@ -161,6 +169,7 @@ async function holdSlotClaimed(cmd: HoldSlotCommand, deps: AppDeps): Promise<Hol
           attemptedType: 'hold_slot',
           code: 'RATE_LIMITED',
           reason,
+          merchantId: deps.merchantId,
           // No projection: this bookingId never became a live hold.
         })
         return { kind: 'refused', code: 'RATE_LIMITED', reason }
@@ -172,7 +181,7 @@ async function holdSlotClaimed(cmd: HoldSlotCommand, deps: AppDeps): Promise<Hol
         startsAt: cmd.startsAt,
         ttlSeconds: policy.holdTtlSeconds,
       })
-      await tx.append([event], projection)
+      await tx.append([event], projection, deps.merchantId)
 
       const result: HoldSlotResult = {
         bookingId,

@@ -46,21 +46,33 @@ All three services need:
   15 connections against Postgres at rest, before `db:migrate`/`db:seed` one-off runs stack on top.
   Lower it if the managed instance's connection limit is tight.
 
-`latch-merchant-api` additionally needs `MERCHANT_API_TOKEN` and, for `POST /webhooks/razorpay` to be
-enabled rather than return `503` (dev-logs/014), `RAZORPAY_WEBHOOK_SECRET` — the secret registered
-against this exact service's public URL via Razorpay's Webhooks API (`client.webhooks.create`, real
-test-mode keys, no manual Dashboard step needed — see dev-logs/014 for the registration itself and the
-one caveat: `events` must be passed as an `{eventName: boolean}` map, not an array, despite the SDK's
-own TypeScript signature accepting `any`). `latch-viewer` additionally needs
-`AUDIT_TRAIL_TOKEN` **and**, at build time only, a matching `VITE_AUDIT_TRAIL_TOKEN` (Vite bakes it into
-the static bundle — see `web/src/App.tsx`) **and**, also at build time, `VITE_MERCHANT_API_URL` set to
-`latch-merchant-api`'s own public URL (dev-logs/015: the policy editor's `GET`/`POST /policy` calls are
-genuinely cross-origin in production, unlike `/events` — `latch-merchant-api` now runs `@fastify/cors` to
-allow it). Unlike `VITE_AUDIT_TRAIL_TOKEN`, this is a public base URL, not a secret — the merchant's actual
-bearer token is entered into the editor at runtime and kept only in that browser tab's `sessionStorage`,
-never baked into the bundle. `latch-mcp` needs neither: the MCP endpoint is deliberately
-unauthenticated (`src/adapters/mcp/streamable-http-server.ts`'s own comment explains why — gating it
-behind a token would contradict the "no partnership required" thesis).
+**Migration 0011 superseded this section's original `MERCHANT_API_TOKEN`/`AUDIT_TRAIL_TOKEN` env vars** —
+neither exists anymore. Both surfaces now authenticate against real, per-merchant, DB-issued credentials
+(`merchant_credentials` table, `src/ports/merchant-auth.ts`) instead of one static string shared by every
+merchant a deployment would ever serve. Run `railway run --service latch-merchant-api npm run db:seed`
+(mints one demo merchant's credentials) or `npm run db:create-merchant -- "Merchant name"` (onboards a
+new one, any time, no redeploy) against any of the three deployed services — they share one Postgres, so
+it doesn't matter which service's `railway run` you use — and copy down the tokens it prints; neither is
+ever stored in plaintext, so that's the only place either is visible again.
+
+`latch-merchant-api` needs `RAZORPAY_WEBHOOK_SECRET` for `POST /webhooks/razorpay` to be enabled rather
+than return `503` (dev-logs/014) — the secret registered against this exact service's public URL via
+Razorpay's Webhooks API (`client.webhooks.create`, real test-mode keys, no manual Dashboard step needed —
+see dev-logs/014 for the registration itself and the one caveat: `events` must be passed as an
+`{eventName: boolean}` map, not an array, despite the SDK's own TypeScript signature accepting `any`).
+`latch-viewer` additionally needs, at build time only, `VITE_AUDIT_TRAIL_TOKEN` set to one merchant's
+`audit_trail`-scope token (Vite bakes it into the static bundle — see `web/src/App.tsx`; one viewer build
+shows exactly one merchant's trail, since the server resolves the merchant from the token itself) **and**,
+also at build time, `VITE_MERCHANT_API_URL` set to `latch-merchant-api`'s own public URL (dev-logs/015:
+the policy editor's `GET`/`POST /policy` calls are genuinely cross-origin in production, unlike
+`/events` — `latch-merchant-api` now runs `@fastify/cors` to allow it). Unlike `VITE_AUDIT_TRAIL_TOKEN`,
+this is a public base URL, not a secret — the merchant's actual `merchant_api` bearer token is entered
+into the editor at runtime and kept only in that browser tab's `sessionStorage`, never baked into the
+bundle. `latch-mcp` needs neither: the MCP endpoint is deliberately unauthenticated for *agent* callers
+(`src/adapters/mcp/streamable-http-server.ts`'s own comment explains why — gating it behind a token an
+agent would have to obtain first would contradict the "no partnership required" thesis) — a remote agent
+instead addresses `/mcp/:merchantId`, a public, discoverable path segment naming which merchant it means
+to transact with, not a secret credential.
 
 None of the three set `PORT` — Railway injects it per service, and every entrypoint now prefers
 `process.env.PORT` over its local-dev default port.
@@ -101,3 +113,36 @@ Railway is applying the same eight already-verified migrations that ran locally.
   synchronously (`await backgroundTick()`) before `setInterval` is armed, same as the local-dev
   entrypoints already did — a cold start doesn't lose the first minute of work, it just delays it by
   however long the container took to boot.
+
+## Scalability hardening — what a scalability-focused review found
+
+Four gaps, each fixed at the code level rather than only documented:
+
+- **The audit-trail SSE feed used to poll once per connected browser tab.** N viewers of the same
+  merchant meant N independent `listAllEvents` queries every 500ms — cost scaled with viewer count, not
+  event volume. `src/adapters/audit-trail/server.ts` now runs one shared poll per *merchant* (created on
+  the first connection, torn down on the last disconnection), fanning results out in-process to every
+  listener for that merchant — a new connection's one-time catch-up query is unaffected, only the
+  recurring poll is shared.
+- **The reconciliation worker made its real Razorpay calls one candidate at a time, fully sequential.**
+  Tick duration scaled linearly with confirmed-booking volume. `src/app/concurrency.ts`'s
+  `mapWithConcurrency` bounds it to 8 candidates in flight at once (`reconciliation-worker.ts`) — enough
+  to keep a tick's wall-clock cost roughly flat as volume grows, without turning a routine reconciliation
+  pass into a burst the payment provider's own rate limiter would flag.
+- **Nothing stopped two replicas of the same background-worker process from doing the same tick's work
+  twice** — safe (`FOR UPDATE SKIP LOCKED` makes the row-level claims correct either way) but wasteful,
+  and for the reconciliation leg specifically, wasteful means duplicated external API calls, not just
+  duplicated CPU. `src/adapters/db/advisory-lock.ts`'s `withGlobalLock` (`pg_try_advisory_lock`, one
+  `sql.reserve()`d connection) now guards every tick — this is what actually makes it safe to set
+  `replicas > 1` on `latch-mcp` in `.railway/railway.ts`, which nothing did before.
+- **`DB_POOL_MAX` was already this deployment's whole connection budget, and nothing enforced it once
+  replicas entered the picture** — `max` × replica count has no ceiling from inside `createDbClient`.
+  `src/adapters/db/client.ts` now also sets `idle_timeout`/`max_lifetime` (return idle connections
+  instead of holding `max` open regardless of load) and a `DB_TRANSACTION_POOLER` flag (`prepare: false`)
+  for the day a PgBouncer/Railway-pooling layer sits in front of Postgres — the real fix for horizontal
+  scaling past what raw per-process pools can budget for, which this flag makes the codebase ready for
+  without itself standing up that infrastructure.
+
+Migration 0011 (real multi-tenant auth, above) is the fifth item from that same review — folded into its
+own section rather than listed here because it changed the auth model, not just a performance
+characteristic.

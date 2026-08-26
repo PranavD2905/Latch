@@ -13,7 +13,8 @@ import { createDbClient } from '../db/client.js'
 import { PostgresCatalogRepo } from '../db/postgres-catalog-repo.js'
 import { PostgresEventStore } from '../db/postgres-event-store.js'
 import { PostgresIdempotencyStore } from '../db/postgres-idempotency-store.js'
-import { bookings, events, merchants, policies } from '../db/schema.js'
+import { PostgresMerchantAuthStore } from '../db/postgres-merchant-auth.js'
+import { bookings, events, merchantCredentials, merchants, policies } from '../db/schema.js'
 import { deletePoliciesForTest } from '../db/policy-test-cleanup.js'
 import { SEED_MERCHANT_ID, SEED_PRACTITIONER_ID, SEED_SERVICE_ID } from '../db/seed-data.js'
 import { FakePaymentProvider } from '../payment/fake-payment-provider.js'
@@ -25,7 +26,14 @@ const databaseUrl = process.env['DATABASE_URL'] ?? 'postgres://latch:latch@local
 const { sql, db } = createDbClient(databaseUrl)
 
 const clock = new FrozenClock(new Date('2026-08-25T00:00:00+05:30'))
-const MERCHANT_TOKEN = 'test-merchant-token'
+const merchantAuthStore = new PostgresMerchantAuthStore(db)
+// Migration 0011: a real, DB-issued credential, not a shared static
+// env-var string — issued in `beforeAll` below (`vitest.config.ts` runs
+// integration test files sequentially, never in parallel, so issuing
+// (rotating) a `merchant_api` credential for `SEED_MERCHANT_ID` here can't
+// race another file doing the same).
+let MERCHANT_TOKEN: string
+let POLICY_MERCHANT_TOKEN: string
 
 const deps: AppDeps = {
   clock,
@@ -37,7 +45,7 @@ const deps: AppDeps = {
   merchantId: SEED_MERCHANT_ID,
 }
 
-const app = createMerchantApiServer(deps, { merchantToken: MERCHANT_TOKEN })
+const app = createMerchantApiServer(deps, { merchantAuthStore })
 
 // dev-logs/014, item 2: a second server instance with the webhook configured
 // — a fake `Razorpay` client (only `.orders.fetch` is ever called by
@@ -55,7 +63,7 @@ const fakeRazorpay = {
     },
   },
 } as unknown as Razorpay
-const webhookApp = createMerchantApiServer(deps, { merchantToken: MERCHANT_TOKEN, webhook: { secret: WEBHOOK_SECRET, razorpay: fakeRazorpay } })
+const webhookApp = createMerchantApiServer(deps, { merchantAuthStore, webhook: { secret: WEBHOOK_SECRET, razorpay: fakeRazorpay } })
 
 // dev-logs/015: `/policy` on an isolated merchant, not SEED_MERCHANT_ID —
 // publishing changes which version `getActivePolicy` returns, and this repo's
@@ -64,7 +72,7 @@ const webhookApp = createMerchantApiServer(deps, { merchantToken: MERCHANT_TOKEN
 // never perturb `mer_clinic`'s active policy for an unrelated test file.
 const POLICY_TEST_MERCHANT_ID = `mer_test_merchant_api_policy_${ulid()}`
 const policyDeps: AppDeps = { ...deps, merchantId: POLICY_TEST_MERCHANT_ID }
-const policyApp = createMerchantApiServer(policyDeps, { merchantToken: MERCHANT_TOKEN })
+const policyApp = createMerchantApiServer(policyDeps, { merchantAuthStore })
 
 function signedWebhookRequest(body: unknown): { payload: string; signature: string } {
   const payload = JSON.stringify(body)
@@ -106,6 +114,9 @@ beforeAll(async () => {
   await webhookApp.ready()
   await policyApp.ready()
   await db.insert(merchants).values({ merchantId: POLICY_TEST_MERCHANT_ID, name: '/policy test merchant', razorpayAccountId: 'acc_test', createdAt: new Date() })
+
+  ;({ token: MERCHANT_TOKEN } = await merchantAuthStore.issueToken(SEED_MERCHANT_ID, 'merchant_api'))
+  ;({ token: POLICY_MERCHANT_TOKEN } = await merchantAuthStore.issueToken(POLICY_TEST_MERCHANT_ID, 'merchant_api'))
 })
 
 afterAll(async () => {
@@ -117,6 +128,11 @@ afterAll(async () => {
     await db.delete(bookings).where(eq(bookings.bookingId, bookingId))
   }
   await deletePoliciesForTest(db, eq(policies.merchantId, POLICY_TEST_MERCHANT_ID))
+  // The `merchant_api` credential issued for this merchant in beforeAll
+  // (migration 0011) FK-references merchants.merchantId — must go before
+  // the merchant row itself, same ordering constraint bookings/policies
+  // already needed.
+  await db.delete(merchantCredentials).where(eq(merchantCredentials.merchantId, POLICY_TEST_MERCHANT_ID))
   await db.delete(merchants).where(eq(merchants.merchantId, POLICY_TEST_MERCHANT_ID))
   await sql.end()
 })
@@ -289,7 +305,7 @@ describe('merchant API — mark_no_show, the second of charge_no_show’s two in
 
 describe('GET /slots — dev-logs/014 item 4, the second inbound adapter', () => {
   it('is reachable with no Authorization header at all — same posture as MCP find_slots', async () => {
-    const response = await app.inject({ method: 'GET', url: `/slots?practitionerId=${SEED_PRACTITIONER_ID}&serviceId=${SEED_SERVICE_ID}` })
+    const response = await app.inject({ method: 'GET', url: `/slots?merchant=${SEED_MERCHANT_ID}&practitionerId=${SEED_PRACTITIONER_ID}&serviceId=${SEED_SERVICE_ID}` })
     expect(response.statusCode).toBe(200)
     const body = response.json()
     expect(body.practitionerId).toBe(SEED_PRACTITIONER_ID)
@@ -300,7 +316,7 @@ describe('GET /slots — dev-logs/014 item 4, the second inbound adapter', () =>
     const { findSlots } = await import('../../app/find-slots.js')
     const direct = await findSlots({ practitionerId: SEED_PRACTITIONER_ID, serviceId: SEED_SERVICE_ID, days: undefined }, deps)
 
-    const response = await app.inject({ method: 'GET', url: `/slots?practitionerId=${SEED_PRACTITIONER_ID}&serviceId=${SEED_SERVICE_ID}` })
+    const response = await app.inject({ method: 'GET', url: `/slots?merchant=${SEED_MERCHANT_ID}&practitionerId=${SEED_PRACTITIONER_ID}&serviceId=${SEED_SERVICE_ID}` })
     expect(response.json()).toEqual(direct)
   })
 
@@ -309,8 +325,13 @@ describe('GET /slots — dev-logs/014 item 4, the second inbound adapter', () =>
     expect(response.statusCode).toBe(400)
   })
 
+  it('404s an unknown merchant', async () => {
+    const response = await app.inject({ method: 'GET', url: `/slots?merchant=mer_does_not_exist&practitionerId=${SEED_PRACTITIONER_ID}&serviceId=${SEED_SERVICE_ID}` })
+    expect(response.statusCode).toBe(404)
+  })
+
   it('404s an unknown practitioner', async () => {
-    const response = await app.inject({ method: 'GET', url: `/slots?practitionerId=prac_does_not_exist&serviceId=${SEED_SERVICE_ID}` })
+    const response = await app.inject({ method: 'GET', url: `/slots?merchant=${SEED_MERCHANT_ID}&practitionerId=prac_does_not_exist&serviceId=${SEED_SERVICE_ID}` })
     expect(response.statusCode).toBe(404)
   })
 })
@@ -435,7 +456,7 @@ describe('merchant API — GET/POST /policy, dev-logs/015 (originally cut, reins
   })
 
   it('GET /policy 404s before any policy has ever been published for this merchant', async () => {
-    const response = await policyApp.inject({ method: 'GET', url: '/policy', headers: { authorization: `Bearer ${MERCHANT_TOKEN}` } })
+    const response = await policyApp.inject({ method: 'GET', url: '/policy', headers: { authorization: `Bearer ${POLICY_MERCHANT_TOKEN}` } })
     expect(response.statusCode).toBe(404)
   })
 
@@ -458,13 +479,13 @@ describe('merchant API — GET/POST /policy, dev-logs/015 (originally cut, reins
     const publish = await policyApp.inject({
       method: 'POST',
       url: '/policy',
-      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
+      headers: { authorization: `Bearer ${POLICY_MERCHANT_TOKEN}` },
       payload: validPolicyBody(),
     })
     expect(publish.statusCode).toBe(200)
     expect(publish.json()).toMatchObject({ policy: { policyVersion: 1, depositAmountPaise: 30_000 } })
 
-    const read = await policyApp.inject({ method: 'GET', url: '/policy', headers: { authorization: `Bearer ${MERCHANT_TOKEN}` } })
+    const read = await policyApp.inject({ method: 'GET', url: '/policy', headers: { authorization: `Bearer ${POLICY_MERCHANT_TOKEN}` } })
     expect(read.statusCode).toBe(200)
     expect(read.json()).toMatchObject({ policy: { policyVersion: 1 } })
   })
@@ -473,7 +494,7 @@ describe('merchant API — GET/POST /policy, dev-logs/015 (originally cut, reins
     const publish = await policyApp.inject({
       method: 'POST',
       url: '/policy',
-      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
+      headers: { authorization: `Bearer ${POLICY_MERCHANT_TOKEN}` },
       payload: validPolicyBody({ depositAmountPaise: 50_000 }),
     })
     expect(publish.statusCode).toBe(200)
@@ -488,7 +509,7 @@ describe('merchant API — GET/POST /policy, dev-logs/015 (originally cut, reins
     const response = await policyApp.inject({
       method: 'POST',
       url: '/policy',
-      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
+      headers: { authorization: `Bearer ${POLICY_MERCHANT_TOKEN}` },
       payload: validPolicyBody({ cancellationLadder: [{ hoursBefore: 48, retainPct: 0 }] }),
     })
     expect(response.statusCode).toBe(422)
@@ -502,7 +523,7 @@ describe('merchant API — GET/POST /policy, dev-logs/015 (originally cut, reins
     const response = await policyApp.inject({
       method: 'POST',
       url: '/policy',
-      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
+      headers: { authorization: `Bearer ${POLICY_MERCHANT_TOKEN}` },
       payload: validPolicyBody({
         cancellationLadder: [
           { hoursBefore: 48, retainPct: 50 },
@@ -519,7 +540,7 @@ describe('merchant API — GET/POST /policy, dev-logs/015 (originally cut, reins
     const response = await policyApp.inject({
       method: 'POST',
       url: '/policy',
-      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
+      headers: { authorization: `Bearer ${POLICY_MERCHANT_TOKEN}` },
       payload: incomplete,
     })
     expect(response.statusCode).toBe(400)
@@ -530,7 +551,7 @@ describe('merchant API — GET/POST /policy, dev-logs/015 (originally cut, reins
     const response = await policyApp.inject({
       method: 'POST',
       url: '/policy',
-      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
+      headers: { authorization: `Bearer ${POLICY_MERCHANT_TOKEN}` },
       payload: { ...validPolicyBody(), policyVersion: 999 },
     })
     expect(response.statusCode).toBe(200)

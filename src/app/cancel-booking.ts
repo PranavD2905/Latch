@@ -5,6 +5,7 @@ import { floorPercentageOf, subtractPaise, type Paise } from '../domain/money.js
 import type { Policy } from '../domain/policy.js'
 import type { BookingSnapshot } from '../ports/event-store.js'
 import { refuseAgainstBooking } from './refusal.js'
+import { ownedByMerchant } from './tenant-guard.js'
 import type { AppDeps } from './types.js'
 
 const IDEMPOTENCY_CLAIM_TIMEOUT_MS = 30_000
@@ -83,7 +84,7 @@ export async function cancelBooking(cmd: CancelBookingCommand, deps: AppDeps): P
 
 async function cancelBookingClaimed(cmd: CancelBookingCommand, deps: AppDeps): Promise<CancelBookingResult> {
   const gateOutcome = await deps.eventStore.transaction<GateOutcome>(async (tx) => {
-    const snapshot = await tx.loadSnapshotForUpdate(cmd.bookingId)
+    const snapshot = ownedByMerchant(await tx.loadSnapshotForUpdate(cmd.bookingId), deps.merchantId)
     if (!snapshot) {
       return { kind: 'not_found' }
     }
@@ -216,7 +217,7 @@ async function cancelBookingClaimed(cmd: CancelBookingCommand, deps: AppDeps): P
     }
 
     const projection: BookingSnapshot = { ...fresh, status: 'CANCELLED_BY_CUSTOMER', lastEventSequence: sequence }
-    await tx.append(events, projection)
+    await tx.append(events, projection, deps.merchantId)
   })
 
   const result: CancelBookingResult = {

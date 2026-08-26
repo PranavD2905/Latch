@@ -294,7 +294,7 @@ one combined process — is in `07-deployment.md`.
 | Redis | One datastore. See §9. |
 | Kafka / event bus | Event sourcing ≠ needing a message broker. Postgres is our log. |
 | Docker Compose for dev | One Postgres URL in `.env` is enough; containers slow iteration. |
-| An auth framework | One merchant, one static merchant token. Multi-tenancy is a non-goal. |
+| An auth framework | Per-merchant DB-issued API keys (migration 0011, `src/ports/merchant-auth.ts`) are enough — hashed-token-with-indexed-prefix is a well-understood pattern (same shape as Stripe's key format), not something that needs OAuth/session-framework machinery for one credential type with no user-facing login. Superseded §15 row: originally "one merchant, one static merchant token," when multi-tenancy itself was the non-goal — see docs/01-architecture.md §10. |
 | A calendar library | Slots are computed from opening hours and a duration. `date-fns` + explicit IST handling covers it. |
 | LangChain / agent frameworks | We are building the *thing agents talk to*, not an agent. Reaching for an agent framework here would signal a misunderstanding of the project. |
 

@@ -1,4 +1,5 @@
 import { computeSlots } from '../domain/slots.js'
+import { ownedByMerchant } from './tenant-guard.js'
 import type { AppDeps } from './types.js'
 
 export interface FindSlotsCommand {
@@ -22,11 +23,14 @@ export class UnknownServiceError extends Error {}
  * bound, no money: this is the tool an agent can call as often as it wants.
  */
 export async function findSlots(cmd: FindSlotsCommand, deps: AppDeps): Promise<FindSlotsResult> {
-  const practitioner = await deps.catalogRepo.getPractitioner(cmd.practitionerId)
+  // Migration 0011 — same tenant boundary hold_slot enforces: a practitioner/
+  // service belonging to a different merchant is "unknown," not "found but
+  // rejected," so this route leaks nothing about other merchants' catalogs.
+  const practitioner = ownedByMerchant(await deps.catalogRepo.getPractitioner(cmd.practitionerId), deps.merchantId)
   if (!practitioner) {
     throw new UnknownPractitionerError(`unknown practitioner: ${cmd.practitionerId}`)
   }
-  const service = await deps.catalogRepo.getService(cmd.serviceId)
+  const service = ownedByMerchant(await deps.catalogRepo.getService(cmd.serviceId), deps.merchantId)
   if (!service) {
     throw new UnknownServiceError(`unknown service: ${cmd.serviceId}`)
   }

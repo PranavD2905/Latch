@@ -5,6 +5,7 @@ import type { BookingSnapshot } from '../ports/event-store.js'
 import { CaptureAmountMismatchError } from '../ports/payment-rail.js'
 import { NoActivePolicyError } from './get-policy.js'
 import { appendRefusalEvent, refuseAgainstBooking } from './refusal.js'
+import { ownedByMerchant } from './tenant-guard.js'
 import type { AppDeps } from './types.js'
 
 const IDEMPOTENCY_CLAIM_TIMEOUT_MS = 30_000
@@ -83,7 +84,7 @@ async function chargeNoShowClaimed(cmd: ChargeNoShowCommand, deps: AppDeps): Pro
   }
 
   const gateOutcome = await deps.eventStore.transaction<GateOutcome>(async (tx) => {
-    const snapshot = await tx.loadSnapshotForUpdate(cmd.bookingId)
+    const snapshot = ownedByMerchant(await tx.loadSnapshotForUpdate(cmd.bookingId), deps.merchantId)
     if (!snapshot) {
       return { kind: 'not_found' }
     }
@@ -104,6 +105,7 @@ async function chargeNoShowClaimed(cmd: ChargeNoShowCommand, deps: AppDeps): Pro
         attemptedType: 'charge_no_show',
         code,
         reason,
+        merchantId: deps.merchantId,
         projection: { ...snapshot, lastEventSequence: nextSequence },
       })
       return { kind: 'refused', code, reason }
@@ -175,6 +177,7 @@ async function chargeNoShowClaimed(cmd: ChargeNoShowCommand, deps: AppDeps): Pro
           attemptedType: 'charge_no_show',
           code: 'CAPTURE_AMOUNT_MISMATCH',
           reason: err.message,
+          merchantId: deps.merchantId,
           ...(fresh ? { projection: { ...fresh, lastEventSequence: sequence } } : {}),
         })
       })
@@ -213,7 +216,7 @@ async function chargeNoShowClaimed(cmd: ChargeNoShowCommand, deps: AppDeps): Pro
     })
 
     const projection: BookingSnapshot = { ...base, status: 'NO_SHOW_CHARGED', lastEventSequence: sequence }
-    await tx.append([chargedEvent], projection)
+    await tx.append([chargedEvent], projection, deps.merchantId)
   })
 
   const result: ChargeNoShowResult = {

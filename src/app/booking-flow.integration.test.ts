@@ -255,7 +255,7 @@ describe('booking-flow (real Postgres + FakePaymentProvider + FrozenClock)', () 
 
     // Belt and braces: the DB agrees with the app-level count, since the
     // whole point is that the two can never disagree under this lock.
-    const liveHolds = await deps.eventStore.countLiveHoldsForAgent(agentId)
+    const liveHolds = await deps.eventStore.countLiveHoldsForAgent(deps.merchantId, agentId)
     expect(liveHolds).toBe(limit)
   })
 })

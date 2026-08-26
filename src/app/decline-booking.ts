@@ -8,6 +8,7 @@ import {
 import type { AuthorizationHeldEvent, DepositCapturedEvent } from '../domain/events.js'
 import { subtractPaise } from '../domain/money.js'
 import { findSlots } from './find-slots.js'
+import { ownedByMerchant } from './tenant-guard.js'
 import type { AppDeps } from './types.js'
 
 export interface DeclineBookingCommand {
@@ -72,7 +73,7 @@ export async function declineBooking(cmd: DeclineBookingCommand, deps: AppDeps):
   }
 
   const gateOutcome = await deps.eventStore.transaction<GateOutcome>(async (tx) => {
-    const snapshot = await tx.loadSnapshotForUpdate(cmd.bookingId)
+    const snapshot = ownedByMerchant(await tx.loadSnapshotForUpdate(cmd.bookingId), deps.merchantId)
     if (!snapshot) {
       return { kind: 'not_found' }
     }
@@ -188,7 +189,7 @@ export async function declineBooking(cmd: DeclineBookingCommand, deps: AppDeps):
 
     const projection = { ...fresh, status: 'DECLINED_BY_MERCHANT' as const, lastEventSequence: sequence }
 
-    await tx.append([declinedEvent, slotReleasedEvent, refundEvent, authorizationReleasedEvent, alternativesEvent], projection)
+    await tx.append([declinedEvent, slotReleasedEvent, refundEvent, authorizationReleasedEvent, alternativesEvent], projection, deps.merchantId)
   })
 
   const result: DeclineBookingResult = {
