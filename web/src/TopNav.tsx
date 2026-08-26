@@ -1,5 +1,3 @@
-import { useState } from 'react'
-
 export type Section = 'audits' | 'policy'
 
 function LedgerIcon({ active }: { active: boolean }) {
@@ -19,14 +17,6 @@ function InstitutionIcon({ active }: { active: boolean }) {
     </svg>
   )
 }
-function SearchIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="11" cy="11" r="7" />
-      <path d="m21 21-4.3-4.3" />
-    </svg>
-  )
-}
 const NAV_ITEMS: { key: Section; label: string; icon: (active: boolean) => React.ReactNode }[] = [
   { key: 'audits', label: 'Audits', icon: (a) => <LedgerIcon active={a} /> },
   { key: 'policy', label: 'Policy', icon: (a) => <InstitutionIcon active={a} /> },
@@ -34,8 +24,8 @@ const NAV_ITEMS: { key: Section; label: string; icon: (active: boolean) => React
 
 /**
  * Pixel-reference: Razorpay's own dashboard top bar (black, house icon +
- * "Razorpay Home" then nav items, search + icon cluster + avatar on the
- * right, the active item marked with a soft blue glow chip). Reduced here
+ * "Razorpay Home" then nav items, avatar on the right, the active item
+ * marked with a soft blue glow chip). Reduced here
  * to Latch's own two sections. This is our own admin surface adopting a
  * familiar dashboard chrome, not a claim to be Razorpay's product — labeled
  * "Latch" throughout.
@@ -44,15 +34,11 @@ export function TopNav({
   section,
   onSection,
   refusalCount,
-  onSearch,
 }: {
   section: Section
   onSection: (s: Section) => void
   refusalCount: number
-  onSearch: (query: string) => void
 }) {
-  const [query, setQuery] = useState('')
-
   return (
     <nav className="flex items-center gap-8 bg-[#0a0a0d] px-6 py-3">
       <div className="flex items-center gap-1.5">
@@ -83,21 +69,6 @@ export function TopNav({
       </div>
 
       <div className="ml-auto flex items-center gap-3">
-        <div className="flex items-center gap-2 rounded-lg bg-[#1c1c22] px-3 py-2">
-          <span className="text-[#7a7a88]">
-            <SearchIcon />
-          </span>
-          <input
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value)
-              onSearch(e.target.value)
-            }}
-            placeholder="Search bookings, events, and more"
-            className="w-64 bg-transparent text-[13px] text-white outline-none placeholder:text-[#7a7a88]"
-          />
-        </div>
-
         <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#1d2a5c] text-[12px] font-bold text-white" title="Merchant: Dr. Rao's Clinic">
           DR
         </span>

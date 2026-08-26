@@ -88,14 +88,14 @@ export function eventCategory(event: BookingEvent): EventCategory {
 }
 
 /** A coarse, display-only status derived from the last significant event for a booking — not a re-implementation of `fold()`. */
-export function bookingStatusLabel(events: readonly BookingEvent[]): { label: string; tone: 'good' | 'warning' | 'critical' | 'neutral' } {
+export function bookingStatusLabel(events: readonly BookingEvent[]): { label: string; tone: 'good' | 'warning' | 'critical' | 'neutral' | 'blue' } {
   const byType = new Map<string, BookingEvent>()
   for (const e of events) byType.set(e.type, e)
 
   if (byType.has('NO_SHOW_CHARGED')) return { label: 'No-show charged', tone: 'critical' }
   if (byType.has('BOOKING_COMPLETED')) return { label: 'Completed', tone: 'good' }
   if (byType.has('MERCHANT_DECLINED')) return { label: 'Declined by merchant', tone: 'critical' }
-  if (byType.has('CANCELLED_BY_CUSTOMER')) return { label: 'Cancelled', tone: 'neutral' }
+  if (byType.has('CANCELLED_BY_CUSTOMER')) return { label: 'Cancelled', tone: 'blue' }
   if (byType.has('NO_SHOW_ELIGIBLE')) return { label: 'No-show eligible', tone: 'warning' }
   if (byType.has('BOOKING_CONFIRMED')) return { label: 'Confirmed', tone: 'good' }
   if (byType.has('HOLD_EXPIRED')) return { label: 'Hold expired', tone: 'neutral' }

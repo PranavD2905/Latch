@@ -79,22 +79,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[var(--bg)] pb-24">
-      <TopNav
-        section={section}
-        onSection={setSection}
-        refusalCount={refusalCount}
-        onSearch={(query) => {
-          setSection('audits')
-          setTab('events')
-          // Global search has no field dropdown of its own — guess it from
-          // the query's shape: SCREAMING_SNAKE_CASE reads as an event type,
-          // "bkg_"/"evt_" prefixes as their respective ids, anything else
-          // falls back to booking id (the common case).
-          const looksLikeType = /^[A-Z][A-Z0-9_]*$/.test(query.trim())
-          const searchField = looksLikeType ? 'type' : query.startsWith('evt_') ? 'eventId' : 'bookingId'
-          setFilters((f) => ({ ...f, search: query, searchField }))
-        }}
-      />
+      <TopNav section={section} onSection={setSection} refusalCount={refusalCount} />
 
       {/* secondary bar */}
       <header className="flex items-center justify-between border-b border-[var(--border)] bg-[var(--surface)] px-6 py-3.5">

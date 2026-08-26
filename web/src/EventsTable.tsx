@@ -1,5 +1,6 @@
 import { Fragment, useState } from 'react'
 import { EnforcedByBadge } from './EnforcedByBadge'
+import { StatusIcon } from './StatusIcon'
 import { RAZORPAY_MDR_RATE } from './totals'
 import type { BookingEvent, BoundEnforcer } from './types'
 import { eventCategory, formatRupees, shortId } from './types'
@@ -156,7 +157,7 @@ export function EventsTable({ events }: { events: readonly BookingEvent[] }) {
 
             return (
               <Fragment key={event.eventId}>
-                <tr className={`border-b border-[var(--border)] ${isRefused ? 'bg-[var(--critical-bg)]' : 'hover:bg-[var(--bg)]'}`}>
+                <tr className="border-b border-[var(--border)] hover:bg-[var(--bg)]">
                   <td className="px-6 py-3">
                     <span className="flex items-center gap-2 font-mono font-semibold text-[var(--text)]">
                       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${CATEGORY_DOT[category]}`} />
@@ -172,8 +173,9 @@ export function EventsTable({ events }: { events: readonly BookingEvent[] }) {
                   </td>
                   <td className="px-3 py-3">
                     {isRefused ? (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-[var(--critical)] px-2.5 py-1 text-[11px] font-semibold text-white">
-                        ⓧ Refused
+                      <span className="inline-flex items-center gap-1 rounded-full bg-[var(--critical-bg)] px-2.5 py-1 text-[11px] font-semibold text-[var(--critical-text)]">
+                        <StatusIcon />
+                        Refused
                       </span>
                     ) : enforcedBy ? (
                       <EnforcedByBadge enforcedBy={enforcedBy} compact />
@@ -184,7 +186,7 @@ export function EventsTable({ events }: { events: readonly BookingEvent[] }) {
                   <td className="px-6 py-3 text-right">
                     <button
                       onClick={() => setExpanded(isOpen ? null : event.eventId)}
-                      className="font-medium text-[var(--blue-text)] hover:underline"
+                      className="font-medium text-[var(--blue)] hover:underline"
                     >
                       Details {isOpen ? '⌃' : '›'}
                     </button>

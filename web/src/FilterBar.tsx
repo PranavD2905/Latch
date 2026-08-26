@@ -43,7 +43,7 @@ function ChevronDown() {
   )
 }
 
-const PILL = 'flex items-center gap-1.5 rounded-lg border border-dashed border-[var(--border-strong)] bg-white px-3 py-2 text-[13px] text-[var(--text)]'
+const PILL = 'flex items-center gap-1.5 rounded-lg border border-[var(--border-strong)] bg-white px-3.5 py-2.5 text-[14px] text-[var(--text)]'
 
 export function FilterBar({
   tab,
@@ -85,13 +85,13 @@ export function FilterBar({
         <>
           {/* category pills + search */}
           <div className="flex flex-wrap items-center justify-between gap-3 px-6 pt-4">
-            <div className="flex items-center gap-1 rounded-lg bg-[var(--slate-bg)] p-1">
+            <div className="flex items-center gap-7">
               {CATEGORY_PILLS.map((p) => (
                 <button
                   key={p.key}
                   onClick={() => onFilters({ ...filters, category: p.key })}
-                  className={`rounded-md px-3 py-1.5 text-[13px] font-medium transition ${
-                    filters.category === p.key ? 'bg-white text-[var(--text)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+                  className={`text-[15px] transition ${
+                    filters.category === p.key ? 'font-semibold text-[var(--text)]' : 'font-medium text-[var(--text-muted)] hover:text-[var(--text)]'
                   }`}
                 >
                   {p.label}
@@ -99,19 +99,19 @@ export function FilterBar({
               ))}
             </div>
 
-            <div className="flex items-center gap-2 rounded-lg border border-[var(--border-strong)] bg-white pl-3 pr-1.5">
+            <div className="flex items-center gap-2.5 rounded-lg bg-[var(--slate-bg)] pl-3.5 pr-3">
               <SearchIcon />
               <input
                 value={filters.search}
                 onChange={(e) => onFilters({ ...filters, search: e.target.value })}
                 placeholder="Search"
-                className="w-40 py-2 text-[13px] outline-none placeholder:text-[var(--text-faint)]"
+                className="w-40 bg-transparent py-2.5 text-[14px] outline-none placeholder:text-[var(--text-faint)]"
               />
-              <div className="h-5 w-px bg-[var(--border)]" />
+              <div className="h-5 w-px bg-[var(--border-strong)]" />
               <select
                 value={filters.searchField}
                 onChange={(e) => onFilters({ ...filters, searchField: e.target.value as SearchField })}
-                className="appearance-none bg-transparent py-2 pl-1.5 pr-1 text-[13px] text-[var(--text-muted)] outline-none"
+                className="appearance-none bg-transparent py-2.5 pl-1.5 pr-1 text-[14px] font-medium text-[var(--text-muted)] outline-none"
               >
                 <option value="bookingId">in Booking ID</option>
                 <option value="eventId">in Event ID</option>

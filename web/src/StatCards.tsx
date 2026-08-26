@@ -25,14 +25,6 @@ function AlertIcon() {
     </svg>
   )
 }
-function ChevronIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="m9 18 6-6-6-6" />
-    </svg>
-  )
-}
-
 function MiniCard({
   icon,
   label,
@@ -52,12 +44,11 @@ function MiniCard({
       onClick={onClick}
       className="flex flex-1 flex-col gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 text-left transition hover:border-[var(--border-strong)] hover:shadow-sm"
     >
-      <div className="flex items-center justify-between text-[var(--text-muted)]">
+      <div className="flex items-center text-[var(--text-muted)]">
         <span className="flex items-center gap-1.5 text-[13px] font-medium">
           {icon}
           {label}
         </span>
-        <ChevronIcon />
       </div>
       <div className="font-mono text-2xl font-semibold tabular-nums text-[var(--text)]">{value}</div>
       <div className="text-[13px] text-[var(--text-muted)]">{sub}</div>

@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { StatusIcon } from './StatusIcon'
 import { computeTotals } from './totals'
 import type { BookingEvent } from './types'
 import { bookingStatusLabel, formatRupees, shortId } from './types'
@@ -12,6 +13,7 @@ const TONE_CLASS: Record<string, string> = {
   warning: 'bg-[var(--warning-bg)] text-[var(--warning-text)]',
   critical: 'bg-[var(--critical-bg)] text-[var(--critical-text)]',
   neutral: 'bg-[var(--slate-bg)] text-[var(--slate)]',
+  blue: 'bg-[var(--blue-bg)] text-[var(--blue-text)]',
 }
 
 interface BookingRow {
@@ -82,7 +84,10 @@ export function BookingsTable({ events }: { events: readonly BookingEvent[] }) {
               <td className="px-3 py-3 whitespace-nowrap font-mono text-[var(--text-muted)]">{timeLabel(row.lastActivityAt)}</td>
               <td className="px-3 py-3 font-mono font-semibold text-[var(--text)]">{formatRupees(row.netCustomerCostPaise)}</td>
               <td className="px-6 py-3">
-                <span className={`inline-block rounded-full px-2.5 py-1 text-[11px] font-semibold ${TONE_CLASS[row.status.tone]}`}>{row.status.label}</span>
+                <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold ${TONE_CLASS[row.status.tone]}`}>
+                  <StatusIcon />
+                  {row.status.label}
+                </span>
               </td>
             </tr>
           ))}
