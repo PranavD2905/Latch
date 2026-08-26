@@ -6,6 +6,7 @@ import { getPolicy, NoActivePolicyError } from '../../app/get-policy.js'
 import { BookingNotMarkableError, BookingNotFoundError as MarkBookingNotFoundError, markNoShow } from '../../app/mark-no-show.js'
 import { setPolicy, type SetPolicyCommand } from '../../app/set-policy.js'
 import type { AppDeps } from '../../app/types.js'
+import { recordWebhookFailure } from '../../app/webhook-dead-letter.js'
 import { PolicyValidationError } from '../../domain/policy-validation.js'
 import { PolicyVersionConflictError } from '../../ports/catalog-repo.js'
 import type { MerchantAuthStore } from '../../ports/merchant-auth.js'
@@ -172,6 +173,17 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
       return await reply.code(200).send({ ok: true, ...result })
     } catch (err) {
       await deps.idempotencyStore.release('razorpay_webhook', idempotencyKey)
+
+      // dev-logs/016. A delivery that keeps failing the same way is not a
+      // shape Razorpay's own retry schedule can fix by itself — past
+      // `WEBHOOK_MAX_ATTEMPTS`, ack it (200) so Razorpay stops redelivering
+      // and record it as dead-lettered instead of hammering forever; under
+      // that budget, still 500 so the existing safe-replay retry keeps
+      // working the problem exactly as it already did before this session.
+      const { deadLettered } = await recordWebhookFailure(idempotencyKey, { event: payload.event, entityId, payload, error: err }, deps)
+      if (deadLettered) {
+        return reply.code(200).send({ ok: true, deadLettered: true })
+      }
       throw err
     }
   })

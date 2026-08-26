@@ -146,3 +146,67 @@ Four gaps, each fixed at the code level rather than only documented:
 Migration 0011 (real multi-tenant auth, above) is the fifth item from that same review — folded into its
 own section rather than listed here because it changed the auth model, not just a performance
 characteristic.
+
+## Scalability hardening, round 2 — an SDE3-style architecture review (dev-logs/016)
+
+Genuinely new, built:
+
+- **A circuit breaker on the reconciliation worker's own outbound Razorpay calls**
+  (`src/app/circuit-breaker.ts`). Before this, a degraded or fully-down Razorpay meant every open
+  booking, every 60s tick, made a doomed call — from every replica the advisory lock above lets run.
+  Three consecutive failures opens it; calls are refused locally (no network attempt) for a 2-minute
+  cooldown, then one half-open probe decides whether to close again. One instance per process, in-memory
+  — the same "no second datastore for something this low-frequency" reasoning as §9 of
+  `02-tech-stack.md`, and it doesn't need to survive a restart (a fresh process re-learns "Razorpay is
+  down" on its very next failed call).
+- **Webhook dead-lettering** (`webhook_dead_letters` table, migration 0012). `POST /webhooks/razorpay`
+  (dev-logs/014) already retried safely on failure; what it had no answer for was a delivery that fails
+  the *same way* every time — a bug, a malformed payload, an order that no longer resolves — where
+  Razorpay's own redelivery schedule alone would retry it forever with nothing to show for it. Five
+  consecutive failures on the same delivery now stops asking Razorpay to retry (a 200, not another 500)
+  and records it durably instead.
+
+Evaluated and reaffirmed, not rebuilt — see the doc named for each:
+
+- **No Redis / job queue** — `02-tech-stack.md` §9's addendum. The advisory-lock mechanism above already
+  gives safe multi-replica background jobs; a queue would be new infrastructure solving an
+  already-solved problem.
+- **Read replicas** — genuinely not provisioned this session, deliberately. `client.ts`'s
+  `DB_TRANSACTION_POOLER`/`idle_timeout`/`max_lifetime` flags (above) already make the app code ready to
+  sit behind a pooler or route reads elsewhere; actually standing up a second Postgres instance is real
+  infrastructure spend and a topology change to the three-service model this doc describes, which is the
+  user's call to make, not a background-hardening session's.
+- **Event-table partitioning** — `05-cost-model.md`'s Tier 3 section. Plan made concrete (partition by
+  `merchant_id`, now that it's a real column) rather than built against data that doesn't exist yet to
+  validate it.
+- **A formal outbox table**, **snapshotting/read-models** — `04-features-and-limitations.md` §2.2.
+- **A merchant-wide hold-rate ceiling** (on top of the existing per-agent one) —
+  `04-features-and-limitations.md` §2.2.
+
+Also built, extending Slice 8's real-concurrency-test discipline rather than a new category of testing:
+`src/app/chaos-payment-outage.integration.test.ts` drives a genuine partial payment-provider outage
+through `confirm_with_deposit` itself (deposit capture succeeds, the concurrent no-show-authorization
+call fails) and proves the actual recovery path — the webhook, not the periodic reconciliation
+pass — closes it. This is the first test to exercise that specific gap-1 shape through the real command
+rather than by calling the reconciliation primitives directly.
+
+## Local development needs two Postgres clusters, not one
+
+`package.json`'s `test`/`test:watch` scripts point at `postgres://latch:latch@localhost:5433/latch_test`
+(commit `746573a`, isolating test runs from the real dev database) — but nothing in this repo ever
+provisions port 5433 itself. A fresh checkout, or a fresh machine, needs a **second**, genuinely separate
+local Postgres instance beyond the normal dev one on 5432:
+
+```
+initdb -D ~/.latch-test-pg-data -U latch --auth=trust
+# edit ~/.latch-test-pg-data/postgresql.conf: port = 5433
+pg_ctl -D ~/.latch-test-pg-data -l ~/.latch-test-pg-data/server.log start
+createdb -h localhost -p 5433 -U latch latch_test
+DATABASE_URL=postgres://latch:latch@localhost:5433/latch_test npm run db:migrate
+DATABASE_URL=postgres://latch:latch@localhost:5433/latch_test npm run db:seed
+```
+
+On macOS with Postgres.app (this project's existing preference over Docker for Postgres, dev-logs/003),
+the binaries above live under `/Applications/Postgres.app/Contents/Versions/<version>/bin` rather than on
+`PATH` by default. Dev-logs/016 hit this cold — `npm test` failing with `ECONNREFUSED` on a fresh attempt
+at this repo is this gap, not a code problem.

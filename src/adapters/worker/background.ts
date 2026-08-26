@@ -47,9 +47,12 @@ async function tick(): Promise<void> {
     // this file stays "the one process for periodic, non-authorisation-lapse
     // background work," same reasoning docs/07-deployment.md already gives for
     // combining hold-expiry and no-show-eligibility.
-    const { mismatchedBookingIds } = await runReconciliationWorker(deps)
+    const { mismatchedBookingIds, circuitOpen } = await runReconciliationWorker(deps)
     if (mismatchedBookingIds.length > 0) {
       console.log(`background worker: RECONCILIATION_MISMATCH for ${mismatchedBookingIds.length} booking(s): ${mismatchedBookingIds.join(', ')}`)
+    }
+    if (circuitOpen) {
+      console.error('background worker: circuit open — Razorpay looks down, this tick skipped some or all remaining reconciliation checks rather than hammering it')
     }
   })
 }

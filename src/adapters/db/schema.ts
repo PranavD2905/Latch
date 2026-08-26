@@ -258,6 +258,19 @@ export const idempotencyKeys = pgTable(
   (table) => [unique('idempotency_keys_scope_key_unique').on(table.scope, table.key)],
 )
 
+/** dev-logs/016 — see `src/ports/webhook-dead-letter-store.ts` for why this exists. */
+export const webhookDeadLetters = pgTable('webhook_dead_letters', {
+  idempotencyKey: text('idempotency_key').primaryKey(),
+  event: text('event').notNull(),
+  entityId: text('entity_id').notNull(),
+  payload: jsonb('payload').notNull(),
+  lastError: text('last_error').notNull(),
+  attemptCount: integer('attempt_count').notNull(),
+  firstFailedAt: timestamp('first_failed_at', { withTimezone: true }).notNull(),
+  lastFailedAt: timestamp('last_failed_at', { withTimezone: true }).notNull(),
+  deadLetteredAt: timestamp('dead_lettered_at', { withTimezone: true }),
+})
+
 export const practitionersRelations = relations(practitioners, ({ one }) => ({
   merchant: one(merchants, { fields: [practitioners.merchantId], references: [merchants.merchantId] }),
 }))

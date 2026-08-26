@@ -30,9 +30,12 @@ const intervalMs = Number(process.env['RECONCILIATION_WORKER_INTERVAL_MS'] ?? 60
 // outbound Razorpay calls per candidate) — see `advisory-lock.ts`.
 async function tick(): Promise<void> {
   await withGlobalLock(sql, 'latch:background-worker-tick', async () => {
-    const { mismatchedBookingIds } = await runReconciliationWorker(deps)
+    const { mismatchedBookingIds, circuitOpen } = await runReconciliationWorker(deps)
     if (mismatchedBookingIds.length > 0) {
       console.log(`reconciliation worker: RECONCILIATION_MISMATCH for ${mismatchedBookingIds.length} booking(s): ${mismatchedBookingIds.join(', ')}`)
+    }
+    if (circuitOpen) {
+      console.error('reconciliation worker: circuit open — Razorpay looks down, this tick skipped some or all remaining checks rather than hammering it')
     }
   })
 }

@@ -7,10 +7,13 @@ import { createDbClient } from '../adapters/db/client.js'
 import { PostgresCatalogRepo } from '../adapters/db/postgres-catalog-repo.js'
 import { PostgresEventStore } from '../adapters/db/postgres-event-store.js'
 import { PostgresIdempotencyStore } from '../adapters/db/postgres-idempotency-store.js'
+import { CircuitBreaker } from './circuit-breaker.js'
+import { PostgresWebhookDeadLetterStore } from '../adapters/db/postgres-webhook-dead-letter-store.js'
 import { bookings, events } from '../adapters/db/schema.js'
 import { SEED_MERCHANT_ID, SEED_PRACTITIONER_ID, SEED_SERVICE_ID } from '../adapters/db/seed-data.js'
 import { FakePaymentProvider } from '../adapters/payment/fake-payment-provider.js'
 import { FakePaymentRail } from '../adapters/payment/fake-payment-rail.js'
+import type { PaymentProvider } from '../ports/payment-provider.js'
 import { confirmWithDeposit } from './confirm-with-deposit.js'
 import { getPolicy } from './get-policy.js'
 import { holdSlot } from './hold-slot.js'
@@ -33,6 +36,8 @@ const deps: AppDeps = {
   paymentProvider,
   paymentRail,
   idempotencyStore: new PostgresIdempotencyStore(db),
+  reconciliationCircuitBreaker: new CircuitBreaker({ name: 'test', clock, failureThreshold: 3, cooldownMs: 2 * 60_000 }),
+  webhookDeadLetterStore: new PostgresWebhookDeadLetterStore(db),
   merchantId: SEED_MERCHANT_ID,
 }
 
@@ -125,5 +130,89 @@ describe('reconciliation worker (real Postgres) — dev-logs/014 item 1, externa
     const { bookingId, paymentId } = await confirmedBooking('10:30')
     const { mismatch } = await reconcileObservedPayment(bookingId, { razorpayId: paymentId, status: 'captured', amountPaise: toPaise(30000) }, deps)
     expect(mismatch).toBe(false)
+  })
+
+  // dev-logs/016: the review's "resilient queue... circuit breaker" ask,
+  // applied to this worker's own outbound Razorpay calls rather than a new
+  // message-queue dependency (docs/02-tech-stack.md §9's "no Redis" reasoning
+  // still applies — see the dev log).
+  describe('the reconciliation circuit breaker', () => {
+    it('stops calling a Razorpay that keeps failing, and never records a failed check as a mismatch', async () => {
+      let calls = 0
+      const flakyProvider: PaymentProvider = {
+        captureDeposit: (p) => paymentProvider.captureDeposit(p),
+        refundDeposit: (p) => paymentProvider.refundDeposit(p),
+        fetchPaymentStatus: async (paymentId) => {
+          calls++
+          throw new Error(`simulated Razorpay outage for ${paymentId}`)
+        },
+      }
+      const localClock = new FrozenClock(clock.now())
+      const breaker = new CircuitBreaker({ name: 'test-outage', clock: localClock, failureThreshold: 3, cooldownMs: 5 * 60_000 })
+      const breakerDeps: AppDeps = { ...deps, clock: localClock, paymentProvider: flakyProvider, reconciliationCircuitBreaker: breaker }
+
+      const bookingId = (await confirmedBooking('11:00')).bookingId
+
+      // Deterministically open the breaker first, sequentially, rather than
+      // relying on this one candidate's own call to be what trips it — the
+      // point of this test is "what does the worker do with an *already*
+      // open circuit," not "does N concurrent candidates' raciness happen to
+      // trip it inside one tick," which is real but a separate, much
+      // noisier claim to pin down deterministically.
+      await expect(breaker.execute(() => Promise.reject(new Error('priming failure 1')))).rejects.toThrow()
+      await expect(breaker.execute(() => Promise.reject(new Error('priming failure 2')))).rejects.toThrow()
+      await expect(breaker.execute(() => Promise.reject(new Error('priming failure 3')))).rejects.toThrow()
+      expect(breaker.currentState).toBe('open')
+
+      const result = await runReconciliationWorker(breakerDeps)
+
+      expect(result.circuitOpen).toBe(true)
+      // The circuit was already open before the tick started — this
+      // candidate's check never even attempted the network call.
+      expect(calls).toBe(0)
+      // A failed/skipped check is not a disagreement, it's an unanswered
+      // question — this worker's whole point is never to guess.
+      expect(result.mismatchedBookingIds).not.toContain(bookingId)
+
+      // Not a permanent kill switch: once the cooldown elapses and Razorpay
+      // is healthy again (the same breaker instance, the real non-flaky
+      // `paymentProvider`), the very next tick recovers on its own.
+      localClock.advance(5 * 60_000 + 1)
+      const { circuitOpen: stillOpen, mismatchedBookingIds: recovered } = await runReconciliationWorker({ ...breakerDeps, paymentProvider })
+      expect(stillOpen).toBe(false)
+      expect(recovered).not.toContain(bookingId) // healthy booking, real match — nothing to report either way
+    })
+
+    it("one candidate's failing Razorpay call does not discard another candidate's already-good result in the same tick", async () => {
+      const { bookingId: healthyBookingId, paymentId } = await confirmedBooking('13:30')
+      const { bookingId: mismatchedBookingId, paymentId: refundedPaymentId } = await confirmedBooking('14:00')
+      // A real drift Razorpay would actually report, on the second booking only.
+      await deps.paymentProvider.refundDeposit({ paymentId: refundedPaymentId, amountPaise: toPaise(30000), idempotencyKey: freshKey(), reference: mismatchedBookingId })
+
+      const realStatus = paymentProvider.fetchPaymentStatus.bind(paymentProvider)
+      const flakyProvider: PaymentProvider = {
+        captureDeposit: (p) => paymentProvider.captureDeposit(p),
+        refundDeposit: (p) => paymentProvider.refundDeposit(p),
+        fetchPaymentStatus: async (id) => {
+          if (id === paymentId) throw new Error('simulated one-off failure for the healthy booking only')
+          return realStatus(id)
+        },
+      }
+      const localClock = new FrozenClock(clock.now())
+      const partialFailureDeps: AppDeps = {
+        ...deps,
+        clock: localClock,
+        paymentProvider: flakyProvider,
+        // A high threshold — this single failure must never trip the
+        // breaker; it's testing per-candidate isolation, not the breaker.
+        reconciliationCircuitBreaker: new CircuitBreaker({ name: 'test-partial', clock: localClock, failureThreshold: 10, cooldownMs: 60_000 }),
+      }
+
+      const { mismatchedBookingIds, circuitOpen } = await runReconciliationWorker(partialFailureDeps)
+
+      expect(circuitOpen).toBe(false)
+      expect(mismatchedBookingIds).toContain(mismatchedBookingId)
+      expect(mismatchedBookingIds).not.toContain(healthyBookingId)
+    })
   })
 })

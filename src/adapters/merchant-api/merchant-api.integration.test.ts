@@ -3,19 +3,22 @@ import { eq } from 'drizzle-orm'
 import type Razorpay from 'razorpay'
 import { ulid } from 'ulid'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { CircuitBreaker } from '../../app/circuit-breaker.js'
 import { confirmWithDeposit } from '../../app/confirm-with-deposit.js'
 import { getPolicy } from '../../app/get-policy.js'
 import { holdSlot } from '../../app/hold-slot.js'
 import type { SetPolicyCommand } from '../../app/set-policy.js'
 import type { AppDeps } from '../../app/types.js'
+import { WEBHOOK_MAX_ATTEMPTS } from '../../app/webhook-dead-letter.js'
 import { FrozenClock } from '../clock/frozen-clock.js'
 import { createDbClient } from '../db/client.js'
 import { PostgresCatalogRepo } from '../db/postgres-catalog-repo.js'
 import { PostgresEventStore } from '../db/postgres-event-store.js'
 import { PostgresIdempotencyStore } from '../db/postgres-idempotency-store.js'
 import { PostgresMerchantAuthStore } from '../db/postgres-merchant-auth.js'
-import { bookings, events, merchantCredentials, merchants, policies } from '../db/schema.js'
+import { bookings, events, merchantCredentials, merchants, policies, webhookDeadLetters } from '../db/schema.js'
 import { deletePoliciesForTest } from '../db/policy-test-cleanup.js'
+import { PostgresWebhookDeadLetterStore } from '../db/postgres-webhook-dead-letter-store.js'
 import { SEED_MERCHANT_ID, SEED_PRACTITIONER_ID, SEED_SERVICE_ID } from '../db/seed-data.js'
 import { FakePaymentProvider } from '../payment/fake-payment-provider.js'
 import { FakePaymentRail } from '../payment/fake-payment-rail.js'
@@ -43,6 +46,8 @@ const deps: AppDeps = {
   paymentRail: new FakePaymentRail(),
   idempotencyStore: new PostgresIdempotencyStore(db),
   merchantId: SEED_MERCHANT_ID,
+  reconciliationCircuitBreaker: new CircuitBreaker({ name: 'test', clock, failureThreshold: 3, cooldownMs: 2 * 60_000 }),
+  webhookDeadLetterStore: new PostgresWebhookDeadLetterStore(db),
 }
 
 const app = createMerchantApiServer(deps, { merchantAuthStore })
@@ -429,6 +434,58 @@ describe('POST /webhooks/razorpay — dev-logs/014 item 2, signature-verified an
 
     const trailAfterReplay = await db.select().from(events).where(eq(events.bookingId, held.bookingId))
     expect(trailAfterReplay.filter((e) => e.type === 'RECONCILIATION_MISMATCH')).toHaveLength(1)
+  })
+
+  // dev-logs/016: a delivery that fails the *same way* every single time —
+  // not a transient blip a normal Razorpay redelivery would outlive.
+  // `amount: 12.5` is a payload no real Razorpay webhook would ever send
+  // (money is always integer paise), chosen specifically because it's
+  // deterministic: `toPaise` throws every time, on every identical
+  // redelivery, unlike trying to simulate a real flaky network call.
+  it('dead-letters a delivery that fails the same way WEBHOOK_MAX_ATTEMPTS times in a row, then stops asking Razorpay to retry it', async () => {
+    const held = await holdSlot(
+      { agentId: `agent_${ulid()}`, practitionerId: SEED_PRACTITIONER_ID, serviceId: SEED_SERVICE_ID, startsAt: slotAt('17:00'), idempotencyKey: freshKey() },
+      deps,
+    )
+    createdBookingIds.push(held.bookingId)
+
+    const orderId = `order_${ulid()}`
+    orderNotesById.set(orderId, { bookingId: held.bookingId })
+    const entityId = `pay_${ulid()}`
+    const body = {
+      event: 'payment.captured',
+      payload: { payment: { entity: { id: entityId, order_id: orderId, status: 'captured', amount: 12.5 } } },
+    }
+    const { payload, signature } = signedWebhookRequest(body)
+
+    const deliver = () => webhookApp.inject({ method: 'POST', url: '/webhooks/razorpay', headers: { 'content-type': 'application/json', 'x-razorpay-signature': signature }, payload })
+
+    for (let attempt = 1; attempt < WEBHOOK_MAX_ATTEMPTS; attempt++) {
+      const response = await deliver()
+      expect(response.statusCode).toBe(500) // still under budget — Razorpay's own redelivery is still the right thing to keep happening
+    }
+
+    const finalAttempt = await deliver()
+    expect(finalAttempt.statusCode).toBe(200)
+    expect(finalAttempt.json()).toMatchObject({ ok: true, deadLettered: true })
+
+    // Once dead-lettered, a further redelivery (Razorpay would in fact stop
+    // sending more once it sees a 2xx, but a straggler in flight is
+    // possible) is acknowledged the same way, not resurrected into another
+    // 500.
+    const afterDeadLetter = await deliver()
+    expect(afterDeadLetter.statusCode).toBe(200)
+    expect(afterDeadLetter.json()).toMatchObject({ ok: true, deadLettered: true })
+
+    const [row] = await db.select().from(webhookDeadLetters).where(eq(webhookDeadLetters.idempotencyKey, `payment.captured:${entityId}`))
+    expect(row?.deadLetteredAt).not.toBeNull()
+    expect(row?.attemptCount).toBeGreaterThanOrEqual(WEBHOOK_MAX_ATTEMPTS)
+    expect(row?.lastError).toMatch(/InvalidMoneyError|12\.5/)
+
+    // Never auto-repaired into a mismatch — a delivery this handler could
+    // never even parse never reached the reconciliation comparison at all.
+    const trail = await db.select().from(events).where(eq(events.bookingId, held.bookingId))
+    expect(trail.some((e) => e.type === 'RECONCILIATION_MISMATCH')).toBe(false)
   })
 })
 

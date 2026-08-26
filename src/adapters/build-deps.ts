@@ -1,4 +1,5 @@
 import Razorpay from 'razorpay'
+import { CircuitBreaker } from '../app/circuit-breaker.js'
 import type { AppDeps } from '../app/types.js'
 import type { MerchantAuthStore } from '../ports/merchant-auth.js'
 import type { PaymentProvider } from '../ports/payment-provider.js'
@@ -9,6 +10,7 @@ import { PostgresCatalogRepo } from './db/postgres-catalog-repo.js'
 import { PostgresEventStore } from './db/postgres-event-store.js'
 import { PostgresIdempotencyStore } from './db/postgres-idempotency-store.js'
 import { PostgresMerchantAuthStore } from './db/postgres-merchant-auth.js'
+import { PostgresWebhookDeadLetterStore } from './db/postgres-webhook-dead-letter-store.js'
 import { SEED_MERCHANT_ID } from './db/seed-data.js'
 import { FakePaymentProvider } from './payment/fake-payment-provider.js'
 import { FakePaymentRail } from './payment/fake-payment-rail.js'
@@ -76,14 +78,25 @@ export function buildMerchantAuthStore(db: Db): MerchantAuthStore {
 }
 
 export function buildAppDeps(db: Db): AppDeps {
+  const clock = new SystemClock()
   return {
-    clock: new SystemClock(),
+    clock,
     eventStore: new PostgresEventStore(db),
     catalogRepo: new PostgresCatalogRepo(db),
     paymentProvider: buildPaymentProvider(),
     paymentRail: buildPaymentRail(),
     idempotencyStore: new PostgresIdempotencyStore(db),
     merchantId: process.env['MERCHANT_ID'] ?? SEED_MERCHANT_ID,
+    // dev-logs/016. One breaker per process (`buildAppDeps` itself is only
+    // ever called once per entrypoint — see the file-level callers, all
+    // top-level `const deps = buildAppDeps(db)`), shared across every
+    // merchant a given process serves. 3 consecutive failures / 2 minute
+    // cooldown: tight enough that a genuinely down Razorpay stops getting
+    // hit within the same 60s tick it started failing in, loose enough that
+    // this never trips on the kind of one-off blip a single retry would
+    // have absorbed anyway.
+    reconciliationCircuitBreaker: new CircuitBreaker({ name: 'razorpay-reconciliation', clock, failureThreshold: 3, cooldownMs: 2 * 60_000 }),
+    webhookDeadLetterStore: new PostgresWebhookDeadLetterStore(db),
   }
 }
 

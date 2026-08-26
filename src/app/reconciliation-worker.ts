@@ -1,9 +1,20 @@
+import { CircuitOpenError } from './circuit-breaker.js'
 import { mapWithConcurrency } from './concurrency.js'
 import { RECONCILIATION_BATCH_SIZE, appendReconciliationFindings, detectKnownReferenceMismatches } from './reconciliation.js'
 import type { AppDeps } from './types.js'
 
 export interface ReconciliationWorkerResult {
   mismatchedBookingIds: readonly string[]
+  /**
+   * True if `deps.reconciliationCircuitBreaker` was open for at least one
+   * candidate this tick — i.e. Razorpay itself looked down, and this tick
+   * gave up on the rest of its checks rather than confirming that on every
+   * remaining candidate individually. Callers (`background.ts`,
+   * `worker/reconciliation.ts`) log this loudly: it means reconciliation
+   * coverage is temporarily degraded, which is different from "nothing to
+   * report" and should not look the same in the logs.
+   */
+  circuitOpen: boolean
 }
 
 /**
@@ -52,9 +63,30 @@ const RECONCILIATION_CONCURRENCY = 8
 export async function runReconciliationWorker(deps: AppDeps): Promise<ReconciliationWorkerResult> {
   const candidates = await deps.eventStore.listOpenBookingsForReconciliation(RECONCILIATION_BATCH_SIZE)
 
+  let circuitOpen = false
+
   const results = await mapWithConcurrency(candidates, RECONCILIATION_CONCURRENCY, async (candidate) => {
     const history = await deps.eventStore.loadEvents(candidate.bookingId)
-    const findings = await detectKnownReferenceMismatches(candidate, history, deps)
+
+    let findings
+    try {
+      findings = await detectKnownReferenceMismatches(candidate, history, deps)
+    } catch (err) {
+      // A candidate whose Razorpay lookup itself failed — an open circuit
+      // (no network attempt was even made) or a genuine one-off provider
+      // error — never a mismatch (a mismatch is a claim about what Razorpay
+      // said, and Razorpay said nothing here) and never fatal to the rest of
+      // this tick's `Promise.all`: one candidate's failed check must not
+      // discard every other candidate's already-good result. It's simply
+      // skipped — this worker runs every 60s, so it's re-checked next tick,
+      // same as if this tick hadn't happened at all for this one booking.
+      if (err instanceof CircuitOpenError) {
+        circuitOpen = true
+      } else {
+        console.error(`reconciliation worker: check failed for booking ${candidate.bookingId}, will retry next tick: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      return undefined
+    }
     if (findings.length === 0) return undefined
 
     const appended = await appendReconciliationFindings(candidate.bookingId, findings, 'periodic_worker', deps)
@@ -62,5 +94,5 @@ export async function runReconciliationWorker(deps: AppDeps): Promise<Reconcilia
   })
 
   const mismatchedBookingIds = results.filter((id): id is string => id !== undefined)
-  return { mismatchedBookingIds }
+  return { mismatchedBookingIds, circuitOpen }
 }

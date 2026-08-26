@@ -27,7 +27,7 @@ export async function detectKnownReferenceMismatches(candidate: BookingSnapshot,
 
   const deposit = history.find((e): e is DepositCapturedEvent => e.type === 'DEPOSIT_CAPTURED')
   if (deposit?.authority.razorpayPaymentId) {
-    const actual = await deps.paymentProvider.fetchPaymentStatus(deposit.authority.razorpayPaymentId)
+    const actual = await deps.reconciliationCircuitBreaker.execute(() => deps.paymentProvider.fetchPaymentStatus(deposit.authority.razorpayPaymentId!))
     if (actual.status !== 'unknown' && (actual.status !== 'captured' || actual.amountPaise !== deposit.action.amountPaise)) {
       findings.push({
         subject: 'deposit',
@@ -45,7 +45,7 @@ export async function detectKnownReferenceMismatches(candidate: BookingSnapshot,
   // instant it captures, so this worker (scoped to CONFIRMED candidates)
   // never legitimately expects to see one already `captured`.
   if (candidate.authorizationId && candidate.authorizationAmountPaise !== undefined) {
-    const actual = await deps.paymentRail.fetchAuthorizationStatus(candidate.authorizationId)
+    const actual = await deps.reconciliationCircuitBreaker.execute(() => deps.paymentRail.fetchAuthorizationStatus(candidate.authorizationId!))
     if (actual.status !== 'unknown' && (actual.status !== 'authorized' || actual.amountPaise !== candidate.authorizationAmountPaise)) {
       findings.push({
         subject: 'authorization',

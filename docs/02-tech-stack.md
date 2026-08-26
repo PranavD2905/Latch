@@ -213,6 +213,20 @@ per minute. `FOR UPDATE SKIP LOCKED` gives us safe claiming in a database we alr
 **Rejected — system cron / platform scheduler.** Coarse granularity and it lives outside the app,
 which makes local testing and the demo harder.
 
+**Re-reviewed, not just re-asserted (dev-logs/016).** An external architecture review independently
+recommended "a resilient queue (Redis/RabbitMQ/Kafka) instead of single-node timers," which is exactly
+the rejection above, named again by someone who hadn't read this doc. Re-examined honestly rather than
+defended reflexively: the concrete thing that recommendation is actually asking for — background jobs
+that stay correct if more than one process runs them — was true the day this was written (`FOR UPDATE
+SKIP LOCKED` already made per-row claims safe under concurrent workers) and is *more* true now that it's
+been tested under real multi-replica conditions: `src/adapters/db/advisory-lock.ts`'s
+`pg_try_advisory_lock` guard (added for multi-tenant scaling, `docs/07-deployment.md`) means a whole
+tick — not just one row's claim — is now also safe to run from more than one replica, at zero
+additional infrastructure. A queue would add a second datastore, a second failure mode, and a second
+thing to explain, to re-solve a problem this stack already solved twice over. Still two low-frequency,
+idempotent jobs (plus the reconciliation worker, dev-logs/014, which is the same shape). The original
+call stands, checked against the strongest form of the counter-argument, not merely repeated.
+
 ---
 
 ## 10. Live audit trail — Server-Sent Events

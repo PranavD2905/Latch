@@ -6,6 +6,8 @@ import { createDbClient } from '../adapters/db/client.js'
 import { PostgresCatalogRepo } from '../adapters/db/postgres-catalog-repo.js'
 import { PostgresEventStore } from '../adapters/db/postgres-event-store.js'
 import { PostgresIdempotencyStore } from '../adapters/db/postgres-idempotency-store.js'
+import { CircuitBreaker } from './circuit-breaker.js'
+import { PostgresWebhookDeadLetterStore } from '../adapters/db/postgres-webhook-dead-letter-store.js'
 import { bookings, events, idempotencyKeys } from '../adapters/db/schema.js'
 import { SEED_MERCHANT_ID, SEED_PRACTITIONER_ID, SEED_SERVICE_ID } from '../adapters/db/seed-data.js'
 import { ManualCaptureRail } from '../adapters/payment/manual-capture-rail.js'
@@ -99,6 +101,8 @@ describe('decline_booking against real Razorpay test mode', () => {
       paymentProvider: new RazorpayPaymentProvider({ keyId: keyId!, keySecret: keySecret! }),
       paymentRail: new ManualCaptureRail({ keyId: keyId!, keySecret: keySecret! }),
       idempotencyStore: new PostgresIdempotencyStore(db),
+      reconciliationCircuitBreaker: new CircuitBreaker({ name: 'test', clock, failureThreshold: 3, cooldownMs: 2 * 60_000 }),
+      webhookDeadLetterStore: new PostgresWebhookDeadLetterStore(db),
       merchantId: SEED_MERCHANT_ID,
     }
 
