@@ -7,8 +7,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "tsc --noEmit && vitest run",
-    "test:watch": "vitest",
+    "test": "tsc --noEmit && DATABASE_URL=postgres://latch:latch@localhost:5433/latch_test vitest run",
+    "test:watch": "DATABASE_URL=postgres://latch:latch@localhost:5433/latch_test vitest",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "build:web": "npm --prefix web ci && npm --prefix web run build",
