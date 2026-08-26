@@ -82,7 +82,6 @@ export default function App() {
       <TopNav
         section={section}
         onSection={setSection}
-        liveCount={events.length}
         refusalCount={refusalCount}
         onSearch={(query) => {
           setSection('audits')
@@ -107,7 +106,6 @@ export default function App() {
           <span className={`h-2 w-2 rounded-full ${connLabel.dot} ${connection === 'open' ? 'animate-pulse' : ''}`} />
           <span className="font-mono text-[11px] font-semibold tracking-wider text-[var(--text-muted)]">{connLabel.text}</span>
         </div>
-        <div className="font-mono text-[13px] text-[var(--blue-text)]">docs/03-domain-model.md ↗</div>
       </header>
 
       <main className="mx-auto max-w-[1200px] px-6 py-6">

@@ -27,32 +27,6 @@ function SearchIcon() {
     </svg>
   )
 }
-function PulseIcon() {
-  return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 12h4l2 8 4-16 2 8h6" />
-    </svg>
-  )
-}
-function BellIcon() {
-  return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
-      <path d="M13.7 21a2 2 0 0 1-3.4 0" />
-    </svg>
-  )
-}
-function GridIcon() {
-  return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="3" width="7" height="7" rx="1" />
-      <rect x="14" y="3" width="7" height="7" rx="1" />
-      <rect x="3" y="14" width="7" height="7" rx="1" />
-      <rect x="14" y="14" width="7" height="7" rx="1" />
-    </svg>
-  )
-}
-
 const NAV_ITEMS: { key: Section; label: string; icon: (active: boolean) => React.ReactNode }[] = [
   { key: 'audits', label: 'Audits', icon: (a) => <LedgerIcon active={a} /> },
   { key: 'policy', label: 'Policy', icon: (a) => <InstitutionIcon active={a} /> },
@@ -69,13 +43,11 @@ const NAV_ITEMS: { key: Section; label: string; icon: (active: boolean) => React
 export function TopNav({
   section,
   onSection,
-  liveCount,
   refusalCount,
   onSearch,
 }: {
   section: Section
   onSection: (s: Section) => void
-  liveCount: number
   refusalCount: number
   onSearch: (query: string) => void
 }) {
@@ -125,23 +97,6 @@ export function TopNav({
             className="w-64 bg-transparent text-[13px] text-white outline-none placeholder:text-[#7a7a88]"
           />
         </div>
-
-        <button
-          title={`Connection: ${liveCount} events streamed`}
-          className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#1c1c22] text-[#c9c9d4] transition hover:bg-[#2a2a32] hover:text-white"
-        >
-          <PulseIcon />
-        </button>
-        <button
-          title={refusalCount > 0 ? `${refusalCount} refusal${refusalCount === 1 ? '' : 's'} recorded` : 'No refusals recorded'}
-          className="relative flex h-9 w-9 items-center justify-center rounded-lg bg-[#1c1c22] text-[#c9c9d4] transition hover:bg-[#2a2a32] hover:text-white"
-        >
-          <BellIcon />
-          {refusalCount > 0 && <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-[var(--critical)]" />}
-        </button>
-        <button title="Latch — Slice 6" className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#1c1c22] text-[#c9c9d4] transition hover:bg-[#2a2a32] hover:text-white">
-          <GridIcon />
-        </button>
 
         <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#1d2a5c] text-[12px] font-bold text-white" title="Merchant: Dr. Rao's Clinic">
           DR
