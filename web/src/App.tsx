@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { BookingsTable } from './BookingsTable'
 import { EnforcementBreakdown } from './EnforcementBreakdown'
 import { EventsTable } from './EventsTable'
@@ -51,6 +51,15 @@ export default function App() {
     enforcement: 'all',
     types: new Set(),
   })
+  const [eventsPagination, setEventsPagination] = useState({ page: 1, pageSize: 10 })
+  const [bookingsPagination, setBookingsPagination] = useState({ page: 1, pageSize: 10 })
+
+  // A filter change can shrink the result set out from under whatever page the
+  // user was on — reset to page 1 rather than leave them staring at an empty table.
+  useEffect(() => {
+    setEventsPagination((p) => ({ ...p, page: 1 }))
+    setBookingsPagination((p) => ({ ...p, page: 1 }))
+  }, [filters])
 
   const dateScoped = useMemo(() => events.filter((e) => inDateRange(e, filters.dateFrom, filters.dateTo)), [events, filters.dateFrom, filters.dateTo])
 
@@ -139,11 +148,23 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="mt-2">
-                    <EventsTable events={newestFirst} />
+                    <EventsTable
+                      events={newestFirst}
+                      page={eventsPagination.page}
+                      pageSize={eventsPagination.pageSize}
+                      onPageChange={(page) => setEventsPagination((p) => ({ ...p, page }))}
+                      onPageSizeChange={(pageSize) => setEventsPagination({ page: 1, pageSize })}
+                    />
                   </div>
                 )
               ) : (
-                <BookingsTable events={dateScoped} />
+                <BookingsTable
+                  events={dateScoped}
+                  page={bookingsPagination.page}
+                  pageSize={bookingsPagination.pageSize}
+                  onPageChange={(page) => setBookingsPagination((p) => ({ ...p, page }))}
+                  onPageSizeChange={(pageSize) => setBookingsPagination({ page: 1, pageSize })}
+                />
               )}
             </div>
           </>

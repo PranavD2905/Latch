@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { paginate, Pagination } from './Pagination'
 import { StatusIcon } from './StatusIcon'
 import { computeTotals } from './totals'
 import type { BookingEvent } from './types'
@@ -52,47 +53,63 @@ function groupByBooking(events: readonly BookingEvent[]): BookingRow[] {
   return rows.sort((a, b) => (a.lastActivityAt < b.lastActivityAt ? 1 : -1))
 }
 
-export function BookingsTable({ events }: { events: readonly BookingEvent[] }) {
+export function BookingsTable({
+  events,
+  page,
+  pageSize,
+  onPageChange,
+  onPageSizeChange,
+}: {
+  events: readonly BookingEvent[]
+  page: number
+  pageSize: number
+  onPageChange: (page: number) => void
+  onPageSizeChange: (size: number) => void
+}) {
   const rows = useMemo(() => groupByBooking(events), [events])
+  const pageRows = paginate(rows, page, pageSize)
 
   return (
-    <div className="overflow-x-auto">
-      <div className="px-6 pb-3 pt-4 text-[13px] text-[var(--text-muted)]">
-        Showing {rows.length} booking{rows.length === 1 ? '' : 's'}
-      </div>
-      <table className="w-full border-collapse text-left text-[13px]">
-        <thead>
-          <tr className="border-b border-[var(--border)] text-[12px] text-[var(--text-muted)]">
-            <th className="px-6 py-2.5 font-medium">Booking ID</th>
-            <th className="px-3 py-2.5 font-medium">Practitioner / service</th>
-            <th className="px-3 py-2.5 font-medium">Events</th>
-            <th className="px-3 py-2.5 font-medium">Started</th>
-            <th className="px-3 py-2.5 font-medium">Last activity</th>
-            <th className="px-3 py-2.5 font-medium">Net customer cost</th>
-            <th className="px-6 py-2.5 font-medium">Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.bookingId} className="border-b border-[var(--border)] hover:bg-[var(--bg)]">
-              <td className="px-6 py-3 font-mono font-semibold text-[var(--text)]">{shortId(row.bookingId)}</td>
-              <td className="px-3 py-3 font-mono text-[var(--text-muted)]">
-                {shortId(row.practitionerId)} · {shortId(row.serviceId)}
-              </td>
-              <td className="px-3 py-3 tabular-nums text-[var(--text-muted)]">{row.eventCount}</td>
-              <td className="px-3 py-3 whitespace-nowrap font-mono text-[var(--text-muted)]">{timeLabel(row.startedAt)}</td>
-              <td className="px-3 py-3 whitespace-nowrap font-mono text-[var(--text-muted)]">{timeLabel(row.lastActivityAt)}</td>
-              <td className="px-3 py-3 font-mono font-semibold text-[var(--text)]">{formatRupees(row.netCustomerCostPaise)}</td>
-              <td className="px-6 py-3">
-                <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold ${TONE_CLASS[row.status.tone]}`}>
-                  <StatusIcon />
-                  {row.status.label}
-                </span>
-              </td>
+    <div>
+      <div className="overflow-x-auto">
+        <div className="px-6 pb-3 pt-4 text-[13px] text-[var(--text-muted)]">
+          Showing {rows.length} booking{rows.length === 1 ? '' : 's'}
+        </div>
+        <table className="w-full border-collapse text-left text-[13px]">
+          <thead>
+            <tr className="border-b border-[var(--border)] text-[12px] text-[var(--text-muted)]">
+              <th className="px-6 py-2.5 font-medium">Booking ID</th>
+              <th className="px-3 py-2.5 font-medium">Practitioner / service</th>
+              <th className="px-3 py-2.5 font-medium">Events</th>
+              <th className="px-3 py-2.5 font-medium">Started</th>
+              <th className="px-3 py-2.5 font-medium">Last activity</th>
+              <th className="px-3 py-2.5 font-medium">Net customer cost</th>
+              <th className="px-6 py-2.5 font-medium">Status</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {pageRows.map((row) => (
+              <tr key={row.bookingId} className="border-b border-[var(--border)] hover:bg-[var(--bg)]">
+                <td className="px-6 py-3 font-mono font-semibold text-[var(--text)]">{shortId(row.bookingId)}</td>
+                <td className="px-3 py-3 font-mono text-[var(--text-muted)]">
+                  {shortId(row.practitionerId)} · {shortId(row.serviceId)}
+                </td>
+                <td className="px-3 py-3 tabular-nums text-[var(--text-muted)]">{row.eventCount}</td>
+                <td className="px-3 py-3 whitespace-nowrap font-mono text-[var(--text-muted)]">{timeLabel(row.startedAt)}</td>
+                <td className="px-3 py-3 whitespace-nowrap font-mono text-[var(--text-muted)]">{timeLabel(row.lastActivityAt)}</td>
+                <td className="px-3 py-3 font-mono font-semibold text-[var(--text)]">{formatRupees(row.netCustomerCostPaise)}</td>
+                <td className="px-6 py-3">
+                  <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold ${TONE_CLASS[row.status.tone]}`}>
+                    <StatusIcon />
+                    {row.status.label}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <Pagination page={page} pageSize={pageSize} totalCount={rows.length} onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} />
     </div>
   )
 }

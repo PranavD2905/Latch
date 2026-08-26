@@ -1,5 +1,6 @@
 import { Fragment, useState } from 'react'
 import { EnforcedByBadge } from './EnforcedByBadge'
+import { paginate, Pagination } from './Pagination'
 import { StatusIcon } from './StatusIcon'
 import { RAZORPAY_MDR_RATE } from './totals'
 import type { BookingEvent, BoundEnforcer } from './types'
@@ -130,80 +131,93 @@ function DetailPanel({ event }: { event: BookingEvent }) {
   return <div className="rounded-lg bg-[var(--bg)] p-4 font-mono text-xs text-[var(--text-muted)]">{synopsis(event)}</div>
 }
 
-export function EventsTable({ events }: { events: readonly BookingEvent[] }) {
+export function EventsTable({
+  events,
+  page,
+  pageSize,
+  onPageChange,
+  onPageSizeChange,
+}: {
+  events: readonly BookingEvent[]
+  page: number
+  pageSize: number
+  onPageChange: (page: number) => void
+  onPageSizeChange: (size: number) => void
+}) {
   const [expanded, setExpanded] = useState<string | null>(null)
+  const pageEvents = paginate(events, page, pageSize)
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-left text-[13px]">
-        <thead>
-          <tr className="border-b border-[var(--border)] text-[12px] text-[var(--text-muted)]">
-            <th className="px-6 py-2.5 font-medium">Event</th>
-            <th className="px-3 py-2.5 font-medium">Booking</th>
-            <th className="px-3 py-2.5 font-medium">Detail</th>
-            <th className="px-3 py-2.5 font-medium">Occurred on</th>
-            <th className="px-3 py-2.5 font-medium">Amount</th>
-            <th className="px-3 py-2.5 font-medium">Enforcement</th>
-            <th className="px-6 py-2.5 font-medium" />
-          </tr>
-        </thead>
-        <tbody>
-          {events.map((event) => {
-            const category = eventCategory(event)
-            const isRefused = category === 'refused'
-            const amount = amountCell(event)
-            const isOpen = expanded === event.eventId
-            const enforcedBy: BoundEnforcer | undefined = event.bound?.enforcedBy ?? (event.type === 'AUTHORIZATION_HELD' ? 'payment_rail' : undefined)
+    <div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-left text-[13px]">
+          <thead>
+            <tr className="border-b border-[var(--border)] text-[12px] text-[var(--text-muted)]">
+              <th className="px-6 py-2.5 font-medium">Event</th>
+              <th className="px-3 py-2.5 font-medium">Booking</th>
+              <th className="px-3 py-2.5 font-medium">Detail</th>
+              <th className="px-3 py-2.5 font-medium">Occurred on</th>
+              <th className="px-3 py-2.5 font-medium">Amount</th>
+              <th className="px-3 py-2.5 font-medium">Enforcement</th>
+              <th className="px-6 py-2.5 font-medium" />
+            </tr>
+          </thead>
+          <tbody>
+            {pageEvents.map((event) => {
+              const category = eventCategory(event)
+              const isRefused = category === 'refused'
+              const amount = amountCell(event)
+              const isOpen = expanded === event.eventId
+              const enforcedBy: BoundEnforcer | undefined = event.bound?.enforcedBy ?? (event.type === 'AUTHORIZATION_HELD' ? 'payment_rail' : undefined)
 
-            return (
-              <Fragment key={event.eventId}>
-                <tr className="border-b border-[var(--border)] hover:bg-[var(--bg)]">
-                  <td className="px-6 py-3">
-                    <span className="flex items-center gap-2 font-mono font-semibold text-[var(--text)]">
-                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${CATEGORY_DOT[category]}`} />
-                      {isRefused && '⛔ '}
-                      {event.type}
-                    </span>
-                  </td>
-                  <td className="px-3 py-3 font-mono text-[var(--text-muted)]">{shortId(event.bookingId)}</td>
-                  <td className="max-w-[280px] truncate px-3 py-3 text-[var(--text-muted)]">{synopsis(event)}</td>
-                  <td className="px-3 py-3 whitespace-nowrap font-mono text-[var(--text-muted)]">{timeLabel(event.occurredAt)}</td>
-                  <td className={`px-3 py-3 whitespace-nowrap font-mono font-semibold ${amount?.className ?? 'text-[var(--text-faint)]'}`}>
-                    {amount?.text ?? '—'}
-                  </td>
-                  <td className="px-3 py-3">
-                    {isRefused ? (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-[var(--critical-bg)] px-2.5 py-1 text-[11px] font-semibold text-[var(--critical-text)]">
-                        <StatusIcon />
-                        Refused
+              return (
+                <Fragment key={event.eventId}>
+                  <tr className="border-b border-[var(--border)] hover:bg-[var(--bg)]">
+                    <td className="px-6 py-3">
+                      <span className="flex items-center gap-2 font-mono font-semibold text-[var(--text)]">
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${CATEGORY_DOT[category]}`} />
+                        {isRefused && '⛔ '}
+                        {event.type}
                       </span>
-                    ) : enforcedBy ? (
-                      <EnforcedByBadge enforcedBy={enforcedBy} compact />
-                    ) : (
-                      <span className="text-[var(--text-faint)]">—</span>
-                    )}
-                  </td>
-                  <td className="px-6 py-3 text-right">
-                    <button
-                      onClick={() => setExpanded(isOpen ? null : event.eventId)}
-                      className="font-medium text-[var(--blue)] hover:underline"
-                    >
-                      Details {isOpen ? '⌃' : '›'}
-                    </button>
-                  </td>
-                </tr>
-                {isOpen && (
-                  <tr className="border-b border-[var(--border)]">
-                    <td colSpan={7} className="bg-[var(--bg)]/60 px-6 py-4">
-                      <DetailPanel event={event} />
+                    </td>
+                    <td className="px-3 py-3 font-mono text-[var(--text-muted)]">{shortId(event.bookingId)}</td>
+                    <td className="max-w-[280px] truncate px-3 py-3 text-[var(--text-muted)]">{synopsis(event)}</td>
+                    <td className="px-3 py-3 whitespace-nowrap font-mono text-[var(--text-muted)]">{timeLabel(event.occurredAt)}</td>
+                    <td className={`px-3 py-3 whitespace-nowrap font-mono font-semibold ${amount?.className ?? 'text-[var(--text-faint)]'}`}>
+                      {amount?.text ?? '—'}
+                    </td>
+                    <td className="px-3 py-3">
+                      {isRefused ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-[var(--critical-bg)] px-2.5 py-1 text-[11px] font-semibold text-[var(--critical-text)]">
+                          <StatusIcon />
+                          Refused
+                        </span>
+                      ) : enforcedBy ? (
+                        <EnforcedByBadge enforcedBy={enforcedBy} compact />
+                      ) : (
+                        <span className="text-[var(--text-faint)]">—</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-3 text-right">
+                      <button onClick={() => setExpanded(isOpen ? null : event.eventId)} className="font-medium text-[var(--blue)] hover:underline">
+                        Details {isOpen ? '⌃' : '›'}
+                      </button>
                     </td>
                   </tr>
-                )}
-              </Fragment>
-            )
-          })}
-        </tbody>
-      </table>
+                  {isOpen && (
+                    <tr className="border-b border-[var(--border)]">
+                      <td colSpan={7} className="bg-[var(--bg)]/60 px-6 py-4">
+                        <DetailPanel event={event} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      <Pagination page={page} pageSize={pageSize} totalCount={events.length} onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} />
     </div>
   )
 }
