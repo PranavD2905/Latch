@@ -24,6 +24,10 @@ import type {
   ReconciliationMismatchEvent,
   RefundIssuedEvent,
   RetentionAppliedEvent,
+  SessionCompleteAuthorizationHeldEvent,
+  SessionCompleteAuthorizationLapsedEvent,
+  SessionCompleteAuthorizationReleasedEvent,
+  SessionCompleteChargedEvent,
   SlotReleasedEvent,
 } from './events.js'
 
@@ -49,6 +53,9 @@ export const createHoldExpiredEvent = eventFactory<HoldExpiredEvent>('HOLD_EXPIR
 export const createHoldReleasedEvent = eventFactory<HoldReleasedEvent>('HOLD_RELEASED')
 export const createPolicyAcknowledgedEvent = eventFactory<PolicyAcknowledgedEvent>('POLICY_ACKNOWLEDGED')
 export const createAuthorizationHeldEvent = eventFactory<AuthorizationHeldEvent>('AUTHORIZATION_HELD')
+export const createSessionCompleteAuthorizationHeldEvent = eventFactory<SessionCompleteAuthorizationHeldEvent>('SESSION_COMPLETE_AUTHORIZATION_HELD')
+export const createSessionCompleteAuthorizationReleasedEvent = eventFactory<SessionCompleteAuthorizationReleasedEvent>('SESSION_COMPLETE_AUTHORIZATION_RELEASED')
+export const createSessionCompleteAuthorizationLapsedEvent = eventFactory<SessionCompleteAuthorizationLapsedEvent>('SESSION_COMPLETE_AUTHORIZATION_LAPSED')
 export const createBookingConfirmedEvent = eventFactory<BookingConfirmedEvent>('BOOKING_CONFIRMED')
 export const createBookingRescheduledEvent = eventFactory<BookingRescheduledEvent>('BOOKING_RESCHEDULED')
 export const createCancelledByCustomerEvent = eventFactory<CancelledByCustomerEvent>('CANCELLED_BY_CUSTOMER')
@@ -68,3 +75,4 @@ export const createDepositCapturedEvent = eventFactory<DepositCapturedEvent>('DE
 export const createRetentionAppliedEvent = eventFactory<RetentionAppliedEvent>('RETENTION_APPLIED')
 export const createRefundIssuedEvent = eventFactory<RefundIssuedEvent>('REFUND_ISSUED')
 export const createNoShowChargedEvent = eventFactory<NoShowChargedEvent>('NO_SHOW_CHARGED')
+export const createSessionCompleteChargedEvent = eventFactory<SessionCompleteChargedEvent>('SESSION_COMPLETE_CHARGED')

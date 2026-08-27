@@ -74,16 +74,36 @@ export function computeRunningSeries(events: readonly BookingEvent[]): RunningPo
         const amount = event.action?.amountPaise ?? 0
         netCustomerCostPaise += amount
         netMerchantRetentionPaise += amount
-        headroomByBooking.set(event.bookingId, event.bound?.headroomAfterPaise ?? 0)
+        headroomByBooking.set(`${event.bookingId}:no_show`, event.bound?.headroomAfterPaise ?? 0)
+        break
+      }
+      case 'SESSION_COMPLETE_CHARGED': {
+        const amount = event.action?.amountPaise ?? 0
+        netCustomerCostPaise += amount
+        netMerchantRetentionPaise += amount
+        headroomByBooking.set(`${event.bookingId}:session_complete`, event.bound?.headroomAfterPaise ?? 0)
         break
       }
       case 'AUTHORIZATION_HELD': {
-        headroomByBooking.set(event.bookingId, (event['amountPaise'] as number | undefined) ?? 0)
+        // Keyed per leg, not just per booking — a single booking can have
+        // both a no-show ceiling and a session-complete mandate live at
+        // once, and they must be summed independently rather than one
+        // overwriting the other.
+        headroomByBooking.set(`${event.bookingId}:no_show`, (event['amountPaise'] as number | undefined) ?? 0)
+        break
+      }
+      case 'SESSION_COMPLETE_AUTHORIZATION_HELD': {
+        headroomByBooking.set(`${event.bookingId}:session_complete`, (event['amountPaise'] as number | undefined) ?? 0)
         break
       }
       case 'AUTHORIZATION_RELEASED':
       case 'AUTHORIZATION_LAPSED': {
-        headroomByBooking.delete(event.bookingId)
+        headroomByBooking.delete(`${event.bookingId}:no_show`)
+        break
+      }
+      case 'SESSION_COMPLETE_AUTHORIZATION_RELEASED':
+      case 'SESSION_COMPLETE_AUTHORIZATION_LAPSED': {
+        headroomByBooking.delete(`${event.bookingId}:session_complete`)
         break
       }
       default:

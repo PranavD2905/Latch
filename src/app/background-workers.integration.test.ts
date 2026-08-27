@@ -120,7 +120,7 @@ beforeAll(async () => {
     throw new Error('seed data missing — run `npm run db:seed` before this test suite')
   }
   policyHoldTtlSeconds = policy.holdTtlSeconds
-  policyGraceMinutes = policy.noShowGraceMinutes
+  policyGraceMinutes = policy.noShowGraceMinutes ?? 0
 })
 
 afterAll(async () => {

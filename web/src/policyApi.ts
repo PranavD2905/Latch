@@ -1,4 +1,4 @@
-import type { Policy, PolicyDraft } from './policyTypes'
+import type { Policy, PolicyDraft, Service } from './policyTypes'
 
 /**
  * `set_policy`'s UI talks to the merchant API (`src/adapters/merchant-api/`),
@@ -40,4 +40,12 @@ export function fetchActivePolicy(token: string): Promise<{ policy: Policy }> {
 
 export function publishPolicy(token: string, draft: PolicyDraft): Promise<{ policy: Policy }> {
   return request('/policy', token, { method: 'POST', body: JSON.stringify(draft) })
+}
+
+export function fetchServices(token: string): Promise<{ services: Service[] }> {
+  return request('/services', token)
+}
+
+export function updateService(token: string, serviceId: string, patch: { name?: string; durationMinutes?: number; pricePaise?: number }): Promise<{ service: Service }> {
+  return request(`/services/${encodeURIComponent(serviceId)}`, token, { method: 'PATCH', body: JSON.stringify(patch) })
 }

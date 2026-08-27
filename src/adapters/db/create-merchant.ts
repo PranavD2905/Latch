@@ -66,6 +66,7 @@ async function createMerchant(): Promise<void> {
     durationMinutes: Number(durationArg),
     pricePaise: Number(priceArg),
     createdAt: now,
+    updatedAt: now,
   })
 
   await db.insert(policies).values({

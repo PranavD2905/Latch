@@ -32,6 +32,11 @@ export interface BookingSnapshot {
   authorizationExpiresAt: Date | undefined
   /** Set once the authorisation-lapse worker (or a gate check) has observed `authorizationExpiresAt` has passed. Prevents the worker re-emitting `AUTHORIZATION_LAPSED`. */
   authorizationLapsedAt: Date | undefined
+  /** The session-complete mandate — same role as the four `authorization*` fields above, mirrored for the second, independent leg. `sessionCompleteAuthorizationAmountPaise` is `service.pricePaise - policy.depositAmountPaise`, frozen at confirm time. */
+  sessionCompleteAuthorizationId: string | undefined
+  sessionCompleteAuthorizationAmountPaise: Paise | undefined
+  sessionCompleteAuthorizationExpiresAt: Date | undefined
+  sessionCompleteAuthorizationLapsedAt: Date | undefined
   /** Set by the merchant API's mark-no-show route — the second of `charge_no_show`'s two independent facts (docs/03-domain-model.md §3 Rule 3). */
   nonAttendanceMarkedAt: Date | undefined
   /** Set once the no-show-eligibility worker has recorded `NO_SHOW_ELIGIBLE` — an idempotency marker only, never gates `charge_no_show`. */
@@ -179,6 +184,9 @@ export interface EventStore {
    * The authorisation-lapse worker's input — docs/01-architecture.md §8.
    */
   listConfirmedBookingsWithExpiredAuthorization(now: Date): Promise<readonly BookingSnapshot[]>
+
+  /** Same as `listConfirmedBookingsWithExpiredAuthorization`, for the session-complete leg — the authorisation-lapse worker sweeps both. */
+  listConfirmedBookingsWithExpiredSessionCompleteAuthorization(now: Date): Promise<readonly BookingSnapshot[]>
 
   /**
    * Every event across every booking, oldest first — Slice 6's SSE audit

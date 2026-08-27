@@ -133,6 +133,43 @@ export interface AuthorizationHeldEvent extends EventBase {
   policyVersion: number
 }
 
+/**
+ * The session-complete leg's mandate — same shape and same reasoning as
+ * `AuthorizationHeldEvent`, but a structurally distinct event type rather
+ * than one event with a `purpose` flag (the same "two event types, not one
+ * with a flag that could be set wrong" discipline `SlotReleasedEvent`'s own
+ * comment names). `amountPaise` is `service.pricePaise - policy.depositAmountPaise`
+ * at confirm time — frozen onto this event and the booking projection the
+ * instant it's authorised, so a merchant later raising or lowering the
+ * service's price never retroactively changes what an already-confirmed
+ * booking owes (the same discipline `authorizationAmountPaise` already
+ * applies to the no-show fee).
+ */
+export interface SessionCompleteAuthorizationHeldEvent extends EventBase {
+  type: 'SESSION_COMPLETE_AUTHORIZATION_HELD'
+  authorizationId: string
+  amountPaise: Paise
+  expiresAt: Date
+  rail: PaymentRail
+  enforcedBy: 'payment_rail'
+  policyVersion: number
+}
+
+/** The session-complete mandate's release leg — mirrors `AuthorizationReleasedEvent`. Appended when a booking resolves some other way (no-show charged, cancelled, declined) before the session ever completed, so no orphaned authority is left claiming the mandate is still live. */
+export interface SessionCompleteAuthorizationReleasedEvent extends EventBase {
+  type: 'SESSION_COMPLETE_AUTHORIZATION_RELEASED'
+  authorizationId: string
+  rail: PaymentRail
+  expiresAt: Date
+}
+
+/** Mirrors `AuthorizationLapsedEvent` — the session-complete mandate's own 5-day manual-capture window expiring on a still-CONFIRMED booking before anyone captured or released it. */
+export interface SessionCompleteAuthorizationLapsedEvent extends EventBase {
+  type: 'SESSION_COMPLETE_AUTHORIZATION_LAPSED'
+  authorizationId: string
+  rail: PaymentRail
+}
+
 export interface BookingConfirmedEvent extends EventBase {
   type: 'BOOKING_CONFIRMED'
 }
@@ -297,6 +334,27 @@ export interface NoShowChargedEvent extends EventBase, MoneyFields {
 }
 
 /**
+ * The session-complete leg's charge — the merchant asserting the patient
+ * actually attended, capturing the mandate authorised at confirm time
+ * (`service.pricePaise - policy.depositAmountPaise`). Merchant-only, never
+ * an MCP tool (same trust boundary as `NON_ATTENDANCE_MARKED`/`charge_no_show`'s
+ * merchant-only mark — self-reported attendance from an agent is exactly
+ * the kind of fact this system already refuses to take on an agent's say-so).
+ * Unlike no-show's two-step mark-then-charge split (which exists only
+ * because `charge_no_show` needed to stay agent-callable, gated on the
+ * server's own elapsed-time fact), there is no analogous reason to split
+ * this into two calls — one merchant action both marks and charges,
+ * atomically, the same way `decline_booking` is one atomic merchant action.
+ * Drives the booking to its real terminal `COMPLETED` status — the
+ * transition `BOOKING_COMPLETED` was drawn for in the docs' state diagram
+ * but that no code path ever actually fired.
+ */
+export interface SessionCompleteChargedEvent extends EventBase, MoneyFields {
+  type: 'SESSION_COMPLETE_CHARGED'
+  rail: PaymentRail
+}
+
+/**
  * The reconciliation worker / webhook handler's finding (docs/01-architecture.md
  * §1 Idea 1 taken one hop further out — dev-logs/014, the gap a Razorpay-
  * senior-SDE code review named: "if the response from Razorpay to Latch's own
@@ -335,6 +393,10 @@ export type BookingEvent =
   | PolicyAcknowledgedEvent
   | DepositCapturedEvent
   | AuthorizationHeldEvent
+  | SessionCompleteAuthorizationHeldEvent
+  | SessionCompleteAuthorizationReleasedEvent
+  | SessionCompleteAuthorizationLapsedEvent
+  | SessionCompleteChargedEvent
   | BookingConfirmedEvent
   | BookingRescheduledEvent
   | CancelledByCustomerEvent
@@ -357,6 +419,7 @@ export const MONEY_EVENT_TYPES = [
   'RETENTION_APPLIED',
   'REFUND_ISSUED',
   'NO_SHOW_CHARGED',
+  'SESSION_COMPLETE_CHARGED',
 ] as const satisfies readonly BookingEvent['type'][]
 
 export type MoneyEventType = (typeof MONEY_EVENT_TYPES)[number]

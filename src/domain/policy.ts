@@ -19,8 +19,15 @@ export interface Policy {
   policyVersion: number
   depositAmountPaise: Paise
   cancellationLadder: readonly LadderTier[]
-  noShowFeePaise: Paise
-  noShowGraceMinutes: number
+  /**
+   * The no-show fee leg is now fully optional — a merchant may run without
+   * one at all. Paired, not independently optional: either both are set or
+   * neither is, so "a fee with no grace period" or vice versa can't exist.
+   * When unset, `confirm_with_deposit` never registers a no-show
+   * authorisation and `charge_no_show` refuses with `NO_SHOW_FEE_NOT_CONFIGURED`.
+   */
+  noShowFeePaise: Paise | undefined
+  noShowGraceMinutes: number | undefined
   holdTtlSeconds: number
   maxConcurrentHoldsPerAgent: number
   /**
@@ -49,8 +56,9 @@ export interface Policy {
 export interface PolicyDraft {
   depositAmountPaise: number
   cancellationLadder: readonly LadderTier[]
-  noShowFeePaise: number
-  noShowGraceMinutes: number
+  /** Both present or both absent — see `Policy.noShowFeePaise`'s doc comment. */
+  noShowFeePaise: number | undefined
+  noShowGraceMinutes: number | undefined
   holdTtlSeconds: number
   maxConcurrentHoldsPerAgent: number
   holdRateLimitPerMinute: number
@@ -64,5 +72,5 @@ export interface PolicyDraft {
  */
 export type PolicyInput = Omit<PolicyDraft, 'depositAmountPaise' | 'noShowFeePaise'> & {
   depositAmountPaise: Paise
-  noShowFeePaise: Paise
+  noShowFeePaise: Paise | undefined
 }

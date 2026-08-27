@@ -1,7 +1,15 @@
-import { createAuthorizationHeldEvent, createBookingConfirmedEvent, createDepositCapturedEvent, createPolicyAcknowledgedEvent } from '../domain/event-factory.js'
-import { subtractPaise } from '../domain/money.js'
+import {
+  createAuthorizationHeldEvent,
+  createBookingConfirmedEvent,
+  createDepositCapturedEvent,
+  createPolicyAcknowledgedEvent,
+  createSessionCompleteAuthorizationHeldEvent,
+} from '../domain/event-factory.js'
+import type { BookingEvent } from '../domain/events.js'
+import { subtractPaise, toPaise, type Paise } from '../domain/money.js'
 import type { Policy } from '../domain/policy.js'
 import { Refusal, type RefusalCode } from '../domain/refusals.js'
+import type { ServiceRecord } from '../ports/catalog-repo.js'
 import type { BookingSnapshot } from '../ports/event-store.js'
 import { NoActivePolicyError } from './get-policy.js'
 import { appendRefusalEvent, refuseAgainstBooking } from './refusal.js'
@@ -40,17 +48,18 @@ const CONFIRMATION_CLAIM_WINDOW_MS = 5 * 60 * 1000
 
 /**
  * Distinct from `cmd.idempotencyKey`, which keys the deposit leg (and, via
- * this suffix, the receipt Razorpay would otherwise collide on): two
- * separate Checkout completions happen at `confirm_with_deposit` — deposit
- * capture and no-show authorisation — and `ManualCaptureRail`/
- * `RazorpayPaymentProvider` both derive a Razorpay `receipt` deterministically
- * from whatever key they're given (dev-logs/006). Reusing the same raw key
- * for both would make them resolve to the same receipt and one call would
- * find the other's order. The deposit leg's key is left untouched (not
- * suffixed) because existing fixtures reference it as a raw receipt string.
+ * this suffix, the receipt Razorpay would otherwise collide on): up to three
+ * separate Checkout completions can now happen at `confirm_with_deposit` —
+ * deposit capture, no-show authorisation, and the session-complete mandate —
+ * and `ManualCaptureRail`/`RazorpayPaymentProvider` both derive a Razorpay
+ * `receipt` deterministically from whatever key they're given (dev-logs/006).
+ * Reusing the same raw key across legs would make them resolve to the same
+ * receipt and one call would find another's order. The deposit leg's key is
+ * left untouched (not suffixed) because existing fixtures reference it as a
+ * raw receipt string.
  */
-function authorizationIdempotencyKey(depositIdempotencyKey: string): string {
-  return `${depositIdempotencyKey}:no_show_auth`
+function authorizationIdempotencyKey(depositIdempotencyKey: string, leg: 'no_show_auth' | 'session_complete_auth'): string {
+  return `${depositIdempotencyKey}:${leg}`
 }
 
 export interface ConfirmWithDepositCommand {
@@ -75,18 +84,16 @@ export interface ConfirmWithDepositResult {
     paymentId: string
     amountPaise: number
   }
-  /** The no-show authorisation registered alongside the deposit — docs/01-architecture.md Idea 3. */
-  authorization: {
-    authorizationId: string
-    amountPaise: number
-    expiresAt: string
-  }
+  /** The no-show authorisation registered alongside the deposit — docs/01-architecture.md Idea 3. `undefined` when this policy has no no-show fee configured at all. */
+  authorization: { authorizationId: string; amountPaise: number; expiresAt: string } | undefined
+  /** The session-complete mandate — `service.pricePaise - policy.depositAmountPaise`, captured when the merchant marks the session complete. `undefined` only in the edge case where the service's price exactly equals the deposit (nothing left to authorise). */
+  sessionCompleteMandate: { authorizationId: string; amountPaise: number; expiresAt: string } | undefined
 }
 
 export class BookingNotFoundError extends Error {}
 
 type GateOutcome =
-  | { kind: 'ok'; snapshot: BookingSnapshot; policy: Policy }
+  | { kind: 'ok'; snapshot: BookingSnapshot; policy: Policy; service: ServiceRecord }
   | { kind: 'refused'; code: RefusalCode; reason: string }
   | { kind: 'not_found' }
 
@@ -166,6 +173,24 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
       )
     }
 
+    // The service's *current* price, read fresh here rather than cached from
+    // hold_slot time — a merchant editing a service's price between hold and
+    // confirm is expected (this is a plain mutable column, `schema.ts`'s own
+    // doc comment on `services.pricePaise`), and confirm is the one moment
+    // that price gets frozen onto the booking via the session-complete
+    // mandate below. `ownedByMerchant` here is defence in depth: `serviceId`
+    // was already tenant-checked once, at hold_slot time.
+    const service = ownedByMerchant(await deps.catalogRepo.getService(snapshot.serviceId), deps.merchantId)
+    if (!service) {
+      throw new Error(`confirm_with_deposit: booking ${snapshot.bookingId} references service ${snapshot.serviceId}, which no longer exists or changed owner — should be structurally impossible`)
+    }
+    if (service.pricePaise < policy.depositAmountPaise) {
+      return refuse(
+        'SERVICE_PRICE_BELOW_DEPOSIT',
+        `service ${service.serviceId}'s current price (${service.pricePaise}) is less than the deposit (${policy.depositAmountPaise}) — the session-complete mandate would be negative`,
+      )
+    }
+
     // Claim this hold against the background expiry sweep for the duration
     // of the payment call that follows — see CONFIRMATION_CLAIM_WINDOW_MS.
     // POLICY_ACKNOWLEDGED moves here (was previously written in the final
@@ -184,7 +209,7 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
     // for its bookingId and the hold-expiry value to cite as gate evidence;
     // the claim-window bump is an internal detail of protecting the payment
     // call, not something the trail's own `gate.evidence` should surface.
-    return { kind: 'ok', snapshot, policy }
+    return { kind: 'ok', snapshot, policy, service }
   })
 
   if (gateOutcome.kind === 'not_found') {
@@ -194,29 +219,46 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
     throw new Refusal(gateOutcome.code, gateOutcome.reason)
   }
 
-  const { snapshot } = gateOutcome
+  const { snapshot, service } = gateOutcome
   const now = deps.clock.now()
 
+  // service.pricePaise >= policy.depositAmountPaise is already guaranteed by
+  // the gate above (SERVICE_PRICE_BELOW_DEPOSIT). Zero is a legitimate
+  // result — a service priced exactly at the deposit has nothing left to
+  // authorise — and is handled the same way cancel_booking already handles a
+  // ₹0 refund: skip the rail call entirely rather than authorise nothing.
+  const sessionCompleteMandateAmountPaise: Paise = subtractPaise(service.pricePaise, policy.depositAmountPaise)
+
   // Outside the row lock, deliberately — never hold a DB lock across a
-  // network call to the payment rail. A decline/timeout on either leg is an
+  // network call to the payment rail. A decline/timeout on any leg is an
   // external failure, not a gate/bound refusal, so no ACTION_REFUSED is
   // appended and the booking is left HELD: the agent can simply retry
   // confirm (its idempotency key was never stored, since we only store on
   // success). Run concurrently — docs/01-architecture.md Idea 3 / dev-logs/007:
-  // two separate Checkout completions in this build, so a human waiting on
-  // both should not wait on them serially.
-  const [captured, authorized] = await Promise.all([
+  // up to three separate Checkout completions can exist in this build, so a
+  // human waiting on them should not wait on them serially.
+  const [captured, noShowAuthorized, sessionCompleteAuthorized] = await Promise.all([
     deps.paymentProvider.captureDeposit({
       amountPaise: policy.depositAmountPaise,
       idempotencyKey: cmd.idempotencyKey,
       reference: snapshot.bookingId,
     }),
-    deps.paymentRail.authorize({
-      amountPaise: policy.noShowFeePaise,
-      idempotencyKey: authorizationIdempotencyKey(cmd.idempotencyKey),
-      reference: snapshot.bookingId,
-      now,
-    }),
+    policy.noShowFeePaise === undefined
+      ? Promise.resolve(undefined)
+      : deps.paymentRail.authorize({
+          amountPaise: policy.noShowFeePaise,
+          idempotencyKey: authorizationIdempotencyKey(cmd.idempotencyKey, 'no_show_auth'),
+          reference: snapshot.bookingId,
+          now,
+        }),
+    sessionCompleteMandateAmountPaise === 0
+      ? Promise.resolve(undefined)
+      : deps.paymentRail.authorize({
+          amountPaise: sessionCompleteMandateAmountPaise,
+          idempotencyKey: authorizationIdempotencyKey(cmd.idempotencyKey, 'session_complete_auth'),
+          reference: snapshot.bookingId,
+          now,
+        }),
   ])
 
   await deps.eventStore.transaction(async (tx) => {
@@ -252,27 +294,48 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
       },
       authority: { policyVersion: policy.policyVersion, razorpayPaymentId: captured.paymentId },
     })
-    const authorizationEvent = createAuthorizationHeldEvent(snapshot.bookingId, ++sequence, deps.clock, {
-      authorizationId: authorized.authorizationId,
-      amountPaise: authorized.amountPaise,
-      expiresAt: authorized.expiresAt,
-      rail: deps.paymentRail.name,
-      enforcedBy: 'payment_rail',
-      policyVersion: policy.policyVersion,
-    })
-    const confirmedEvent = createBookingConfirmedEvent(snapshot.bookingId, ++sequence, deps.clock, {})
+    const events: BookingEvent[] = [depositEvent]
+
+    if (noShowAuthorized) {
+      events.push(
+        createAuthorizationHeldEvent(snapshot.bookingId, ++sequence, deps.clock, {
+          authorizationId: noShowAuthorized.authorizationId,
+          amountPaise: noShowAuthorized.amountPaise,
+          expiresAt: noShowAuthorized.expiresAt,
+          rail: deps.paymentRail.name,
+          enforcedBy: 'payment_rail',
+          policyVersion: policy.policyVersion,
+        }),
+      )
+    }
+    if (sessionCompleteAuthorized) {
+      events.push(
+        createSessionCompleteAuthorizationHeldEvent(snapshot.bookingId, ++sequence, deps.clock, {
+          authorizationId: sessionCompleteAuthorized.authorizationId,
+          amountPaise: sessionCompleteAuthorized.amountPaise,
+          expiresAt: sessionCompleteAuthorized.expiresAt,
+          rail: deps.paymentRail.name,
+          enforcedBy: 'payment_rail',
+          policyVersion: policy.policyVersion,
+        }),
+      )
+    }
+    events.push(createBookingConfirmedEvent(snapshot.bookingId, ++sequence, deps.clock, {}))
 
     const projection: BookingSnapshot = {
       ...base,
       status: 'CONFIRMED',
       policyVersion: policy.policyVersion,
-      authorizationId: authorized.authorizationId,
-      authorizationAmountPaise: authorized.amountPaise,
-      authorizationExpiresAt: authorized.expiresAt,
+      authorizationId: noShowAuthorized?.authorizationId,
+      authorizationAmountPaise: noShowAuthorized?.amountPaise,
+      authorizationExpiresAt: noShowAuthorized?.expiresAt,
+      sessionCompleteAuthorizationId: sessionCompleteAuthorized?.authorizationId,
+      sessionCompleteAuthorizationAmountPaise: sessionCompleteAuthorized?.amountPaise,
+      sessionCompleteAuthorizationExpiresAt: sessionCompleteAuthorized?.expiresAt,
       lastEventSequence: sequence,
     }
 
-    await tx.append([depositEvent, authorizationEvent, confirmedEvent], projection, deps.merchantId)
+    await tx.append(events, projection, deps.merchantId)
   })
 
   const result: ConfirmWithDepositResult = {
@@ -280,7 +343,12 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
     status: 'CONFIRMED',
     policyVersion: policy.policyVersion,
     deposit: { paymentId: captured.paymentId, amountPaise: captured.amountPaise },
-    authorization: { authorizationId: authorized.authorizationId, amountPaise: authorized.amountPaise, expiresAt: authorized.expiresAt.toISOString() },
+    authorization: noShowAuthorized && { authorizationId: noShowAuthorized.authorizationId, amountPaise: noShowAuthorized.amountPaise, expiresAt: noShowAuthorized.expiresAt.toISOString() },
+    sessionCompleteMandate: sessionCompleteAuthorized && {
+      authorizationId: sessionCompleteAuthorized.authorizationId,
+      amountPaise: sessionCompleteAuthorized.amountPaise,
+      expiresAt: sessionCompleteAuthorized.expiresAt.toISOString(),
+    },
   }
   await deps.idempotencyStore.put('confirm_with_deposit', cmd.idempotencyKey, result)
   return result

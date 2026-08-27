@@ -14,6 +14,10 @@ export const eventTypeEnum = pgEnum('event_type', [
   'POLICY_ACKNOWLEDGED',
   'DEPOSIT_CAPTURED',
   'AUTHORIZATION_HELD',
+  'SESSION_COMPLETE_AUTHORIZATION_HELD',
+  'SESSION_COMPLETE_AUTHORIZATION_RELEASED',
+  'SESSION_COMPLETE_AUTHORIZATION_LAPSED',
+  'SESSION_COMPLETE_CHARGED',
   'BOOKING_CONFIRMED',
   'BOOKING_RESCHEDULED',
   'CANCELLED_BY_CUSTOMER',
@@ -115,6 +119,20 @@ export const bookings = pgTable('bookings', {
   authorizationAmountPaise: integer('authorization_amount_paise'),
   authorizationExpiresAt: timestamp('authorization_expires_at', { withTimezone: true }),
   authorizationLapsedAt: timestamp('authorization_lapsed_at', { withTimezone: true }),
+  /**
+   * The session-complete leg — same role as the four columns above, mirrored
+   * for the second, independent mandate (`service.pricePaise -
+   * policy.depositAmountPaise`) authorised alongside the no-show fee at
+   * confirm time and captured when the merchant marks the session complete.
+   * A structurally separate set of columns, not a `purpose` flag on the
+   * columns above — the two authorisations can be live at once and resolve
+   * independently (see `mark-session-complete.ts` / `charge-no-show.ts`,
+   * each of which releases the *other* leg on its own terminal outcome).
+   */
+  sessionCompleteAuthorizationId: text('session_complete_authorization_id'),
+  sessionCompleteAuthorizationAmountPaise: integer('session_complete_authorization_amount_paise'),
+  sessionCompleteAuthorizationExpiresAt: timestamp('session_complete_authorization_expires_at', { withTimezone: true }),
+  sessionCompleteAuthorizationLapsedAt: timestamp('session_complete_authorization_lapsed_at', { withTimezone: true }),
   /** Set by the merchant API's mark-no-show route — `charge_no_show`'s second independent fact. */
   nonAttendanceMarkedAt: timestamp('non_attendance_marked_at', { withTimezone: true }),
   /**
@@ -180,8 +198,19 @@ export const services = pgTable('services', {
     .references(() => merchants.merchantId),
   name: text('name').notNull(),
   durationMinutes: integer('duration_minutes').notNull(),
+  /**
+   * The merchant-set full price of this service — the "total charge" the
+   * session-complete mandate is computed from (`pricePaise -
+   * policy.depositAmountPaise`) at confirm time. A plain mutable column, not
+   * versioned the way `policies` is: the *authorised* mandate amount is
+   * frozen onto each booking's own snapshot/events the instant it's taken
+   * (same discipline `authorizationAmountPaise` already applies to the
+   * no-show fee), so editing a service's price here only ever affects
+   * bookings confirmed *after* the edit — never retroactively.
+   */
   pricePaise: integer('price_paise').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
 })
 
 export const policies = pgTable(
@@ -196,8 +225,9 @@ export const policies = pgTable(
     depositAmountPaise: integer('deposit_amount_paise').notNull(),
     /** Ordered array of { hoursBefore, retainPct } — docs/03-domain-model.md §2. */
     cancellationLadder: jsonb('cancellation_ladder').notNull(),
-    noShowFeePaise: integer('no_show_fee_paise').notNull(),
-    noShowGraceMinutes: integer('no_show_grace_minutes').notNull(),
+    /** Optional now — both null together, or both set together (validated in `validatePolicyInput`, not here). A merchant can run with no no-show fee at all. */
+    noShowFeePaise: integer('no_show_fee_paise'),
+    noShowGraceMinutes: integer('no_show_grace_minutes'),
     holdTtlSeconds: integer('hold_ttl_seconds').notNull(),
     maxConcurrentHoldsPerAgent: integer('max_concurrent_holds_per_agent').notNull(),
     /** dev-logs/014, gap 2: the request-rate ceiling — see `src/domain/policy.ts`'s `holdRateLimitPerMinute` doc comment. */

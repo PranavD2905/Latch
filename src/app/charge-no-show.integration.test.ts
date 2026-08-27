@@ -66,7 +66,7 @@ async function holdAndConfirm(hhmm: string): Promise<{ bookingId: string; starts
     { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: freshKey() },
     deps,
   )
-  return { bookingId: held.bookingId, startsAt, authorizationAmountPaise: confirmed.authorization.amountPaise }
+  return { bookingId: held.bookingId, startsAt, authorizationAmountPaise: confirmed.authorization!.amountPaise }
 }
 
 beforeAll(async () => {

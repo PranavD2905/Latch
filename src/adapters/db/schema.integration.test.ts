@@ -48,6 +48,7 @@ beforeAll(async () => {
     durationMinutes: 30,
     pricePaise: 80000,
     createdAt: new Date(),
+    updatedAt: new Date(),
   })
 })
 

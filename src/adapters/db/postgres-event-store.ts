@@ -51,6 +51,10 @@ function rowToSnapshot(row: typeof bookings.$inferSelect): BookingSnapshot {
     authorizationAmountPaise: row.authorizationAmountPaise !== null ? toPaise(row.authorizationAmountPaise) : undefined,
     authorizationExpiresAt: row.authorizationExpiresAt ?? undefined,
     authorizationLapsedAt: row.authorizationLapsedAt ?? undefined,
+    sessionCompleteAuthorizationId: row.sessionCompleteAuthorizationId ?? undefined,
+    sessionCompleteAuthorizationAmountPaise: row.sessionCompleteAuthorizationAmountPaise !== null ? toPaise(row.sessionCompleteAuthorizationAmountPaise) : undefined,
+    sessionCompleteAuthorizationExpiresAt: row.sessionCompleteAuthorizationExpiresAt ?? undefined,
+    sessionCompleteAuthorizationLapsedAt: row.sessionCompleteAuthorizationLapsedAt ?? undefined,
     nonAttendanceMarkedAt: row.nonAttendanceMarkedAt ?? undefined,
     noShowEligibleMarkedAt: row.noShowEligibleMarkedAt ?? undefined,
     agentId: row.agentId ?? undefined,
@@ -106,6 +110,10 @@ async function appendFor(db: Queryable, evts: readonly BookingEvent[], projectio
       authorizationAmountPaise: projection.authorizationAmountPaise ?? null,
       authorizationExpiresAt: projection.authorizationExpiresAt ?? null,
       authorizationLapsedAt: projection.authorizationLapsedAt ?? null,
+      sessionCompleteAuthorizationId: projection.sessionCompleteAuthorizationId ?? null,
+      sessionCompleteAuthorizationAmountPaise: projection.sessionCompleteAuthorizationAmountPaise ?? null,
+      sessionCompleteAuthorizationExpiresAt: projection.sessionCompleteAuthorizationExpiresAt ?? null,
+      sessionCompleteAuthorizationLapsedAt: projection.sessionCompleteAuthorizationLapsedAt ?? null,
       nonAttendanceMarkedAt: projection.nonAttendanceMarkedAt ?? null,
       noShowEligibleMarkedAt: projection.noShowEligibleMarkedAt ?? null,
       agentId: projection.agentId ?? null,
@@ -128,6 +136,10 @@ async function appendFor(db: Queryable, evts: readonly BookingEvent[], projectio
         authorizationAmountPaise: projection.authorizationAmountPaise ?? null,
         authorizationExpiresAt: projection.authorizationExpiresAt ?? null,
         authorizationLapsedAt: projection.authorizationLapsedAt ?? null,
+        sessionCompleteAuthorizationId: projection.sessionCompleteAuthorizationId ?? null,
+        sessionCompleteAuthorizationAmountPaise: projection.sessionCompleteAuthorizationAmountPaise ?? null,
+        sessionCompleteAuthorizationExpiresAt: projection.sessionCompleteAuthorizationExpiresAt ?? null,
+        sessionCompleteAuthorizationLapsedAt: projection.sessionCompleteAuthorizationLapsedAt ?? null,
         nonAttendanceMarkedAt: projection.nonAttendanceMarkedAt ?? null,
         noShowEligibleMarkedAt: projection.noShowEligibleMarkedAt ?? null,
         agentId: projection.agentId ?? null,
@@ -227,6 +239,21 @@ export class PostgresEventStore implements EventStore {
           isNotNull(bookings.authorizationExpiresAt),
           lt(bookings.authorizationExpiresAt, now),
           isNull(bookings.authorizationLapsedAt),
+        ),
+      )
+    return rows.map(rowToSnapshot)
+  }
+
+  async listConfirmedBookingsWithExpiredSessionCompleteAuthorization(now: Date): Promise<readonly BookingSnapshot[]> {
+    const rows = await this.db
+      .select()
+      .from(bookings)
+      .where(
+        and(
+          eq(bookings.status, 'confirmed'),
+          isNotNull(bookings.sessionCompleteAuthorizationExpiresAt),
+          lt(bookings.sessionCompleteAuthorizationExpiresAt, now),
+          isNull(bookings.sessionCompleteAuthorizationLapsedAt),
         ),
       )
     return rows.map(rowToSnapshot)

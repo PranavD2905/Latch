@@ -60,6 +60,7 @@ async function seed() {
       durationMinutes: 30,
       pricePaise: 80000, // ₹800
       createdAt: now,
+      updatedAt: now,
     })
     .onConflictDoNothing()
 

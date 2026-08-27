@@ -1,4 +1,4 @@
-import { createAuthorizationLapsedEvent } from '../domain/event-factory.js'
+import { createAuthorizationLapsedEvent, createSessionCompleteAuthorizationLapsedEvent } from '../domain/event-factory.js'
 import type { BookingSnapshot } from '../ports/event-store.js'
 import type { AppDeps } from './types.js'
 
@@ -51,6 +51,33 @@ export async function runAuthorizationLapseWorker(deps: AppDeps): Promise<Author
     }
   }
 
+  // Same sweep, for the session-complete mandate's own independent 5-day
+  // manual-capture window — a structurally separate leg (see `schema.ts`'s
+  // `sessionCompleteAuthorization*` columns), so it gets its own candidate
+  // list and its own lapse event, not a flag on the loop above.
+  const sessionCompleteCandidates = await deps.eventStore.listConfirmedBookingsWithExpiredSessionCompleteAuthorization(now)
+  for (const candidate of sessionCompleteCandidates) {
+    const didLapse = await deps.eventStore.transaction(async (tx) => {
+      const fresh = await tx.loadSnapshotForUpdate(candidate.bookingId)
+      if (!stillSessionCompleteLapsable(fresh, now)) {
+        return false
+      }
+      const snapshot = fresh as BookingSnapshot & { sessionCompleteAuthorizationId: string; sessionCompleteAuthorizationExpiresAt: Date }
+
+      const sequence = snapshot.lastEventSequence + 1
+      const event = createSessionCompleteAuthorizationLapsedEvent(snapshot.bookingId, sequence, deps.clock, {
+        authorizationId: snapshot.sessionCompleteAuthorizationId,
+        rail: deps.paymentRail.name,
+      })
+      const projection: BookingSnapshot = { ...snapshot, sessionCompleteAuthorizationLapsedAt: now, lastEventSequence: sequence }
+      await tx.append([event], projection, snapshot.merchantId)
+      return true
+    })
+    if (didLapse && !lapsedBookingIds.includes(candidate.bookingId)) {
+      lapsedBookingIds.push(candidate.bookingId)
+    }
+  }
+
   return { lapsedBookingIds }
 }
 
@@ -59,4 +86,11 @@ function stillLapsable(snapshot: BookingSnapshot | undefined, now: Date): boolea
   if (!snapshot.authorizationId || !snapshot.authorizationExpiresAt) return false
   if (snapshot.authorizationLapsedAt) return false
   return snapshot.authorizationExpiresAt.getTime() <= now.getTime()
+}
+
+function stillSessionCompleteLapsable(snapshot: BookingSnapshot | undefined, now: Date): boolean {
+  if (!snapshot || snapshot.status !== 'CONFIRMED') return false
+  if (!snapshot.sessionCompleteAuthorizationId || !snapshot.sessionCompleteAuthorizationExpiresAt) return false
+  if (snapshot.sessionCompleteAuthorizationLapsedAt) return false
+  return snapshot.sessionCompleteAuthorizationExpiresAt.getTime() <= now.getTime()
 }

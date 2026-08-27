@@ -63,7 +63,7 @@ async function confirmedBooking(hhmm: string): Promise<{ bookingId: string; auth
     { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: freshKey() },
     deps,
   )
-  return { bookingId: held.bookingId, authorizationId: confirmed.authorization.authorizationId, paymentId: confirmed.deposit.paymentId }
+  return { bookingId: held.bookingId, authorizationId: confirmed.authorization!.authorizationId, paymentId: confirmed.deposit.paymentId }
 }
 
 beforeAll(async () => {

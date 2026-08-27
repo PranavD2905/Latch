@@ -60,7 +60,7 @@ export type BookingEvent = EventBase & {
   [key: string]: unknown
 } & Partial<MoneyFields>
 
-export const MONEY_EVENT_TYPES = ['DEPOSIT_CAPTURED', 'RETENTION_APPLIED', 'REFUND_ISSUED', 'NO_SHOW_CHARGED'] as const
+export const MONEY_EVENT_TYPES = ['DEPOSIT_CAPTURED', 'RETENTION_APPLIED', 'REFUND_ISSUED', 'NO_SHOW_CHARGED', 'SESSION_COMPLETE_CHARGED'] as const
 
 export function isMoneyEvent(event: BookingEvent): boolean {
   return (MONEY_EVENT_TYPES as readonly string[]).includes(event.type)
@@ -93,6 +93,7 @@ export function bookingStatusLabel(events: readonly BookingEvent[]): { label: st
   for (const e of events) byType.set(e.type, e)
 
   if (byType.has('NO_SHOW_CHARGED')) return { label: 'No-show charged', tone: 'critical' }
+  if (byType.has('SESSION_COMPLETE_CHARGED')) return { label: 'Completed', tone: 'good' }
   if (byType.has('BOOKING_COMPLETED')) return { label: 'Completed', tone: 'good' }
   if (byType.has('MERCHANT_DECLINED')) return { label: 'Declined by merchant', tone: 'critical' }
   if (byType.has('CANCELLED_BY_CUSTOMER')) return { label: 'Cancelled', tone: 'blue' }

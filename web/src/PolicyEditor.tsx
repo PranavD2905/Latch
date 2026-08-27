@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { fetchActivePolicy, PolicyApiError, publishPolicy } from './policyApi'
-import type { LadderTier, Policy, PolicyDraft } from './policyTypes'
+import { fetchActivePolicy, fetchServices, PolicyApiError, publishPolicy, updateService } from './policyApi'
+import type { LadderTier, Policy, PolicyDraft, Service } from './policyTypes'
 import { draftFromPolicy, validateDraft } from './policyTypes'
 import { formatRupees } from './types'
 
@@ -96,17 +96,26 @@ function LadderEditor({ ladder, onChange }: { ladder: readonly LadderTier[]; onC
 
 /** The computed-consequence callout — dev-logs/015: surfaces the number that falls out of two independently-picked figures, without changing what's actually charged. */
 function ConsequencePreview({ draft }: { draft: PolicyDraft }) {
-  const total = draft.depositAmountPaise + draft.noShowFeePaise
+  const noShowConfigured = draft.noShowFeePaise !== undefined
+  const total = draft.depositAmountPaise + (draft.noShowFeePaise ?? 0)
   return (
     <div className="rounded-xl border border-[var(--warning)] bg-[var(--warning-bg)] p-4">
       <div className="text-[13px] font-semibold text-[var(--warning-text)]">What a no-show actually costs this patient</div>
-      <div className="mt-1 font-mono text-2xl font-semibold tabular-nums text-[var(--text)]">{formatRupees(total)}</div>
-      <div className="mt-1 text-[13px] text-[var(--text-muted)]">
-        {formatRupees(draft.depositAmountPaise)} deposit forfeited (no-show retains it in full) + {formatRupees(draft.noShowFeePaise)} no-show fee charged separately.
-      </div>
-      <div className="mt-2 text-[12px] text-[var(--text-faint)]">
-        These two figures are set independently below and simply add up — this total isn't a number Latch asserts is correct. Deciding whether the deposit and the fee should compound, or whether the fee should offset the deposit, is a merchant call this editor makes visible but does not make for you.
-      </div>
+      {noShowConfigured ? (
+        <>
+          <div className="mt-1 font-mono text-2xl font-semibold tabular-nums text-[var(--text)]">{formatRupees(total)}</div>
+          <div className="mt-1 text-[13px] text-[var(--text-muted)]">
+            {formatRupees(draft.depositAmountPaise)} deposit forfeited (no-show retains it in full) + {formatRupees(draft.noShowFeePaise!)} no-show fee charged separately.
+          </div>
+          <div className="mt-2 text-[12px] text-[var(--text-faint)]">
+            These two figures are set independently below and simply add up — this total isn't a number Latch asserts is correct. Deciding whether the deposit and the fee should compound, or whether the fee should offset the deposit, is a merchant call this editor makes visible but does not make for you.
+          </div>
+        </>
+      ) : (
+        <div className="mt-1 text-[13px] text-[var(--text-muted)]">
+          No no-show fee is configured — a no-show only forfeits the deposit per the ladder below. A patient who does attend is instead charged the session-complete mandate (each service's price minus this deposit) when the merchant marks the session done.
+        </div>
+      )}
       <div className="mt-3 grid grid-cols-1 gap-1 border-t border-[var(--warning)]/30 pt-3 sm:grid-cols-3">
         {draft.cancellationLadder.map((tier, i) => (
           <div key={i} className="text-[12px] text-[var(--text-muted)]">
@@ -115,6 +124,110 @@ function ConsequencePreview({ draft }: { draft: PolicyDraft }) {
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+/**
+ * The session-complete mandate is per-service (`service.pricePaise -
+ * depositAmountPaise`), so this needs the merchant's own deposit figure to
+ * show what each service's mandate actually comes out to — same "computed
+ * consequence, not a stored number" idea `ConsequencePreview` already uses.
+ */
+function ServicesEditor({ token, depositAmountPaise }: { token: string; depositAmountPaise: number }) {
+  const [services, setServices] = useState<Service[] | null>(null)
+  const [error, setError] = useState<string | undefined>()
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [savingId, setSavingId] = useState<string | undefined>()
+
+  useEffect(() => {
+    let cancelled = false
+    fetchServices(token)
+      .then(({ services }) => {
+        if (cancelled) return
+        setServices(services)
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        setError(err instanceof Error ? err.message : String(err))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [token])
+
+  async function handleSave(service: Service) {
+    const raw = drafts[service.serviceId]
+    const pricePaise = raw === undefined ? service.pricePaise : Number(raw)
+    if (!Number.isInteger(pricePaise) || pricePaise < 0) {
+      setError(`${service.name}: price must be a non-negative whole number of paise.`)
+      return
+    }
+    setSavingId(service.serviceId)
+    setError(undefined)
+    try {
+      const { service: updated } = await updateService(token, service.serviceId, { pricePaise })
+      setServices((prev) => (prev ? prev.map((s) => (s.serviceId === updated.serviceId ? updated : s)) : prev))
+      setDrafts((prev) => {
+        const next = { ...prev }
+        delete next[service.serviceId]
+        return next
+      })
+    } catch (err) {
+      setError(err instanceof PolicyApiError ? err.message : err instanceof Error ? err.message : String(err))
+    } finally {
+      setSavingId(undefined)
+    }
+  }
+
+  if (error && !services) {
+    return <div className="rounded-lg border border-[var(--critical)] bg-[var(--critical-bg)] px-4 py-3 text-[13px] text-[var(--critical-text)]">Could not load services: {error}</div>
+  }
+  if (!services) {
+    return <div className="px-2 py-4 text-center font-mono text-sm text-[var(--text-faint)]">loading services…</div>
+  }
+
+  return (
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6">
+      <div className="text-[14px] font-semibold text-[var(--text)]">Services &amp; pricing</div>
+      <div className="mt-1 text-[12px] text-[var(--text-faint)]">
+        Each service's price is the "total charge" the session-complete mandate is computed from (price − deposit), authorised when a booking is confirmed and captured when the merchant marks the
+        session complete. Editing a price here only affects bookings confirmed after the change — an already-confirmed booking's mandate is frozen at whatever the price was when it was confirmed.
+      </div>
+      <div className="mt-4 flex flex-col gap-2">
+        {services.map((service) => {
+          const draftValue = drafts[service.serviceId] ?? String(service.pricePaise)
+          const mandatePaise = Number(draftValue) - depositAmountPaise
+          const dirty = drafts[service.serviceId] !== undefined && Number(drafts[service.serviceId]) !== service.pricePaise
+          return (
+            <div key={service.serviceId} className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-3 rounded-lg border border-[var(--border)] p-3">
+              <div>
+                <div className="text-[13px] font-medium text-[var(--text)]">{service.name}</div>
+                <div className="text-[11px] text-[var(--text-faint)]">{service.durationMinutes} min</div>
+              </div>
+              <input
+                type="number"
+                className={`${INPUT} w-32`}
+                value={draftValue}
+                onChange={(e) => setDrafts((prev) => ({ ...prev, [service.serviceId]: e.target.value }))}
+              />
+              <span className="text-[11px] whitespace-nowrap text-[var(--text-faint)]">
+                {Number.isFinite(mandatePaise) ? `mandate ${formatRupees(Math.max(mandatePaise, 0))}` : ''}
+                {Number.isFinite(mandatePaise) && mandatePaise < 0 ? ' ⚠ below deposit' : ''}
+              </span>
+              <button
+                type="button"
+                onClick={() => handleSave(service)}
+                disabled={!dirty || savingId === service.serviceId}
+                className="rounded-lg bg-[var(--text)] px-3 py-1.5 text-[12px] font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {savingId === service.serviceId ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          )
+        })}
+      </div>
+      {error && <div className="mt-3 rounded-lg border border-[var(--critical)] bg-[var(--critical-bg)] px-3 py-2 text-[12px] text-[var(--critical-text)]">{error}</div>}
     </div>
   )
 }
@@ -270,8 +383,31 @@ export function PolicyEditor() {
 
       <div className="grid grid-cols-1 gap-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6 lg:grid-cols-2">
         <NumberField label="Deposit (paise)" value={draft.depositAmountPaise} onChange={(n) => setDraft({ ...draft, depositAmountPaise: n })} hint={formatRupees(draft.depositAmountPaise || 0)} />
-        <NumberField label="No-show fee (paise)" value={draft.noShowFeePaise} onChange={(n) => setDraft({ ...draft, noShowFeePaise: n })} hint={formatRupees(draft.noShowFeePaise || 0)} />
-        <NumberField label="No-show grace (minutes)" value={draft.noShowGraceMinutes} onChange={(n) => setDraft({ ...draft, noShowGraceMinutes: n })} />
+        <div />
+
+        <div className="flex items-center gap-2 lg:col-span-2">
+          <input
+            type="checkbox"
+            id="no-show-enabled"
+            checked={draft.noShowFeePaise !== undefined}
+            onChange={(e) =>
+              setDraft(
+                e.target.checked ? { ...draft, noShowFeePaise: 40_000, noShowGraceMinutes: 15 } : { ...draft, noShowFeePaise: undefined, noShowGraceMinutes: undefined },
+              )
+            }
+          />
+          <label htmlFor="no-show-enabled" className={LABEL}>
+            Charge a no-show fee (optional — a patient who never shows still forfeits the deposit per the ladder either way)
+          </label>
+        </div>
+
+        {draft.noShowFeePaise !== undefined && (
+          <>
+            <NumberField label="No-show fee (paise)" value={draft.noShowFeePaise} onChange={(n) => setDraft({ ...draft, noShowFeePaise: n })} hint={formatRupees(draft.noShowFeePaise || 0)} />
+            <NumberField label="No-show grace (minutes)" value={draft.noShowGraceMinutes ?? 0} onChange={(n) => setDraft({ ...draft, noShowGraceMinutes: n })} />
+          </>
+        )}
+
         <NumberField label="Hold TTL (seconds)" value={draft.holdTtlSeconds} onChange={(n) => setDraft({ ...draft, holdTtlSeconds: n })} />
         <NumberField label="Max concurrent holds / agent" value={draft.maxConcurrentHoldsPerAgent} onChange={(n) => setDraft({ ...draft, maxConcurrentHoldsPerAgent: n })} />
         <NumberField label="Hold rate limit / minute / agent" value={draft.holdRateLimitPerMinute} onChange={(n) => setDraft({ ...draft, holdRateLimitPerMinute: n })} />
@@ -283,6 +419,8 @@ export function PolicyEditor() {
           </div>
         </div>
       </div>
+
+      <ServicesEditor token={token} depositAmountPaise={draft.depositAmountPaise} />
 
       {validationError && <div className="rounded-lg border border-[var(--critical)] bg-[var(--critical-bg)] px-4 py-2 text-[13px] text-[var(--critical-text)]">{validationError}</div>}
       {publishError && <div className="rounded-lg border border-[var(--critical)] bg-[var(--critical-bg)] px-4 py-2 text-[13px] text-[var(--critical-text)]">{publishError}</div>}

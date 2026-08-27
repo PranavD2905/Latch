@@ -70,6 +70,14 @@ function applyEvent(state: BookingState, event: BookingEvent): BookingState {
       next.authorizationId = event.authorizationId
       return next
 
+    case 'SESSION_COMPLETE_AUTHORIZATION_HELD':
+    case 'SESSION_COMPLETE_AUTHORIZATION_RELEASED':
+    case 'SESSION_COMPLETE_AUTHORIZATION_LAPSED':
+      // Informational, same treatment fold() already gives AUTHORIZATION_RELEASED/
+      // LAPSED — the live Postgres projection tracks this leg's authorizationId
+      // via its own dedicated column, not through a pure replay of this event.
+      return next
+
     case 'BOOKING_CONFIRMED':
       next.status = 'CONFIRMED'
       return next
@@ -96,6 +104,10 @@ function applyEvent(state: BookingState, event: BookingEvent): BookingState {
 
     case 'NO_SHOW_CHARGED':
       next.status = 'NO_SHOW_CHARGED'
+      return next
+
+    case 'SESSION_COMPLETE_CHARGED':
+      next.status = 'COMPLETED'
       return next
 
     case 'BOOKING_COMPLETED':

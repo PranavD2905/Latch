@@ -1,13 +1,16 @@
 import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify'
 import type Razorpay from 'razorpay'
-import { BookingNotDeclinableError, BookingNotFoundError, NoAuthorizationFoundError, NoDepositFoundError, declineBooking } from '../../app/decline-booking.js'
+import { BookingNotDeclinableError, BookingNotFoundError, NoDepositFoundError, declineBooking } from '../../app/decline-booking.js'
 import { getPolicy, NoActivePolicyError } from '../../app/get-policy.js'
 import { BookingNotMarkableError, BookingNotFoundError as MarkBookingNotFoundError, markNoShow } from '../../app/mark-no-show.js'
+import { BookingNotCompletableError, BookingNotFoundError as MarkCompleteBookingNotFoundError, markSessionComplete } from '../../app/mark-session-complete.js'
 import { setPolicy, type SetPolicyCommand } from '../../app/set-policy.js'
 import type { AppDeps } from '../../app/types.js'
 import { recordWebhookFailure } from '../../app/webhook-dead-letter.js'
+import { InvalidMoneyError, toPaise } from '../../domain/money.js'
 import { PolicyValidationError } from '../../domain/policy-validation.js'
+import { Refusal } from '../../domain/refusals.js'
 import { PolicyVersionConflictError } from '../../ports/catalog-repo.js'
 import type { MerchantAuthStore } from '../../ports/merchant-auth.js'
 import { verifyRazorpayWebhookSignature } from '../payment/razorpay-shared.js'
@@ -215,7 +218,6 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
         if (err instanceof BookingNotFoundError) return reply.code(404).send({ error: err.message })
         if (err instanceof BookingNotDeclinableError) return reply.code(409).send({ error: err.message })
         if (err instanceof NoDepositFoundError) return reply.code(422).send({ error: err.message })
-        if (err instanceof NoAuthorizationFoundError) return reply.code(422).send({ error: err.message })
         throw err
       }
     },
@@ -242,6 +244,40 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
       } catch (err) {
         if (err instanceof MarkBookingNotFoundError) return reply.code(404).send({ error: err.message })
         if (err instanceof BookingNotMarkableError) return reply.code(409).send({ error: err.message })
+        throw err
+      }
+    },
+  )
+
+  // The session-complete leg's own merchant action — same trust boundary as
+  // decline/mark-no-show above, and equally absent from the MCP tool list
+  // (self-reported attendance from an agent is exactly what this system
+  // already refuses to take on say-so alone). Unlike mark-no-show, this one
+  // route both marks and charges, atomically — see mark-session-complete.ts's
+  // own doc comment for why no agent-callable second step is needed here.
+  app.post<{ Params: { bookingId: string }; Body: { idempotencyKey: string } }>(
+    '/bookings/:bookingId/mark-complete',
+    {
+      schema: {
+        params: { type: 'object', required: ['bookingId'], properties: { bookingId: { type: 'string', minLength: 1 } } },
+        body: { type: 'object', required: ['idempotencyKey'], properties: { idempotencyKey: { type: 'string', minLength: 1 } } },
+      },
+    },
+    async (request, reply) => {
+      const { bookingId } = request.params
+      const { idempotencyKey } = request.body
+
+      try {
+        const result = await markSessionComplete({ bookingId, idempotencyKey }, requestDeps(request))
+        return await reply.code(200).send(result)
+      } catch (err) {
+        if (err instanceof MarkCompleteBookingNotFoundError) return reply.code(404).send({ error: err.message })
+        if (err instanceof BookingNotCompletableError) return reply.code(409).send({ error: err.message })
+        // CAPTURE_AMOUNT_MISMATCH is the one Refusal this route can produce
+        // (the rail-side ceiling firing on the frozen mandate amount) —
+        // structurally the same "nothing an agent/merchant can do about it"
+        // shape charge_no_show's own CAPTURE_AMOUNT_MISMATCH already is.
+        if (err instanceof Refusal) return reply.code(422).send({ error: err.message, code: err.code })
         throw err
       }
     },
@@ -275,7 +311,11 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
       schema: {
         body: {
           type: 'object',
-          required: ['depositAmountPaise', 'cancellationLadder', 'noShowFeePaise', 'noShowGraceMinutes', 'holdTtlSeconds', 'maxConcurrentHoldsPerAgent', 'holdRateLimitPerMinute'],
+          // noShowFeePaise/noShowGraceMinutes are deliberately absent from
+          // `required` now — the no-show fee is fully optional. Paired-or-
+          // neither is validatePolicyInput's job (NO_SHOW_FIELDS_MUST_BE_PAIRED),
+          // not something the wire schema enforces.
+          required: ['depositAmountPaise', 'cancellationLadder', 'holdTtlSeconds', 'maxConcurrentHoldsPerAgent', 'holdRateLimitPerMinute'],
           properties: {
             depositAmountPaise: { type: 'number' },
             cancellationLadder: {
@@ -304,6 +344,56 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
         if (err instanceof PolicyVersionConflictError) return reply.code(409).send({ error: err.message })
         throw err
       }
+    },
+  )
+
+  // The merchant-facing pricing read/write — same bearer-token gate as
+  // /policy above. Prices live per-service now (this task), not on Policy,
+  // so this is a genuinely separate resource from /policy despite living on
+  // the same "policy tab" in the viewer.
+  app.get('/services', async (request, reply) => {
+    const requestScoped = requestDeps(request)
+    const result = await requestScoped.catalogRepo.listServices(requestScoped.merchantId)
+    return await reply.code(200).send({ services: result })
+  })
+
+  app.patch<{ Params: { serviceId: string }; Body: { name?: string; durationMinutes?: number; pricePaise?: number } }>(
+    '/services/:serviceId',
+    {
+      schema: {
+        params: { type: 'object', required: ['serviceId'], properties: { serviceId: { type: 'string', minLength: 1 } } },
+        body: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', minLength: 1 },
+            durationMinutes: { type: 'integer', minimum: 1 },
+            pricePaise: { type: 'integer', minimum: 0 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const requestScoped = requestDeps(request)
+      const { name, durationMinutes, pricePaise } = request.body
+
+      let brandedPrice
+      try {
+        brandedPrice = pricePaise === undefined ? undefined : toPaise(pricePaise)
+      } catch (err) {
+        if (err instanceof InvalidMoneyError) return reply.code(422).send({ error: err.message })
+        throw err
+      }
+
+      const updated = await requestScoped.catalogRepo.updateService(
+        requestScoped.merchantId,
+        request.params.serviceId,
+        { ...(name !== undefined ? { name } : {}), ...(durationMinutes !== undefined ? { durationMinutes } : {}), ...(brandedPrice !== undefined ? { pricePaise: brandedPrice } : {}) },
+        requestScoped.clock.now(),
+      )
+      if (!updated) {
+        return reply.code(404).send({ error: `unknown service: ${request.params.serviceId}` })
+      }
+      return await reply.code(200).send({ service: updated })
     },
   )
 

@@ -65,7 +65,7 @@ async function holdAndConfirm(hhmm: string): Promise<{ bookingId: string; starts
     { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: freshKey() },
     deps,
   )
-  return { bookingId: held.bookingId, startsAt, depositAmountPaise: confirmed.deposit.amountPaise, authorizationId: confirmed.authorization.authorizationId }
+  return { bookingId: held.bookingId, startsAt, depositAmountPaise: confirmed.deposit.amountPaise, authorizationId: confirmed.authorization!.authorizationId }
 }
 
 beforeAll(async () => {
@@ -100,8 +100,11 @@ describe('cancel (real Postgres + FakePaymentProvider + FrozenClock) — the cus
     expect(snapshot?.status).toBe('CANCELLED_BY_CUSTOMER')
 
     const allEvents = await loadEventLog(bookingId)
-    const trailing = allEvents.slice(-3).map((e) => e.type)
-    expect(trailing).toEqual(['CANCELLED_BY_CUSTOMER', 'REFUND_ISSUED', 'AUTHORIZATION_RELEASED']) // no RETENTION_APPLIED — 0% retained
+    const trailing = allEvents.slice(-4).map((e) => e.type)
+    // This task: cancel_booking now also releases the session-complete
+    // mandate (a cancelled booking's session will never complete either) —
+    // one more trailing event than before.
+    expect(trailing).toEqual(['CANCELLED_BY_CUSTOMER', 'REFUND_ISSUED', 'AUTHORIZATION_RELEASED', 'SESSION_COMPLETE_AUTHORIZATION_RELEASED']) // no RETENTION_APPLIED — 0% retained
     expect(allEvents.some((e) => e.type === 'RETENTION_APPLIED')).toBe(false)
 
     const released = allEvents.find((e) => e.type === 'AUTHORIZATION_RELEASED')

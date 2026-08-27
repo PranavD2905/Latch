@@ -53,6 +53,7 @@ export async function runNoShowEligibilityWorker(deps: AppDeps): Promise<NoShowE
       // merchant's grace-period policy to this booking's eligibility check.
       const policy = await deps.catalogRepo.getPolicyVersion(snapshot.merchantId, snapshot.policyVersion)
       if (!policy) continue // defensive: the version a CONFIRMED booking cites should never be gone
+      if (policy.noShowGraceMinutes === undefined) continue // no-show fee not configured under this policy version — nothing to become eligible for
 
       const eligibleAt = new Date(snapshot.startsAt.getTime() + policy.noShowGraceMinutes * 60_000)
       if (now.getTime() < eligibleAt.getTime()) continue // start elapsed, still inside grace — reconsidered next tick

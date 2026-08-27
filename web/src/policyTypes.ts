@@ -13,8 +13,9 @@ export interface Policy {
   policyVersion: number
   depositAmountPaise: number
   cancellationLadder: readonly LadderTier[]
-  noShowFeePaise: number
-  noShowGraceMinutes: number
+  /** Optional now — both present or both absent. A merchant can run with no no-show fee at all. */
+  noShowFeePaise: number | undefined
+  noShowGraceMinutes: number | undefined
   holdTtlSeconds: number
   maxConcurrentHoldsPerAgent: number
   holdRateLimitPerMinute: number
@@ -24,8 +25,8 @@ export interface Policy {
 export interface PolicyDraft {
   depositAmountPaise: number
   cancellationLadder: readonly LadderTier[]
-  noShowFeePaise: number
-  noShowGraceMinutes: number
+  noShowFeePaise: number | undefined
+  noShowGraceMinutes: number | undefined
   holdTtlSeconds: number
   maxConcurrentHoldsPerAgent: number
   holdRateLimitPerMinute: number
@@ -43,6 +44,14 @@ export function draftFromPolicy(policy: Policy): PolicyDraft {
   }
 }
 
+/** A service the merchant offers — mirrors `src/ports/catalog-repo.ts`'s `ServiceRecord`. */
+export interface Service {
+  serviceId: string
+  name: string
+  durationMinutes: number
+  pricePaise: number
+}
+
 /**
  * Mirrors `src/domain/policy-validation.ts`'s rules — client-side only, for
  * immediate form feedback. The server re-runs the authoritative version of
@@ -51,9 +60,16 @@ export function draftFromPolicy(policy: Policy): PolicyDraft {
  */
 export function validateDraft(draft: PolicyDraft): string | undefined {
   if (!Number.isInteger(draft.depositAmountPaise) || draft.depositAmountPaise <= 0) return 'Deposit must be a positive whole number of paise.'
-  if (!Number.isInteger(draft.noShowFeePaise) || draft.noShowFeePaise <= 0) return 'No-show fee must be a positive whole number of paise.'
+
+  // Both present or both absent — see Policy.noShowFeePaise's own doc comment.
+  const noShowFeeSet = draft.noShowFeePaise !== undefined
+  const noShowGraceSet = draft.noShowGraceMinutes !== undefined
+  if (noShowFeeSet !== noShowGraceSet) return 'No-show fee and grace period must be set together, or both left off to run without a no-show fee.'
+  if (noShowFeeSet && (!Number.isInteger(draft.noShowFeePaise) || draft.noShowFeePaise! <= 0)) return 'No-show fee must be a positive whole number of paise.'
+  if (noShowGraceSet && (!Number.isInteger(draft.noShowGraceMinutes) || draft.noShowGraceMinutes! < 0 || draft.noShowGraceMinutes! > 180))
+    return 'Grace period must be an integer between 0 and 180 minutes.'
+
   if (!Number.isInteger(draft.holdTtlSeconds) || draft.holdTtlSeconds < 60 || draft.holdTtlSeconds > 3_600) return 'Hold TTL must be an integer between 60 and 3600 seconds.'
-  if (!Number.isInteger(draft.noShowGraceMinutes) || draft.noShowGraceMinutes < 0 || draft.noShowGraceMinutes > 180) return 'Grace period must be an integer between 0 and 180 minutes.'
   if (!Number.isInteger(draft.maxConcurrentHoldsPerAgent) || draft.maxConcurrentHoldsPerAgent < 1 || draft.maxConcurrentHoldsPerAgent > 50)
     return 'Max concurrent holds must be an integer between 1 and 50.'
   if (!Number.isInteger(draft.holdRateLimitPerMinute) || draft.holdRateLimitPerMinute < 1 || draft.holdRateLimitPerMinute > 1_000)

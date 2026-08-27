@@ -86,7 +86,7 @@ afterAll(async () => {
 })
 
 describe('decline_booking (real Postgres + FakePaymentProvider + FrozenClock) — the B5 failure path', () => {
-  it('hold -> confirm -> decline: refunds in full, releases the slot, offers alternatives, five events atomically', async () => {
+  it('hold -> confirm -> decline: refunds in full, releases the slot, offers alternatives, six events atomically', async () => {
     clock.set(new Date(slotAt('09:00').getTime() - 5 * 24 * 3_600_000)) // 5 days before appointment
     const { bookingId, startsAt, depositAmountPaise } = await holdAndConfirm('09:00')
 
@@ -115,8 +115,10 @@ describe('decline_booking (real Postgres + FakePaymentProvider + FrozenClock) �
     expect(rebooked.status).toBe('HELD')
 
     const allEvents = await loadEventLog(bookingId)
-    const trailingFive = allEvents.slice(-5).map((e) => e.type)
-    expect(trailingFive).toEqual(['MERCHANT_DECLINED', 'SLOT_RELEASED', 'REFUND_ISSUED', 'AUTHORIZATION_RELEASED', 'ALTERNATIVES_OFFERED'])
+    // This task: decline_booking now also releases the session-complete
+    // mandate — six trailing events, not five.
+    const trailingSix = allEvents.slice(-6).map((e) => e.type)
+    expect(trailingSix).toEqual(['MERCHANT_DECLINED', 'SLOT_RELEASED', 'REFUND_ISSUED', 'AUTHORIZATION_RELEASED', 'SESSION_COMPLETE_AUTHORIZATION_RELEASED', 'ALTERNATIVES_OFFERED'])
     expect(allEvents.some((e) => e.type === 'RETENTION_APPLIED')).toBe(false) // the ladder was never consulted
 
     const merchantDeclined = allEvents.find((e) => e.type === 'MERCHANT_DECLINED')

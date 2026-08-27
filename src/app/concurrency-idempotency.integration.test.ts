@@ -116,7 +116,7 @@ describe('idempotency under genuinely concurrent retry (docs/01-architecture.md 
 
     // Every caller sees the exact same payment/authorization — one real money movement, N replays.
     const paymentIds = new Set(results.map((r) => r.deposit.paymentId))
-    const authorizationIds = new Set(results.map((r) => r.authorization.authorizationId))
+    const authorizationIds = new Set(results.map((r) => r.authorization!.authorizationId))
     expect(paymentIds.size).toBe(1)
     expect(authorizationIds.size).toBe(1)
 
@@ -257,7 +257,7 @@ describe('POLICY_VERSION_STALE (docs/03-domain-model.md §5)', () => {
         { hoursBefore: 12, retainPct: 50 },
         { hoursBefore: 0, retainPct: 100 },
       ],
-      noShowFeePaise: currentPolicy.policy.noShowFeePaise,
+      noShowFeePaise: currentPolicy.policy.noShowFeePaise ?? null,
       noShowGraceMinutes: 15,
       holdTtlSeconds: currentPolicy.policy.holdTtlSeconds,
       maxConcurrentHoldsPerAgent: currentPolicy.policy.maxConcurrentHoldsPerAgent,

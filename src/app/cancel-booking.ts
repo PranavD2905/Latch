@@ -1,4 +1,10 @@
-import { createAuthorizationReleasedEvent, createCancelledByCustomerEvent, createRefundIssuedEvent, createRetentionAppliedEvent } from '../domain/event-factory.js'
+import {
+  createAuthorizationReleasedEvent,
+  createCancelledByCustomerEvent,
+  createRefundIssuedEvent,
+  createRetentionAppliedEvent,
+  createSessionCompleteAuthorizationReleasedEvent,
+} from '../domain/event-factory.js'
 import type { AuthorizationHeldEvent, DepositCapturedEvent } from '../domain/events.js'
 import { evaluateLadder } from '../domain/ladder.js'
 import { floorPercentageOf, subtractPaise, type Paise } from '../domain/money.js'
@@ -216,7 +222,26 @@ async function cancelBookingClaimed(cmd: CancelBookingCommand, deps: AppDeps): P
       )
     }
 
-    const projection: BookingSnapshot = { ...fresh, status: 'CANCELLED_BY_CUSTOMER', lastEventSequence: sequence }
+    // Same release for the session-complete mandate — a cancelled booking's
+    // session will never complete, so nothing is left owing against it.
+    // Skipped in the ₹0 edge case (never authorised) or if it already
+    // lapsed on its own.
+    if (fresh.sessionCompleteAuthorizationId && fresh.sessionCompleteAuthorizationExpiresAt && !fresh.sessionCompleteAuthorizationLapsedAt) {
+      events.push(
+        createSessionCompleteAuthorizationReleasedEvent(cmd.bookingId, ++sequence, deps.clock, {
+          authorizationId: fresh.sessionCompleteAuthorizationId,
+          rail: deps.paymentRail.name,
+          expiresAt: fresh.sessionCompleteAuthorizationExpiresAt,
+        }),
+      )
+    }
+
+    const projection: BookingSnapshot = {
+      ...fresh,
+      status: 'CANCELLED_BY_CUSTOMER',
+      sessionCompleteAuthorizationId: undefined,
+      lastEventSequence: sequence,
+    }
     await tx.append(events, projection, deps.merchantId)
   })
 

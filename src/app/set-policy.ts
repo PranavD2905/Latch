@@ -42,7 +42,7 @@ export async function setPolicy(cmd: SetPolicyCommand, deps: AppDeps): Promise<S
   const input: PolicyInput = {
     ...cmd,
     depositAmountPaise: toPaise(cmd.depositAmountPaise),
-    noShowFeePaise: toPaise(cmd.noShowFeePaise),
+    noShowFeePaise: cmd.noShowFeePaise === undefined ? undefined : toPaise(cmd.noShowFeePaise),
   }
 
   const policy = await deps.catalogRepo.publishPolicy(deps.merchantId, input, deps.clock.now())

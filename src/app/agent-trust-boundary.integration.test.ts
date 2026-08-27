@@ -180,8 +180,8 @@ describe('agent trust boundary (docs/01-architecture.md §9)', () => {
     // (dev-logs/005 constraint 1).
     await expect(
       deps.paymentRail.captureAuthorization({
-        authorizationId: confirmed.authorization.authorizationId,
-        amountPaise: toPaise(confirmed.authorization.amountPaise + 1),
+        authorizationId: confirmed.authorization!.authorizationId,
+        amountPaise: toPaise(confirmed.authorization!.amountPaise + 1),
         reference: held.bookingId,
       }),
     ).rejects.toBeInstanceOf(CaptureAmountMismatchError)
@@ -189,10 +189,10 @@ describe('agent trust boundary (docs/01-architecture.md §9)', () => {
     // No headroom was consumed by the refused attempt — the authorisation is untouched.
     await expect(
       deps.paymentRail.captureAuthorization({
-        authorizationId: confirmed.authorization.authorizationId,
-        amountPaise: toPaise(confirmed.authorization.amountPaise),
+        authorizationId: confirmed.authorization!.authorizationId,
+        amountPaise: toPaise(confirmed.authorization!.amountPaise),
         reference: held.bookingId,
       }),
-    ).resolves.toMatchObject({ amountPaise: confirmed.authorization.amountPaise })
+    ).resolves.toMatchObject({ amountPaise: confirmed.authorization!.amountPaise })
   })
 })

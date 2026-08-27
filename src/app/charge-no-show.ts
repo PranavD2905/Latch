@@ -1,4 +1,5 @@
-import { createNoShowChargedEvent } from '../domain/event-factory.js'
+import { createNoShowChargedEvent, createSessionCompleteAuthorizationReleasedEvent } from '../domain/event-factory.js'
+import type { BookingEvent } from '../domain/events.js'
 import { subtractPaise, type Paise } from '../domain/money.js'
 import { Refusal, type RefusalCode } from '../domain/refusals.js'
 import type { BookingSnapshot } from '../ports/event-store.js'
@@ -27,15 +28,12 @@ export interface ChargeNoShowResult {
 export class BookingNotFoundError extends Error {}
 /** The booking exists but isn't in a state a no-show charge can apply to — not CONFIRMED (already charged, still HELD, declined, ...). */
 export class BookingNotChargeableError extends Error {}
-/** A CONFIRMED booking with no authorization on it would be a prior-slice bug (every confirm_with_deposit registers one) — not a real state. */
-export class NoAuthorizationFoundError extends Error {}
 
 type GateOutcome =
   | { kind: 'ok'; snapshot: BookingSnapshot; authorizationId: string; authorizationAmountPaise: Paise }
   | { kind: 'refused'; code: RefusalCode; reason: string }
   | { kind: 'not_found' }
   | { kind: 'not_chargeable' }
-  | { kind: 'no_authorization' }
 
 /**
  * `charge_no_show` — docs/03-domain-model.md §3 Rule 3 / §4: the most
@@ -91,9 +89,6 @@ async function chargeNoShowClaimed(cmd: ChargeNoShowCommand, deps: AppDeps): Pro
     if (snapshot.status !== 'CONFIRMED') {
       return { kind: 'not_chargeable' }
     }
-    if (!snapshot.authorizationId || !snapshot.authorizationAmountPaise) {
-      return { kind: 'no_authorization' }
-    }
 
     const nextSequence = snapshot.lastEventSequence + 1
     const refuse = async (code: RefusalCode, reason: string): Promise<GateOutcome> => {
@@ -109,6 +104,19 @@ async function chargeNoShowClaimed(cmd: ChargeNoShowCommand, deps: AppDeps): Pro
         projection: { ...snapshot, lastEventSequence: nextSequence },
       })
       return { kind: 'refused', code, reason }
+    }
+
+    // The no-show fee is optional now (this task): a booking confirmed
+    // under a policy version with no no-show fee configured never got an
+    // authorisation registered at all — an expected, agent-facing outcome,
+    // not a prior-slice bug. If the *current* policy also no longer defines
+    // a grace period, there's nothing to check eligibility against either
+    // way, so the same refusal covers it.
+    if (!snapshot.authorizationId || !snapshot.authorizationAmountPaise) {
+      return refuse('NO_SHOW_FEE_NOT_CONFIGURED', `booking ${snapshot.bookingId}'s policy has no no-show fee configured — there is no authorisation to capture`)
+    }
+    if (policy.noShowGraceMinutes === undefined) {
+      return refuse('NO_SHOW_FEE_NOT_CONFIGURED', `merchant ${deps.merchantId}'s current policy no longer configures a no-show fee — eligibility cannot be evaluated`)
     }
 
     const now = deps.clock.now()
@@ -139,9 +147,6 @@ async function chargeNoShowClaimed(cmd: ChargeNoShowCommand, deps: AppDeps): Pro
   }
   if (gateOutcome.kind === 'not_chargeable') {
     throw new BookingNotChargeableError(`booking ${cmd.bookingId} is not CONFIRMED — only a confirmed booking can be charged for a no-show`)
-  }
-  if (gateOutcome.kind === 'no_authorization') {
-    throw new NoAuthorizationFoundError(`booking ${cmd.bookingId} is CONFIRMED but has no authorization registered`)
   }
   if (gateOutcome.kind === 'refused') {
     throw new Refusal(gateOutcome.code, gateOutcome.reason)
@@ -189,7 +194,7 @@ async function chargeNoShowClaimed(cmd: ChargeNoShowCommand, deps: AppDeps): Pro
   await deps.eventStore.transaction(async (tx) => {
     const fresh = await tx.loadSnapshotForUpdate(cmd.bookingId)
     const base = fresh ?? snapshot
-    const sequence = base.lastEventSequence + 1
+    let sequence = base.lastEventSequence + 1
 
     const chargedEvent = createNoShowChargedEvent(cmd.bookingId, sequence, deps.clock, {
       rail: deps.paymentRail.name,
@@ -215,8 +220,30 @@ async function chargeNoShowClaimed(cmd: ChargeNoShowCommand, deps: AppDeps): Pro
       authority: { policyVersion: snapshot.policyVersion ?? policy.policyVersion, authorizationId, razorpayPaymentId: captured.paymentId },
     })
 
-    const projection: BookingSnapshot = { ...base, status: 'NO_SHOW_CHARGED', lastEventSequence: sequence }
-    await tx.append([chargedEvent], projection, deps.merchantId)
+    const events: BookingEvent[] = [chargedEvent]
+    // The patient didn't show, so whatever the session-complete mandate was
+    // authorised for is now moot — released the same way decline_booking/
+    // cancel_booking already release it on their own terminal outcomes, so
+    // no orphaned authority is left claiming a session that will never
+    // complete is still owed. No rail call (dev-logs/005: no void endpoint)
+    // — Razorpay auto-refunds it at `expiresAt` on its own.
+    if (base.sessionCompleteAuthorizationId && base.sessionCompleteAuthorizationExpiresAt && !base.sessionCompleteAuthorizationLapsedAt) {
+      events.push(
+        createSessionCompleteAuthorizationReleasedEvent(cmd.bookingId, ++sequence, deps.clock, {
+          authorizationId: base.sessionCompleteAuthorizationId,
+          rail: deps.paymentRail.name,
+          expiresAt: base.sessionCompleteAuthorizationExpiresAt,
+        }),
+      )
+    }
+
+    const projection: BookingSnapshot = {
+      ...base,
+      status: 'NO_SHOW_CHARGED',
+      sessionCompleteAuthorizationId: undefined,
+      lastEventSequence: sequence,
+    }
+    await tx.append(events, projection, deps.merchantId)
   })
 
   const result: ChargeNoShowResult = {

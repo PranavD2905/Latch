@@ -7,6 +7,16 @@ import type { Db } from './client.js'
 import { isUniqueViolation } from './postgres-errors.js'
 import { merchants, policies, practitioners, services } from './schema.js'
 
+function rowToService(row: typeof services.$inferSelect): ServiceRecord {
+  return {
+    serviceId: row.serviceId,
+    merchantId: row.merchantId,
+    name: row.name,
+    durationMinutes: row.durationMinutes,
+    pricePaise: toPaise(row.pricePaise),
+  }
+}
+
 export class PostgresCatalogRepo implements CatalogRepo {
   constructor(private readonly db: Db) {}
 
@@ -30,14 +40,32 @@ export class PostgresCatalogRepo implements CatalogRepo {
   async getService(serviceId: string): Promise<ServiceRecord | undefined> {
     const rows = await this.db.select().from(services).where(eq(services.serviceId, serviceId)).limit(1)
     const row = rows[0]
-    if (!row) return undefined
-    return {
-      serviceId: row.serviceId,
-      merchantId: row.merchantId,
-      name: row.name,
-      durationMinutes: row.durationMinutes,
-      pricePaise: toPaise(row.pricePaise),
-    }
+    return row ? rowToService(row) : undefined
+  }
+
+  async listServices(merchantId: string): Promise<readonly ServiceRecord[]> {
+    const rows = await this.db.select().from(services).where(eq(services.merchantId, merchantId)).orderBy(services.name)
+    return rows.map(rowToService)
+  }
+
+  async updateService(
+    merchantId: string,
+    serviceId: string,
+    patch: { name?: string; durationMinutes?: number; pricePaise?: number },
+    updatedAt: Date,
+  ): Promise<ServiceRecord | undefined> {
+    const set: Partial<typeof services.$inferInsert> = { updatedAt }
+    if (patch.name !== undefined) set.name = patch.name
+    if (patch.durationMinutes !== undefined) set.durationMinutes = patch.durationMinutes
+    if (patch.pricePaise !== undefined) set.pricePaise = patch.pricePaise
+
+    const rows = await this.db
+      .update(services)
+      .set(set)
+      .where(and(eq(services.serviceId, serviceId), eq(services.merchantId, merchantId)))
+      .returning()
+    const row = rows[0]
+    return row ? rowToService(row) : undefined
   }
 
   async getActivePolicy(merchantId: string) {
@@ -86,8 +114,8 @@ export class PostgresCatalogRepo implements CatalogRepo {
           depositType: 'fixed', // the only deposit type this domain models — see Policy's own doc comment
           depositAmountPaise: input.depositAmountPaise,
           cancellationLadder: input.cancellationLadder,
-          noShowFeePaise: input.noShowFeePaise,
-          noShowGraceMinutes: input.noShowGraceMinutes,
+          noShowFeePaise: input.noShowFeePaise ?? null,
+          noShowGraceMinutes: input.noShowGraceMinutes ?? null,
           holdTtlSeconds: input.holdTtlSeconds,
           maxConcurrentHoldsPerAgent: input.maxConcurrentHoldsPerAgent,
           holdRateLimitPerMinute: input.holdRateLimitPerMinute,
@@ -111,8 +139,8 @@ function rowToPolicy(row: typeof policies.$inferSelect) {
     policyVersion: row.version,
     depositAmountPaise: toPaise(row.depositAmountPaise),
     cancellationLadder: row.cancellationLadder as readonly LadderTier[],
-    noShowFeePaise: toPaise(row.noShowFeePaise),
-    noShowGraceMinutes: row.noShowGraceMinutes,
+    noShowFeePaise: row.noShowFeePaise === null ? undefined : toPaise(row.noShowFeePaise),
+    noShowGraceMinutes: row.noShowGraceMinutes ?? undefined,
     holdTtlSeconds: row.holdTtlSeconds,
     maxConcurrentHoldsPerAgent: row.maxConcurrentHoldsPerAgent,
     holdRateLimitPerMinute: row.holdRateLimitPerMinute,

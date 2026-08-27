@@ -28,6 +28,18 @@ export interface CatalogRepo {
   getMerchant(merchantId: string): Promise<{ merchantId: string; name: string } | undefined>
   getPractitioner(practitionerId: string): Promise<PractitionerRecord | undefined>
   getService(serviceId: string): Promise<ServiceRecord | undefined>
+  /** Every service this merchant offers — the merchant-facing pricing UI's read, not something an agent ever calls (`find_slots` takes a specific `serviceId` already). */
+  listServices(merchantId: string): Promise<readonly ServiceRecord[]>
+  /**
+   * Merchant-only price/name/duration edit — a plain `UPDATE`, not versioned
+   * the way `policies` is (see `schema.ts`'s `services.pricePaise` doc
+   * comment for why that's safe: the mandate amount is frozen onto each
+   * booking at confirm time, so this never retroactively changes what an
+   * already-confirmed booking owes). `undefined` if `serviceId` doesn't
+   * belong to `merchantId` — same "unknown, not forbidden" treatment
+   * `tenant-guard.ts` uses everywhere else.
+   */
+  updateService(merchantId: string, serviceId: string, patch: { name?: string; durationMinutes?: number; pricePaise?: Paise }, updatedAt: Date): Promise<ServiceRecord | undefined>
   /** The current (highest-version) policy for a merchant — the authority `confirm_with_deposit` checks staleness against. */
   getActivePolicy(merchantId: string): Promise<Policy | undefined>
   /**

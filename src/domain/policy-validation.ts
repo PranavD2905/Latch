@@ -18,6 +18,7 @@ export const POLICY_BOUNDS = {
 
 export const POLICY_VALIDATION_CODES = [
   'AMOUNT_NOT_POSITIVE_INTEGER',
+  'NO_SHOW_FIELDS_MUST_BE_PAIRED',
   'HOLD_TTL_OUT_OF_BOUNDS',
   'GRACE_MINUTES_OUT_OF_BOUNDS',
   'MAX_CONCURRENT_HOLDS_OUT_OF_BOUNDS',
@@ -70,7 +71,16 @@ export function validatePolicyInput(input: PolicyDraft): void {
   if (!isPositiveInteger(input.depositAmountPaise)) {
     throw new PolicyValidationError('AMOUNT_NOT_POSITIVE_INTEGER', `depositAmountPaise must be a positive integer, got ${input.depositAmountPaise}`)
   }
-  if (!isPositiveInteger(input.noShowFeePaise)) {
+
+  // No-show is fully optional now — but paired: a fee with no grace period
+  // (or vice versa) is a half-configured state nothing downstream can act on
+  // consistently, so it's rejected here rather than silently defaulted.
+  const noShowFeeSet = input.noShowFeePaise !== undefined
+  const noShowGraceSet = input.noShowGraceMinutes !== undefined
+  if (noShowFeeSet !== noShowGraceSet) {
+    throw new PolicyValidationError('NO_SHOW_FIELDS_MUST_BE_PAIRED', 'noShowFeePaise and noShowGraceMinutes must be set together, or both left unset to run without a no-show fee')
+  }
+  if (noShowFeeSet && !isPositiveInteger(input.noShowFeePaise!)) {
     throw new PolicyValidationError('AMOUNT_NOT_POSITIVE_INTEGER', `noShowFeePaise must be a positive integer, got ${input.noShowFeePaise}`)
   }
 
@@ -81,7 +91,7 @@ export function validatePolicyInput(input: PolicyDraft): void {
       `holdTtlSeconds must be an integer between ${POLICY_BOUNDS.holdTtlSeconds.min} and ${POLICY_BOUNDS.holdTtlSeconds.max}, got ${input.holdTtlSeconds}`,
     )
   }
-  if (!inBounds(input.noShowGraceMinutes, POLICY_BOUNDS.noShowGraceMinutes)) {
+  if (noShowGraceSet && !inBounds(input.noShowGraceMinutes!, POLICY_BOUNDS.noShowGraceMinutes)) {
     throw new PolicyValidationError(
       'GRACE_MINUTES_OUT_OF_BOUNDS',
       `noShowGraceMinutes must be an integer between ${POLICY_BOUNDS.noShowGraceMinutes.min} and ${POLICY_BOUNDS.noShowGraceMinutes.max}, got ${input.noShowGraceMinutes}`,

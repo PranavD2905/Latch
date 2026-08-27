@@ -593,7 +593,10 @@ describe('merchant API — GET/POST /policy, dev-logs/015 (originally cut, reins
   })
 
   it('400s a request missing a required field, before it ever reaches setPolicy', async () => {
-    const { noShowFeePaise: _omit, ...incomplete } = validPolicyBody()
+    // holdTtlSeconds, not noShowFeePaise — this task made the no-show fee
+    // itself optional at the wire schema (see the next test), so omitting
+    // *that* field is a legitimate 200 now, not a 400.
+    const { holdTtlSeconds: _omit, ...incomplete } = validPolicyBody()
     const response = await policyApp.inject({
       method: 'POST',
       url: '/policy',
@@ -601,6 +604,32 @@ describe('merchant API — GET/POST /policy, dev-logs/015 (originally cut, reins
       payload: incomplete,
     })
     expect(response.statusCode).toBe(400)
+  })
+
+  it('publishes successfully when the no-show fee is omitted entirely — it is optional now', async () => {
+    const { noShowFeePaise: _fee, noShowGraceMinutes: _grace, ...withoutNoShow } = validPolicyBody({ depositAmountPaise: 25_000 })
+    const response = await policyApp.inject({
+      method: 'POST',
+      url: '/policy',
+      headers: { authorization: `Bearer ${POLICY_MERCHANT_TOKEN}` },
+      payload: withoutNoShow,
+    })
+    expect(response.statusCode).toBe(200)
+    const body = response.json() as { policy: { noShowFeePaise?: number; noShowGraceMinutes?: number } }
+    expect(body.policy.noShowFeePaise).toBeUndefined()
+    expect(body.policy.noShowGraceMinutes).toBeUndefined()
+  })
+
+  it('422s when only one of the no-show pair is set', async () => {
+    const { noShowGraceMinutes: _grace, ...halfConfigured } = validPolicyBody()
+    const response = await policyApp.inject({
+      method: 'POST',
+      url: '/policy',
+      headers: { authorization: `Bearer ${POLICY_MERCHANT_TOKEN}` },
+      payload: halfConfigured,
+    })
+    expect(response.statusCode).toBe(422)
+    expect(response.json()).toMatchObject({ code: 'NO_SHOW_FIELDS_MUST_BE_PAIRED' })
   })
 
   it('a smuggled policyVersion field in the request body is ignored — the server still derives its own', async () => {

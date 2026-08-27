@@ -21,7 +21,13 @@ function synopsis(event: BookingEvent): string {
     case 'POLICY_ACKNOWLEDGED':
       return `agent acknowledged ladder v${event['policyVersion']}`
     case 'AUTHORIZATION_HELD':
-      return `rail=${event['rail']} · lapses ${timeLabel(event['expiresAt'] as string)}`
+      return `no-show ceiling · rail=${event['rail']} · lapses ${timeLabel(event['expiresAt'] as string)}`
+    case 'SESSION_COMPLETE_AUTHORIZATION_HELD':
+      return `session-complete mandate · rail=${event['rail']} · lapses ${timeLabel(event['expiresAt'] as string)}`
+    case 'SESSION_COMPLETE_AUTHORIZATION_RELEASED':
+      return `${shortId(event['authorizationId'] as string)} abandoned — auto-expires ${timeLabel(event['expiresAt'] as string)}`
+    case 'SESSION_COMPLETE_AUTHORIZATION_LAPSED':
+      return `${shortId(event['authorizationId'] as string)} — 5-day window expired`
     case 'BOOKING_CONFIRMED':
       return 'deposit + authorisation both succeeded'
     case 'BOOKING_RESCHEDULED':
@@ -60,7 +66,7 @@ function amountCell(event: BookingEvent): { text: string; className: string } | 
     const isCredit = event.action.direction === 'credit'
     return { text: `${formatRupees(event.action.amountPaise)} ${event.action.direction}`, className: isCredit ? 'text-[var(--good-text)]' : 'text-[var(--warning-text)]' }
   }
-  if (event.type === 'AUTHORIZATION_HELD') {
+  if (event.type === 'AUTHORIZATION_HELD' || event.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD') {
     return { text: `${formatRupees(event['amountPaise'] as number)} ceiling`, className: 'text-[var(--text)]' }
   }
   return undefined
@@ -116,12 +122,13 @@ function DetailPanel({ event }: { event: BookingEvent }) {
     )
   }
 
-  if (event.type === 'AUTHORIZATION_HELD') {
+  if (event.type === 'AUTHORIZATION_HELD' || event.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD') {
     return (
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-[var(--bg)] p-4">
         <span className="font-mono text-xs text-[var(--text-muted)]">
-          ceiling registered: <span className="font-bold text-[var(--text)]">{formatRupees(event['amountPaise'] as number)}</span> — the authorised amount IS
-          the ceiling, no headroom to abuse
+          {event.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD' ? 'session-complete mandate' : 'no-show ceiling'} registered:{' '}
+          <span className="font-bold text-[var(--text)]">{formatRupees(event['amountPaise'] as number)}</span> — the authorised amount IS the ceiling, no
+          headroom to abuse
         </span>
         <EnforcedByBadge enforcedBy="payment_rail" />
       </div>
@@ -168,7 +175,8 @@ export function EventsTable({
               const isRefused = category === 'refused'
               const amount = amountCell(event)
               const isOpen = expanded === event.eventId
-              const enforcedBy: BoundEnforcer | undefined = event.bound?.enforcedBy ?? (event.type === 'AUTHORIZATION_HELD' ? 'payment_rail' : undefined)
+              const enforcedBy: BoundEnforcer | undefined =
+                event.bound?.enforcedBy ?? (event.type === 'AUTHORIZATION_HELD' || event.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD' ? 'payment_rail' : undefined)
 
               return (
                 <Fragment key={event.eventId}>
