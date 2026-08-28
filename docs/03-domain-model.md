@@ -229,8 +229,12 @@ The append-only log. Every row is immutable.
 | `HOLD_RELEASED` | — | Agent releases explicitly |
 | `POLICY_ACKNOWLEDGED` | — | Agent confirms it has read ladder vN |
 | `DEPOSIT_CAPTURED` | **in** | Razorpay capture succeeds |
-| `AUTHORIZATION_HELD` | — | card manual capture token created, ceiling recorded |
-| `BOOKING_CONFIRMED` | — | Both of the above succeeded |
+| `AUTHORIZATION_HELD` | — | card manual capture token created, ceiling recorded — the no-show leg |
+| `SESSION_COMPLETE_AUTHORIZATION_HELD` | — | A second, independent card manual-capture token created alongside the deposit — `service.pricePaise - policy.depositAmountPaise`, frozen at confirm time (added with the session-complete charge feature; see the note after this table) |
+| `SESSION_COMPLETE_AUTHORIZATION_RELEASED` | — | The session-complete mandate abandoned unused — a no-show charge made it moot |
+| `SESSION_COMPLETE_AUTHORIZATION_LAPSED` | — | Worker: the session-complete leg's own 5-day authorisation window expired before it was captured |
+| `SESSION_COMPLETE_CHARGED` | **in** | `mark_complete` captures the session-complete mandate |
+| `BOOKING_CONFIRMED` | — | The deposit capture (and any authorisation legs the policy/price called for) succeeded |
 | `BOOKING_RESCHEDULED` | delta only | Move succeeded |
 | `CANCELLED_BY_CUSTOMER` | — | Cancel with `cause=CUSTOMER` |
 | `RETENTION_APPLIED` | **kept** | Ladder retained a portion |
@@ -243,7 +247,7 @@ The append-only log. Every row is immutable.
 | `NO_SHOW_ELIGIBLE` | — | Start + grace elapsed |
 | `NON_ATTENDANCE_MARKED` | — | Merchant API marks non-attendance — the second of `charge_no_show`'s two independent facts |
 | `NO_SHOW_CHARGED` | **in** | Debit against authorisation succeeded |
-| `BOOKING_COMPLETED` | — | Merchant marks attendance; booking finishes normally |
+| `BOOKING_COMPLETED` | — | `mark_complete`, when there is no session-complete mandate to capture (service priced exactly at the deposit) — the fact of completion with no money attached |
 | `ACTION_REFUSED` | — | A gate or bound rejected a command ★★ |
 | `RECONCILIATION_MISMATCH` | — | The reconciliation worker or the Razorpay webhook found the trail disagreeing with Razorpay's own record ★★★ |
 
@@ -276,6 +280,24 @@ write) appends every one of its rows within the same millisecond, so sorting by 
 carries a `global_sequence` `bigserial` column (migration `0008`), true row-insertion order, independent
 of any domain timestamp — the SSE audit-trail feed (`src/adapters/audit-trail/`) orders and pages by that
 column exclusively, never by `occurredAt` or `eventId`.
+
+**A note on where the session-complete leg actually lives, added with the session-complete charge
+feature — the same shape as the `NO_SHOW_ELIGIBLE` note above.** `fold()` (`src/domain/fold.ts`)
+deliberately treats `SESSION_COMPLETE_AUTHORIZATION_HELD`/`_RELEASED`/`_LAPSED` as no-ops: `BookingState`,
+the pure fold's return type, carries a single `authorizationId` field, modelling the no-show leg only.
+The session-complete leg's authorisation id, amount, and expiry live on the live Postgres projection's own
+dedicated columns (`sessionCompleteAuthorizationId` and friends, migration `0013`), set directly by
+`confirm-with-deposit.ts`/`mark-session-complete.ts`, never derived from a replay. This is not an
+oversight — it is the same divergence the `NO_SHOW_ELIGIBLE` note above already established as this
+project's precedent: a pure `fold()` over the event log is the reference domain model
+`docs/03-domain-model.md` describes and `fold.test.ts` exercises directly, but it is not, and was never
+meant to be, the thing any command handler actually reads at runtime. The live projection (`BookingSnapshot`,
+`src/ports/event-store.ts`) is a superset of `fold()`'s `BookingState`, carrying whatever additional
+operational bookkeeping (`holdExpiresAt`, `agentId`, both authorisation legs' full detail, the no-show/
+no-show-eligibility markers) a command handler's own gate needs without a full replay per call — see
+dev-logs/010 for why that split was made in the first place. The event still lands in the trail, in
+order, exactly where a real replay would show it; only `fold()`'s own projected fields stay narrower than
+the live one's.
 
 ### Every money event carries these four fields
 

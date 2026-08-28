@@ -19,6 +19,20 @@ export type BookingStatus =
  * The projection — a derived, disposable view over the event log, never the
  * source of truth itself. Everything here is computable by replaying events;
  * nothing here is ever assigned directly.
+ *
+ * Not the live projection: `fold()` is the pure reference domain model
+ * docs/03-domain-model.md describes, exercised directly by `fold.test.ts`
+ * — no command handler calls it at runtime. The live Postgres projection
+ * every handler actually gates against is `BookingSnapshot`
+ * (`src/ports/event-store.ts`), a superset of this type carrying whatever
+ * extra operational bookkeeping (`holdExpiresAt`, `agentId`, both
+ * authorisation legs' full detail, the no-show-eligibility marker) a
+ * handler needs without a full replay per call, maintained directly by each
+ * handler rather than derived from this function. `NO_SHOW_ELIGIBLE`
+ * (docs/03-domain-model.md §3, added Slice 5) and the
+ * `SESSION_COMPLETE_AUTHORIZATION_*` case below (added with the
+ * session-complete charge feature) are the two places that divergence is
+ * visible in this file; see dev-logs/010 for why the split was made.
  */
 export interface BookingState {
   bookingId: string
