@@ -17,7 +17,6 @@ import { CircuitBreaker } from './circuit-breaker.js'
 import { confirmWithDeposit } from './confirm-with-deposit.js'
 import { getPolicy } from './get-policy.js'
 import { holdSlot } from './hold-slot.js'
-import { reconcileObservedPayment } from './reconciliation.js'
 import type { AppDeps } from './types.js'
 
 process.loadEnvFile?.('.env')
@@ -78,22 +77,31 @@ afterAll(async () => {
 })
 
 /**
- * dev-logs/016 (SDE3-review follow-up), the "payment-provider outage" chaos
- * scenario the review named. `confirm_with_deposit` runs the deposit capture
- * and the no-show authorisation *concurrently* (`Promise.all`,
- * `confirm-with-deposit.ts`) — deliberately, so a human waiting on both
- * Checkout completions isn't waiting on them serially. That means a partial
- * outage — one leg succeeds, the other fails — is a real, reachable state,
- * not a hypothetical: exactly the shape dev-logs/014 item 2 described but
- * never actually drove through `confirm_with_deposit` itself (its own tests
- * simulate a mismatch by calling the provider/rail directly, bypassing the
- * command that would actually produce this in production). This test drives
- * the real command, hits the real partial failure, and then proves the real
- * mitigation (the webhook path) actually closes it — not just that the
- * claim reads plausibly in a dev log.
+ * dev-logs/016 (SDE3-review follow-up) originally wrote this test to *prove*
+ * a real gap: `confirm_with_deposit` ran the deposit capture and the no-show
+ * authorisation concurrently via `Promise.all`, so a partial outage — one
+ * leg succeeds, the other fails — was a real, reachable production state,
+ * and `Promise.all`'s all-or-nothing rejection discarded the already-settled
+ * deposit result along with the failure. The booking was left `HELD` with a
+ * captured-but-unrecorded deposit, recoverable only via the webhook path.
+ *
+ * A follow-up architecture review named this as the sharpest, most likely
+ * real-world trigger of "the audit trail can diverge from reality" (an
+ * ordinary single-leg network blip, not a process crash) and it was closed
+ * at the source: `confirm-with-deposit.ts` now uses `Promise.allSettled` and
+ * always proceeds to confirm once the mandatory deposit leg succeeds,
+ * recording whichever optional legs (no-show auth, session-complete auth)
+ * actually landed. This test now proves the fix — the exact same simulated
+ * outage that used to strand a captured deposit with zero trail now
+ * confirms cleanly, deposit recorded, only the failed leg absent. The
+ * webhook/reconciliation path this test used to exercise remains the real
+ * mitigation for the narrower case this fix can't reach — a genuine process
+ * crash between the payment call returning and the final transaction
+ * committing, which no amount of in-process `Promise` handling can help —
+ * see dev-logs/014 and `reconciliation.ts`.
  */
 describe('chaos: a payment-provider outage mid confirm_with_deposit', () => {
-  it('deposit captured, no-show authorization outage: booking stays HELD, the deposit is genuinely unrecorded, and the webhook path is what recovers it', async () => {
+  it('deposit captured, no-show authorization outage: confirm still succeeds, the deposit is recorded, only the failed leg is absent', async () => {
     const paymentProvider = new FakePaymentProvider()
     const realRail = new FakePaymentRail()
     const failingIdempotencyKey = freshKey()
@@ -120,50 +128,65 @@ describe('chaos: a payment-provider outage mid confirm_with_deposit', () => {
     createdBookingIds.push(held.bookingId)
     const policyResult = await getPolicy(deps)
 
-    await expect(
-      confirmWithDeposit({ bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: failingIdempotencyKey }, deps),
-    ).rejects.toThrow(PaymentRailError)
+    // No longer rejects: the no-show leg's outage no longer takes the
+    // already-captured deposit down with it.
+    const result = await confirmWithDeposit(
+      { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: failingIdempotencyKey },
+      deps,
+    )
+    expect(result.status).toBe('CONFIRMED')
+    expect(result.authorization).toBeUndefined() // the failed leg — absent, not silently retried or faked
+    expect(result.sessionCompleteMandate).toBeDefined() // the other, unrelated optional leg — unaffected by the outage
 
-    // The booking is left exactly where confirm_with_deposit's own
-    // discipline (dev-logs/013) leaves any leg failure: still HELD, not
-    // corrupted, not silently CONFIRMED with half the money events missing.
+    const snapshot = await deps.eventStore.loadSnapshot(held.bookingId)
+    expect(snapshot?.status).toBe('CONFIRMED')
+    expect(snapshot?.authorizationId).toBeUndefined()
+    expect(snapshot?.sessionCompleteAuthorizationId).toBeDefined()
+
+    // The actual fix, pinned directly: the deposit that really captured (in
+    // FakePaymentRail/FakePaymentProvider's own bookkeeping) is genuinely
+    // recorded now, not silently dropped by `Promise.all`'s all-or-nothing
+    // rejection.
+    const trail = await db.select().from(events).where(eq(events.bookingId, held.bookingId))
+    expect(trail.some((e) => e.type === 'DEPOSIT_CAPTURED')).toBe(true)
+    expect(trail.some((e) => e.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD')).toBe(true)
+    expect(trail.some((e) => e.type === 'AUTHORIZATION_HELD')).toBe(false) // the leg that failed — never fabricated
+    expect(trail.some((e) => e.type === 'BOOKING_CONFIRMED')).toBe(true)
+  })
+
+  it('deposit outage: the mandatory leg failing still rejects and leaves the booking HELD, untouched by the optional-leg fix above', async () => {
+    const paymentProvider = new FakePaymentProvider()
+    const deps: AppDeps = {
+      clock,
+      logger: createNoopLogger(),
+      paymentCircuitBreaker: new CircuitBreaker({ name: 'test', clock, failureThreshold: 3, cooldownMs: 60_000 }),
+      eventStore: new PostgresEventStore(db),
+      catalogRepo: new PostgresCatalogRepo(db),
+      paymentProvider,
+      paymentRail: new FakePaymentRail(),
+      idempotencyStore: new PostgresIdempotencyStore(db),
+      merchantId: SEED_MERCHANT_ID,
+      reconciliationCircuitBreaker: new CircuitBreaker({ name: 'test', clock, failureThreshold: 3, cooldownMs: 60_000 }),
+      webhookDeadLetterStore: new PostgresWebhookDeadLetterStore(db),
+    }
+
+    const startsAt = slotAt('12:00')
+    clock.set(new Date(startsAt.getTime() - 5 * 24 * 3_600_000))
+    const agentId = `agent_${ulid()}`
+    const held = await holdSlot({ agentId, practitionerId: SEED_PRACTITIONER_ID, serviceId: SEED_SERVICE_ID, startsAt, idempotencyKey: freshKey() }, deps)
+    createdBookingIds.push(held.bookingId)
+    const policyResult = await getPolicy(deps)
+
+    const depositFailingKey = freshKey()
+    paymentProvider.setScenario(depositFailingKey, 'decline')
+
+    await expect(
+      confirmWithDeposit({ bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: depositFailingKey }, deps),
+    ).rejects.toThrow()
+
     const snapshot = await deps.eventStore.loadSnapshot(held.bookingId)
     expect(snapshot?.status).toBe('HELD')
-
-    // The actual gap: captureDeposit really did succeed (real money moved,
-    // in FakePaymentProvider's own bookkeeping) but Promise.all's rejection
-    // on the authorize leg meant the second transaction — the only place
-    // DEPOSIT_CAPTURED is ever appended — never ran. The trail has nothing
-    // to show for a deposit that, in this test's fake stand-in for Razorpay,
-    // genuinely happened.
-    const trailBeforeWebhook = await db.select().from(events).where(eq(events.bookingId, held.bookingId))
-    expect(trailBeforeWebhook.some((e) => e.type === 'DEPOSIT_CAPTURED')).toBe(false)
-
-    // Replays the exact same capture confirm_with_deposit's own Promise.all
-    // already performed — FakePaymentProvider honours idempotency at the
-    // provider level (its own doc comment), so this is reading back what
-    // really happened, not charging a second time. This is how the test
-    // recovers the real `paymentId` a real Razorpay webhook payload would
-    // have carried, without confirm_with_deposit having had anywhere to put
-    // it in the trail.
-    const replayedCapture = await paymentProvider.captureDeposit({ amountPaise: policyResult.policy.depositAmountPaise, idempotencyKey: failingIdempotencyKey, reference: held.bookingId })
-    const depositStatus = await paymentProvider.fetchPaymentStatus(replayedCapture.paymentId)
-    expect(depositStatus.status).toBe('captured') // confirms the outage genuinely left a captured, unrecorded deposit sitting at the provider
-
-    // dev-logs/014 item 2's own claim, pinned by a real test for the first
-    // time: the webhook's real-time path — not the periodic worker, which
-    // only scans CONFIRMED bookings — is what notices a HELD booking with a
-    // captured deposit Razorpay knows about that the trail doesn't.
-    const { mismatch } = await reconcileObservedPayment(held.bookingId, { razorpayId: replayedCapture.paymentId, status: 'captured', amountPaise: policyResult.policy.depositAmountPaise }, deps)
-    expect(mismatch).toBe(true)
-
-    const trailAfterWebhook = await db.select().from(events).where(eq(events.bookingId, held.bookingId))
-    const finding = trailAfterWebhook.find((e) => e.type === 'RECONCILIATION_MISMATCH')
-    expect(finding?.payload).toMatchObject({ subject: 'unrecorded_payment', expectedStatus: 'not_recorded', actualStatus: 'captured', detectedVia: 'webhook' })
-
-    // Never auto-repaired into CONFIRMED — reporting a disagreement is not
-    // the same as resolving one (dev-logs/014's "report, don't auto-repair").
-    const snapshotAfter = await deps.eventStore.loadSnapshot(held.bookingId)
-    expect(snapshotAfter?.status).toBe('HELD')
+    const trail = await db.select().from(events).where(eq(events.bookingId, held.bookingId))
+    expect(trail.some((e) => e.type === 'DEPOSIT_CAPTURED')).toBe(false)
   })
 })

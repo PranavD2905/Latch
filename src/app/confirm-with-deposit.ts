@@ -231,14 +231,35 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
   const sessionCompleteMandateAmountPaise: Paise = subtractPaise(service.pricePaise, policy.depositAmountPaise)
 
   // Outside the row lock, deliberately — never hold a DB lock across a
-  // network call to the payment rail. A decline/timeout on any leg is an
-  // external failure, not a gate/bound refusal, so no ACTION_REFUSED is
-  // appended and the booking is left HELD: the agent can simply retry
-  // confirm (its idempotency key was never stored, since we only store on
-  // success). Run concurrently — docs/01-architecture.md Idea 3 / dev-logs/007:
-  // up to three separate Checkout completions can exist in this build, so a
-  // human waiting on them should not wait on them serially.
-  const [captured, noShowAuthorized, sessionCompleteAuthorized] = await Promise.all([
+  // network call to the payment rail. Run concurrently — docs/01-architecture.md
+  // Idea 3 / dev-logs/007: up to three separate Checkout completions can
+  // exist in this build, so a human waiting on them should not wait on them
+  // serially.
+  //
+  // `allSettled`, not `all` — this used to be `Promise.all`, which meant a
+  // transient failure on either *optional* leg (no-show auth, session-complete
+  // auth) after the *mandatory* deposit leg had already captured real money
+  // discarded that already-settled deposit result along with the rejection,
+  // leaving a captured payment with zero trail for it and the booking stuck
+  // HELD until the hold-expiry worker eventually swept it — precisely the
+  // "audit trail diverges from reality" failure this system exists to avoid,
+  // and reachable by an ordinary single-leg network blip, not just a process
+  // crash. The deposit leg is the only one that must succeed for the booking
+  // to confirm at all: if it fails, nothing was captured and no event needs
+  // recording, so the failure is rethrown as before and the booking is left
+  // HELD for the agent to simply retry (its idempotency key was never
+  // stored, since we only store on success). If it succeeds, the confirm
+  // always proceeds and records whichever of the two optional legs actually
+  // landed — a leg that failed here is treated the same as a leg the policy
+  // never asked for (see the `undefined`-skips above): the booking confirms
+  // without that protection rather than stranding the deposit already taken.
+  // An authorization that failed here (as opposed to a capture) never moved
+  // real money and was never granted, so there is nothing to release —
+  // unlike a captured deposit, there's no orphaned Razorpay object to worry
+  // about. A decline/timeout on the deposit leg itself is still an external
+  // failure, not a gate/bound refusal, so no `ACTION_REFUSED` is appended
+  // either way.
+  const [capturedOutcome, noShowAuthorizedOutcome, sessionCompleteAuthorizedOutcome] = await Promise.allSettled([
     executePaymentCall(deps.paymentCircuitBreaker, () =>
       deps.paymentProvider.captureDeposit({
         amountPaise: policy.depositAmountPaise,
@@ -267,6 +288,27 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
           }),
         ),
   ])
+
+  if (capturedOutcome.status === 'rejected') {
+    throw capturedOutcome.reason
+  }
+  const captured = capturedOutcome.value
+
+  const noShowAuthorized = noShowAuthorizedOutcome.status === 'fulfilled' ? noShowAuthorizedOutcome.value : undefined
+  if (noShowAuthorizedOutcome.status === 'rejected') {
+    deps.logger.error(
+      { err: noShowAuthorizedOutcome.reason, bookingId: snapshot.bookingId },
+      'confirm_with_deposit: no-show authorization failed after the deposit was already captured — confirming without no-show protection for this booking rather than stranding the deposit',
+    )
+  }
+
+  const sessionCompleteAuthorized = sessionCompleteAuthorizedOutcome.status === 'fulfilled' ? sessionCompleteAuthorizedOutcome.value : undefined
+  if (sessionCompleteAuthorizedOutcome.status === 'rejected') {
+    deps.logger.error(
+      { err: sessionCompleteAuthorizedOutcome.reason, bookingId: snapshot.bookingId },
+      'confirm_with_deposit: session-complete authorization failed after the deposit was already captured — confirming with no session-complete mandate for this booking; mark_complete will have nothing to capture',
+    )
+  }
 
   await deps.eventStore.transaction(async (tx) => {
     const fresh = await tx.loadSnapshotForUpdate(snapshot.bookingId)
