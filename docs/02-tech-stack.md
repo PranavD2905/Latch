@@ -262,13 +262,25 @@ one data source.
 | Layer | How it is tested | Speed |
 |---|---|---|
 | Domain core | Pure unit tests. Frozen clock, in-memory state. Every ladder boundary, every gate, every refusal. | microseconds |
-| Adapters | Integration tests against real Postgres and real Razorpay **test mode** | seconds |
-| Concurrency | Parallel `hold_slot` calls against one slot, asserting exactly one wins | seconds |
+| App/command handlers — gate and refusal logic | Fake adapters (`src/adapters/db/fake-event-store.ts`, `fake-idempotency-store.ts`, `fake-catalog-repo.ts`, `fake-webhook-dead-letter-store.ts` — same pattern as `FakePaymentProvider`/`FakePaymentRail` below), no Postgres | milliseconds |
+| Adapters, and anything that depends on real Postgres transaction/lock semantics | Integration tests against real Postgres and real Razorpay **test mode** | seconds |
+| Concurrency | Parallel `hold_slot` calls against one slot, asserting exactly one wins — genuinely needs real row locks/the partial unique index, not reproducible against the fakes above | seconds |
 | Full flows | End-to-end: hold → confirm → merchant decline → refund → authorisation released | seconds |
 
 The ladder boundary tests are the ones that matter most. "Cancelling at exactly 48 hours" and
 "cancelling at 47h59m" must be asserted deterministically, which requires a frozen clock, which
 requires the `Clock` port. This is why the architecture is shaped the way it is.
+
+**The middle row was a real gap, not a hypothetical one.** `EventStore`/`IdempotencyStore`/`CatalogRepo`
+had no fakes for their first several slices — only `PaymentProvider`/`PaymentRail` did — so every command
+handler's own gate/refusal logic (not the Postgres row-locking underneath it, the ordinary "does this
+check refuse for the right reason" logic on top) could only be exercised through a live-Postgres
+integration test, which is why 21 of this project's 32 test files were `.integration.test.ts`. The fakes
+above close that specifically, deliberately narrow: they do not attempt to reproduce a real row lock,
+`FOR UPDATE SKIP LOCKED`, the partial unique index, or a genuine two-connection race — `transaction()` on
+the fake `EventStore` is a plain function call with no isolation, and `lockAgent` is a documented no-op.
+Race 1/Race 2 and every background-worker concurrency test correctly stay `.integration.test.ts` against
+the real store. See `src/app/confirm-with-deposit.fast.test.ts` for the pattern.
 
 **Rejected — Jest.** Slower, and ESM support is still awkward. Vitest shares Vite's config and is
 near-instant.
