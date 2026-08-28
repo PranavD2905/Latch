@@ -29,7 +29,7 @@ loadEnvFile()
 const { db, sql } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db)
 
-const app = createMcpHttpServer(deps)
+const app = await createMcpHttpServer(deps)
 // Railway assigns the public port via $PORT; MCP_HTTP_PORT stays the
 // local-dev default (mirrors merchant-api's MERCHANT_API_PORT).
 const port = Number(process.env['PORT'] ?? process.env['MCP_HTTP_PORT'] ?? 4000)
