@@ -23,6 +23,7 @@ import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
 import { withGlobalLock } from '../db/advisory-lock.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
+import { setupGracefulShutdown } from '../observability/graceful-shutdown.js'
 import { createLogger } from '../observability/logger.js'
 import { createMcpHttpServer } from './streamable-http-server.js'
 
@@ -86,7 +87,7 @@ logger.info({ intervalMs: backgroundIntervalMs }, 'background worker started')
 // over a background-job failure, exactly the opposite of what folding the
 // workers into this process was supposed to buy.
 backgroundTick().catch((err) => logger.error({ err }, 'background worker tick failed'))
-setInterval(() => {
+const backgroundInterval = setInterval(() => {
   backgroundTick().catch((err) => logger.error({ err }, 'background worker tick failed'))
 }, backgroundIntervalMs)
 
@@ -103,6 +104,11 @@ async function authorizationLapseTick(): Promise<void> {
 
 logger.info({ intervalMs: authLapseIntervalMs }, 'authorization-lapse worker started')
 authorizationLapseTick().catch((err) => logger.error({ err }, 'authorization-lapse worker tick failed'))
-setInterval(() => {
+const authLapseInterval = setInterval(() => {
   authorizationLapseTick().catch((err) => logger.error({ err }, 'authorization-lapse worker tick failed'))
 }, authLapseIntervalMs)
+
+setupGracefulShutdown(logger, {
+  app,
+  onShutdown: [() => clearInterval(backgroundInterval), () => clearInterval(authLapseInterval), () => sql.end()],
+})

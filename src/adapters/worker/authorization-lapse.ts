@@ -11,6 +11,7 @@ import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
 import { withGlobalLock } from '../db/advisory-lock.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
+import { setupGracefulShutdown } from '../observability/graceful-shutdown.js'
 import { createLogger } from '../observability/logger.js'
 
 loadEnvFile()
@@ -34,6 +35,8 @@ async function tick(): Promise<void> {
 
 logger.info({ intervalMs }, 'authorization-lapse worker started')
 await tick()
-setInterval(() => {
+const interval = setInterval(() => {
   tick().catch((err) => logger.error({ err }, 'authorization-lapse worker tick failed'))
 }, intervalMs)
+
+setupGracefulShutdown(logger, { onShutdown: [() => clearInterval(interval), () => sql.end()] })

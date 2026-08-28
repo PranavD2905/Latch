@@ -18,13 +18,14 @@ import { fileURLToPath } from 'node:url'
 import { buildAppDeps, buildMerchantAuthStore, requireDatabaseUrl } from '../build-deps.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
+import { setupGracefulShutdown } from '../observability/graceful-shutdown.js'
 import { createLogger } from '../observability/logger.js'
 import { createAuditTrailServer } from './server.js'
 
 loadEnvFile()
 
 const logger = createLogger('latch-viewer')
-const { db } = createDbClient(requireDatabaseUrl())
+const { db, sql } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db, logger)
 // Migration 0011: per-merchant, DB-issued credentials replace the old
 // AUDIT_TRAIL_TOKEN env var — see `src/adapters/db/seed.ts` /
@@ -48,3 +49,9 @@ if (existsSync(webDist)) {
 const port = Number(process.env['PORT'] ?? process.env['AUDIT_TRAIL_PORT'] ?? 4002)
 await app.listen({ port, host: '0.0.0.0' })
 logger.info({ port }, 'audit trail SSE server listening')
+
+// A short timeout matters more here than anywhere else: an open SSE
+// connection (`GET /events`) may never voluntarily close on its own, so the
+// default 10s backstop is what actually lets a deploy finish rather than
+// hanging on whichever browser tab is still connected.
+setupGracefulShutdown(logger, { app, onShutdown: [() => sql.end()] })
