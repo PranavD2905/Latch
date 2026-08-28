@@ -4,6 +4,7 @@ import type { EventWithGlobalSequence } from '../../ports/event-store.js'
 import type { MerchantAuthStore } from '../../ports/merchant-auth.js'
 import { echoTraceIdHeader, loggingFastifyOptions, registerErrorHandler } from '../observability/fastify-logging.js'
 import { registerMetricsRoute } from '../observability/metrics.js'
+import { registerSecurityHeaders } from '../observability/security-headers.js'
 
 export interface AuditTrailServerOptions {
   /**
@@ -54,6 +55,13 @@ export function createAuditTrailServer(deps: AppDeps, options: AuditTrailServerO
   const app = Fastify(loggingFastifyOptions(deps.logger))
   echoTraceIdHeader(app)
   registerErrorHandler(app)
+  // contentSecurityPolicy: false — see security-headers.ts's own doc comment.
+  // This is the one server that actually serves an HTML page (the viewer
+  // SPA), and it makes one real, legitimate cross-origin fetch in production
+  // (to VITE_MERCHANT_API_URL, baked into the frontend bundle at build time —
+  // dev-logs/015) whose origin this backend process has no correct way to
+  // know at runtime.
+  registerSecurityHeaders(app, { contentSecurityPolicy: false })
 
   const feeds = new Map<string, MerchantFeed>()
 

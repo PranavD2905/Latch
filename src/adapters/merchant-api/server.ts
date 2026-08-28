@@ -13,8 +13,10 @@ import { PolicyValidationError } from '../../domain/policy-validation.js'
 import { Refusal } from '../../domain/refusals.js'
 import { PolicyVersionConflictError } from '../../ports/catalog-repo.js'
 import type { MerchantAuthStore } from '../../ports/merchant-auth.js'
+import { loadEnv } from '../config.js'
 import { echoTraceIdHeader, loggingFastifyOptions, registerErrorHandler } from '../observability/fastify-logging.js'
 import { registerMetricsRoute } from '../observability/metrics.js'
+import { registerSecurityHeaders } from '../observability/security-headers.js'
 import { verifyRazorpayWebhookSignature } from '../payment/razorpay-shared.js'
 import { registerSlotsRoute } from '../rest/slots.js'
 import { handleRazorpayWebhookPayload, type RazorpayWebhookPayload } from '../webhook/razorpay-webhook.js'
@@ -75,6 +77,7 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
   const app = Fastify(loggingFastifyOptions(deps.logger))
   echoTraceIdHeader(app)
   registerErrorHandler(app)
+  registerSecurityHeaders(app)
 
   // Captures the raw request body alongside the parsed JSON — signature
   // verification (below) must run against the exact bytes Razorpay signed,
@@ -103,7 +106,16 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
   // authorization is still the Bearer-token hook below, so reflecting the
   // caller's own Origin here doesn't loosen who can act, only who can see
   // the result of an already-gated call.
-  app.register(cors, { origin: true, methods: ['GET', 'POST'] })
+  //
+  // dev-logs/025: `CORS_ALLOWED_ORIGINS` (comma-separated) restricts this to
+  // an explicit list when set; unset keeps the reflect-everything default
+  // above unchanged — an operator who wants it locked down now can, without
+  // this codebase guessing a value that might not match their deployment.
+  const corsAllowedOrigins = loadEnv().CORS_ALLOWED_ORIGINS
+  const corsOrigin = corsAllowedOrigins
+    ? corsAllowedOrigins.split(',').map((origin) => origin.trim())
+    : true
+  app.register(cors, { origin: corsOrigin, methods: ['GET', 'POST'] })
 
   // Unauthenticated on purpose — Railway's own health check (docs/07-deployment.md)
   // needs to reach this without a merchant token.

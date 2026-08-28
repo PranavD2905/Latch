@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import type { AppDeps } from '../../app/types.js'
 import { echoTraceIdHeader, loggingFastifyOptions, registerErrorHandler } from '../observability/fastify-logging.js'
 import { registerMetricsRoute } from '../observability/metrics.js'
+import { registerSecurityHeaders } from '../observability/security-headers.js'
 import { registerSlotsRoute } from './slots.js'
 
 /**
@@ -19,6 +20,7 @@ export function createRestServer(deps: AppDeps): FastifyInstance {
   const app = Fastify(loggingFastifyOptions(deps.logger))
   echoTraceIdHeader(app)
   registerErrorHandler(app)
+  registerSecurityHeaders(app)
   app.get('/healthz', async () => ({ ok: true }))
   registerMetricsRoute(app)
   registerSlotsRoute(app, deps)
