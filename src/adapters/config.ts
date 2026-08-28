@@ -93,7 +93,7 @@ const envSchema = z
     OTEL_EXPORTER_OTLP_ENDPOINT: z.string().optional(),
 
     /**
-     * dev-logs/025. `undefined` keeps `merchant-api/server.ts`'s existing
+     * dev-logs/024. `undefined` keeps `merchant-api/server.ts`'s existing
      * default (`origin: true` — reflect the caller's own Origin; real
      * authorization is still the Bearer-token hook, CORS only governs which
      * origins JavaScript may *read* a response — dev-logs/015's own

@@ -2,7 +2,7 @@ import helmet from '@fastify/helmet'
 import type { FastifyInstance } from 'fastify'
 
 /**
- * dev-logs/025. `@fastify/helmet` on all four servers — `X-Content-Type-
+ * dev-logs/024. `@fastify/helmet` on all four servers — `X-Content-Type-
  * Options`, `X-Frame-Options`, `Referrer-Policy`, `Strict-Transport-Security`,
  * etc. Genuinely harmless to add everywhere: `mcp`/`merchant-api`/`rest` only
  * ever return JSON, so a browser never renders a page *from* those origins

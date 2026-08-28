@@ -107,7 +107,7 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
   // caller's own Origin here doesn't loosen who can act, only who can see
   // the result of an already-gated call.
   //
-  // dev-logs/025: `CORS_ALLOWED_ORIGINS` (comma-separated) restricts this to
+  // dev-logs/024: `CORS_ALLOWED_ORIGINS` (comma-separated) restricts this to
   // an explicit list when set; unset keeps the reflect-everything default
   // above unchanged — an operator who wants it locked down now can, without
   // this codebase guessing a value that might not match their deployment.
