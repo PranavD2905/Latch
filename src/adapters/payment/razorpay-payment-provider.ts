@@ -11,6 +11,7 @@ import {
   type RefundDepositParams,
   type RefundDepositResult,
 } from '../../ports/payment-provider.js'
+import { instrumentRazorpayClient } from '../observability/metrics.js'
 import { DEFAULT_CAPTURE_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, isNotFound, receiptFor, sleep, toInstrument, toPaymentStatusValue, type RazorpayPaymentLike } from './razorpay-shared.js'
 
 export interface RazorpayPaymentProviderOptions {
@@ -48,7 +49,7 @@ export class RazorpayPaymentProvider implements PaymentProvider {
   private readonly capturePollIntervalMs: number
 
   constructor(options: RazorpayPaymentProviderOptions) {
-    this.client = new Razorpay({ key_id: options.keyId, key_secret: options.keySecret })
+    this.client = instrumentRazorpayClient(new Razorpay({ key_id: options.keyId, key_secret: options.keySecret }))
     this.captureTimeoutMs = options.captureTimeoutMs ?? DEFAULT_CAPTURE_TIMEOUT_MS
     this.capturePollIntervalMs = options.capturePollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
   }

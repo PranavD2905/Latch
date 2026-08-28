@@ -11,6 +11,7 @@ import { holdSlot } from '../../app/hold-slot.js'
 import { rescheduleBooking } from '../../app/reschedule-booking.js'
 import type { AppDeps } from '../../app/types.js'
 import { Refusal } from '../../domain/refusals.js'
+import { toolDurationMs, toolInvocationsTotal } from '../observability/metrics.js'
 
 function jsonResult(value: unknown): CallToolResult {
   return { content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] }
@@ -31,28 +32,37 @@ function errorResult(err: unknown): CallToolResult {
 
 /**
  * One wrapper around every tool handler below, instead of a repeated
- * try/catch in each: logs the invocation, times it against `deps.clock`
+ * try/catch in each: logs the invocation, records the Prometheus counter/
+ * histogram pair (`observability/metrics.ts`), times it against `deps.clock`
  * (this codebase's only source of "now" — docs/01-architecture.md §5, and
  * it means a test driving a `FrozenClock` gets deterministic durations
  * too), and turns the same three outcomes `errorResult`/`refusalResult`
  * already distinguish (success / refused / error) into one structured log
- * line each. `deps.logger` already carries `traceId` by the time it reaches
- * here — see `streamable-http-server.ts`'s `requestDeps`.
+ * line + one metric observation each. `deps.logger` already carries
+ * `traceId` by the time it reaches here — see `streamable-http-server.ts`'s
+ * `requestDeps`.
  */
 async function withToolLogging<T>(deps: AppDeps, tool: string, args: unknown, fn: () => Promise<T>): Promise<CallToolResult> {
   const startedAt = deps.clock.now().getTime()
   deps.logger.info({ tool, args }, 'tool invocation started')
   try {
     const result = await fn()
-    deps.logger.info({ tool, status: 'success', durationMs: deps.clock.now().getTime() - startedAt }, 'tool invocation completed')
+    const durationMs = deps.clock.now().getTime() - startedAt
+    deps.logger.info({ tool, status: 'success', durationMs }, 'tool invocation completed')
+    toolInvocationsTotal.inc({ tool, status: 'success', code: '' })
+    toolDurationMs.observe({ tool, status: 'success' }, durationMs)
     return jsonResult(result)
   } catch (err) {
     const durationMs = deps.clock.now().getTime() - startedAt
     if (err instanceof Refusal) {
       deps.logger.info({ tool, status: 'refused', code: err.code, durationMs }, 'tool invocation refused')
+      toolInvocationsTotal.inc({ tool, status: 'refused', code: err.code })
+      toolDurationMs.observe({ tool, status: 'refused' }, durationMs)
       return refusalResult(err)
     }
     deps.logger.error({ tool, status: 'error', err, durationMs }, 'tool invocation failed')
+    toolInvocationsTotal.inc({ tool, status: 'error', code: err instanceof Error ? err.name : 'UnknownError' })
+    toolDurationMs.observe({ tool, status: 'error' }, durationMs)
     return errorResult(err)
   }
 }

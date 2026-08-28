@@ -14,6 +14,7 @@ import { Refusal } from '../../domain/refusals.js'
 import { PolicyVersionConflictError } from '../../ports/catalog-repo.js'
 import type { MerchantAuthStore } from '../../ports/merchant-auth.js'
 import { echoTraceIdHeader, loggingFastifyOptions } from '../observability/fastify-logging.js'
+import { registerMetricsRoute } from '../observability/metrics.js'
 import { verifyRazorpayWebhookSignature } from '../payment/razorpay-shared.js'
 import { registerSlotsRoute } from '../rest/slots.js'
 import { handleRazorpayWebhookPayload, type RazorpayWebhookPayload } from '../webhook/razorpay-webhook.js'
@@ -46,7 +47,7 @@ export interface MerchantApiOptions {
 /** Query-string-stripped exact/prefix match — `request.url` includes the query string, `/healthz`'s check never needed to care before this file had a route that does. */
 function isPublicRoute(url: string): boolean {
   const path = url.split('?')[0]
-  return path === '/healthz' || path === '/slots' || path === '/webhooks/razorpay'
+  return path === '/healthz' || path === '/metrics' || path === '/slots' || path === '/webhooks/razorpay'
 }
 
 /**
@@ -106,6 +107,7 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
   // Unauthenticated on purpose — Railway's own health check (docs/07-deployment.md)
   // needs to reach this without a merchant token.
   app.get('/healthz', async () => ({ ok: true }))
+  registerMetricsRoute(app)
 
   // dev-logs/014, item 4 — see registerSlotsRoute's own doc comment for why
   // this is the identical function/route the standalone REST adapter uses.

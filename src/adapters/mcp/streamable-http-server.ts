@@ -4,6 +4,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify'
 import type { AppDeps } from '../../app/types.js'
 import { echoTraceIdHeader, loggingFastifyOptions } from '../observability/fastify-logging.js'
+import { mcpRateLimitTriggeredTotal, registerMetricsRoute } from '../observability/metrics.js'
 import { createServer } from './server.js'
 
 /**
@@ -167,12 +168,15 @@ export async function createMcpHttpServer(deps: AppDeps): Promise<FastifyInstanc
         // correctly (right body, right headers) but reports 500 instead of
         // `context.statusCode` (429, or 403 once banned). Caught by
         // actually testing a rejected request, not by reading the docs.
-        errorResponseBuilder: (_request: unknown, context: { statusCode: number }) => ({
-          statusCode: context.statusCode,
-          jsonrpc: '2.0',
-          error: { code: -32029, message: `rate limit exceeded — max ${MCP_RATE_LIMIT_MAX} requests per ${MCP_RATE_LIMIT_WINDOW_MS / 1000}s per caller` },
-          id: null,
-        }),
+        errorResponseBuilder: (_request: unknown, context: { statusCode: number }) => {
+          mcpRateLimitTriggeredTotal.inc()
+          return {
+            statusCode: context.statusCode,
+            jsonrpc: '2.0',
+            error: { code: -32029, message: `rate limit exceeded — max ${MCP_RATE_LIMIT_MAX} requests per ${MCP_RATE_LIMIT_WINDOW_MS / 1000}s per caller` },
+            id: null,
+          }
+        },
       },
     },
   }
@@ -193,6 +197,7 @@ export async function createMcpHttpServer(deps: AppDeps): Promise<FastifyInstanc
   app.delete('/mcp', async (request, reply) => methodNotAllowed(request, reply))
 
   app.get('/healthz', async () => ({ ok: true }))
+  registerMetricsRoute(app)
 
   return app
 }

@@ -3,6 +3,7 @@ import type { AppDeps } from '../../app/types.js'
 import type { EventWithGlobalSequence } from '../../ports/event-store.js'
 import type { MerchantAuthStore } from '../../ports/merchant-auth.js'
 import { echoTraceIdHeader, loggingFastifyOptions } from '../observability/fastify-logging.js'
+import { registerMetricsRoute } from '../observability/metrics.js'
 
 export interface AuditTrailServerOptions {
   /**
@@ -89,6 +90,7 @@ export function createAuditTrailServer(deps: AppDeps, options: AuditTrailServerO
   // Unauthenticated on purpose — Railway's own health check (docs/07-deployment.md)
   // needs to reach this without the viewer token.
   app.get('/healthz', async () => ({ ok: true }))
+  registerMetricsRoute(app)
 
   app.get<{ Querystring: { token?: string } }>('/events', async (request, reply) => {
     const token = request.query.token

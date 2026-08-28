@@ -11,6 +11,7 @@ import {
   type CaptureAuthorizationResult,
   type PaymentRail,
 } from '../../ports/payment-rail.js'
+import { instrumentRazorpayClient } from '../observability/metrics.js'
 import { DEFAULT_CAPTURE_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, isNotFound, receiptFor, sleep, toInstrument, toPaymentStatusValue, type RazorpayPaymentLike } from './razorpay-shared.js'
 
 export interface ManualCaptureRailOptions {
@@ -47,7 +48,7 @@ export class ManualCaptureRail implements PaymentRail {
   private readonly authorizePollIntervalMs: number
 
   constructor(options: ManualCaptureRailOptions) {
-    this.client = new Razorpay({ key_id: options.keyId, key_secret: options.keySecret })
+    this.client = instrumentRazorpayClient(new Razorpay({ key_id: options.keyId, key_secret: options.keySecret }))
     this.authorizeTimeoutMs = options.authorizeTimeoutMs ?? DEFAULT_CAPTURE_TIMEOUT_MS
     this.authorizePollIntervalMs = options.authorizePollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
   }
