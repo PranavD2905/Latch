@@ -65,6 +65,18 @@ export class PaymentTimeoutError extends Error {
 }
 
 /**
+ * Optional, provider-agnostic detail an adapter can attach when it knows
+ * more about `cause` than this port does — e.g. Razorpay's own `{ error:
+ * { code, description } }` shape, parsed by `razorpay-shared.ts`'s
+ * `parseRazorpaySdkError` and never imported here (this port must stay
+ * implementable by any `PaymentProvider`, not just a Razorpay one).
+ */
+export interface PaymentProviderErrorDetails {
+  code?: string | undefined
+  description?: string | undefined
+}
+
+/**
  * Distinct from PaymentDeclinedError/PaymentTimeoutError, which are expected
  * business outcomes `confirm_with_deposit` already knows how to handle (see
  * dev-logs/004). This is an unexpected failure talking to the rail itself —
@@ -72,13 +84,27 @@ export class PaymentTimeoutError extends Error {
  * Slice 2 added this once RazorpayPaymentProvider needed somewhere to put
  * errors that are neither "customer declined" nor "customer never paid in
  * time" — never leak the raw SDK error to a caller (slice-2.md), wrap it here
- * instead. See dev-logs/006.
+ * instead. See dev-logs/006. `reference`/`providerErrorCode`/
+ * `providerErrorDescription` are plain own properties (not just folded into
+ * the message string) so a structured logger picks them up automatically
+ * wherever this error is logged (Pino's `err` serializer copies an error's
+ * own enumerable properties) — dev-logs/019. `reference` is a bookingId for
+ * every throw site except `fetchPaymentStatus`'s, which passes the
+ * `paymentId` it was looking up — named generically rather than `bookingId`
+ * so it stays accurate at that one call site too.
  */
 export class PaymentProviderError extends Error {
-  constructor(reference: string, cause: unknown) {
+  readonly reference: string
+  readonly providerErrorCode: string | undefined
+  readonly providerErrorDescription: string | undefined
+
+  constructor(reference: string, cause: unknown, details?: PaymentProviderErrorDetails) {
     super(`Unexpected payment provider error for ${reference}: ${describeCause(cause)}`)
     this.name = 'PaymentProviderError'
     this.cause = cause
+    this.reference = reference
+    this.providerErrorCode = details?.code
+    this.providerErrorDescription = details?.description
   }
 }
 

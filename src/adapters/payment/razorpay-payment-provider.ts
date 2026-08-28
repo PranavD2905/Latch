@@ -12,7 +12,7 @@ import {
   type RefundDepositResult,
 } from '../../ports/payment-provider.js'
 import { instrumentRazorpayClient } from '../observability/metrics.js'
-import { DEFAULT_CAPTURE_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, isNotFound, receiptFor, sleep, toInstrument, toPaymentStatusValue, type RazorpayPaymentLike } from './razorpay-shared.js'
+import { DEFAULT_CAPTURE_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, isNotFound, parseRazorpaySdkError, receiptFor, sleep, toInstrument, toPaymentStatusValue, type RazorpayPaymentLike } from './razorpay-shared.js'
 
 export interface RazorpayPaymentProviderOptions {
   keyId: string
@@ -76,7 +76,7 @@ export class RazorpayPaymentProvider implements PaymentProvider {
         })
       }
     } catch (err) {
-      throw new PaymentProviderError(params.reference, err)
+      throw new PaymentProviderError(params.reference, err, parseRazorpaySdkError(err))
     }
 
     const deadline = Date.now() + this.captureTimeoutMs
@@ -85,7 +85,7 @@ export class RazorpayPaymentProvider implements PaymentProvider {
       try {
         payment = await this.latestPaymentFor(order.id)
       } catch (err) {
-        throw new PaymentProviderError(params.reference, err)
+        throw new PaymentProviderError(params.reference, err, parseRazorpaySdkError(err))
       }
 
       if (payment?.status === 'captured') {
@@ -122,7 +122,7 @@ export class RazorpayPaymentProvider implements PaymentProvider {
       })
       return { refundId: refund.id, amountPaise: toPaise(Number(refund.amount ?? params.amountPaise)) }
     } catch (err) {
-      throw new PaymentProviderError(params.reference, err)
+      throw new PaymentProviderError(params.reference, err, parseRazorpaySdkError(err))
     }
   }
 
@@ -139,7 +139,7 @@ export class RazorpayPaymentProvider implements PaymentProvider {
       return { status: toPaymentStatusValue(payment.status), amountPaise: toPaise(Number(payment.amount)) }
     } catch (err) {
       if (isNotFound(err)) return { status: 'unknown', amountPaise: toPaise(0) }
-      throw new PaymentProviderError(paymentId, err)
+      throw new PaymentProviderError(paymentId, err, parseRazorpaySdkError(err))
     }
   }
 

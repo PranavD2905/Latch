@@ -56,17 +56,38 @@ export function toPaymentStatusValue(status: string): PaymentStatusValue {
   }
 }
 
+export interface RazorpaySdkErrorDetails {
+  code?: string | undefined
+  description?: string | undefined
+}
+
 /**
  * Razorpay's SDK throws a plain `{ statusCode, error: { code, description } }`
- * object, not an `Error` (see `manual-capture-rail.ts`'s own note on this).
+ * object, not an `Error` (`node_modules/razorpay/dist/api.js`'s own
+ * `normalizeError` — verified, not documented). Centralises the shape-
+ * narrowing every call site here previously duplicated (`isNotFound` below,
+ * `manual-capture-rail.ts`'s own former `razorpayErrorDescription`) into one
+ * place — dev-logs/019, so `PaymentProviderError`/`PaymentRailError` can
+ * attach `providerErrorCode`/`providerErrorDescription` as real structured
+ * fields instead of only folding them into the message string.
+ */
+export function parseRazorpaySdkError(err: unknown): RazorpaySdkErrorDetails | undefined {
+  if (!err || typeof err !== 'object' || !('error' in err)) return undefined
+  const inner = (err as { error?: unknown }).error
+  if (!inner || typeof inner !== 'object') return undefined
+  const code = 'code' in inner ? String((inner as { code: unknown }).code) : undefined
+  const description = 'description' in inner ? String((inner as { description: unknown }).description) : undefined
+  return { code, description }
+}
+
+/**
  * `statusCode` is `400` with a "such id does not exist" description when a
  * paymentId genuinely doesn't resolve — the reconciliation lookups treat
  * that as `'unknown'`, not a hard failure.
  */
 export function isNotFound(err: unknown): boolean {
-  if (!err || typeof err !== 'object') return false
-  const description = 'error' in err && err.error && typeof err.error === 'object' && 'description' in err.error ? String((err.error as { description: unknown }).description) : ''
-  return description.toLowerCase().includes('does not exist') || description.toLowerCase().includes('not found')
+  const description = (parseRazorpaySdkError(err)?.description ?? '').toLowerCase()
+  return description.includes('does not exist') || description.includes('not found')
 }
 
 /**

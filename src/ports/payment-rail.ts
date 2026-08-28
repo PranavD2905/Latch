@@ -61,17 +61,43 @@ export class AuthorizationNotFoundError extends Error {
 }
 
 /**
+ * Optional, provider-agnostic detail an adapter can attach when it knows
+ * more about `cause` than this port does — e.g. Razorpay's own `{ error:
+ * { code, description } }` shape, parsed by `razorpay-shared.ts`'s
+ * `parseRazorpaySdkError` and never imported here (this port must stay
+ * implementable by any `PaymentRail`, not just a Razorpay one).
+ */
+export interface PaymentRailErrorDetails {
+  code?: string | undefined
+  description?: string | undefined
+}
+
+/**
  * Distinct from `CaptureAmountMismatchError`/`AuthorizationNotFoundError`,
  * which are expected business/gate outcomes. This is an unexpected failure
  * talking to the rail itself — mirrors `PaymentProviderError` on the
  * `PaymentProvider` port (dev-logs/006). Never leak the raw SDK error to a
- * caller.
+ * caller. `reference`/`providerErrorCode`/`providerErrorDescription` are
+ * plain own properties (not just folded into the message string) so a
+ * structured logger picks them up automatically wherever this error is
+ * logged (Pino's `err` serializer copies an error's own enumerable
+ * properties) — dev-logs/019. `reference` is a bookingId for every throw
+ * site except `fetchAuthorizationStatus`'s, which passes the
+ * `authorizationId` it was looking up — named generically rather than
+ * `bookingId` so it stays accurate at that one call site too.
  */
 export class PaymentRailError extends Error {
-  constructor(reference: string, cause: unknown) {
+  readonly reference: string
+  readonly providerErrorCode: string | undefined
+  readonly providerErrorDescription: string | undefined
+
+  constructor(reference: string, cause: unknown, details?: PaymentRailErrorDetails) {
     super(`Unexpected payment rail error for ${reference}: ${describeCause(cause)}`)
     this.name = 'PaymentRailError'
     this.cause = cause
+    this.reference = reference
+    this.providerErrorCode = details?.code
+    this.providerErrorDescription = details?.description
   }
 }
 

@@ -12,7 +12,7 @@ import {
   type PaymentRail,
 } from '../../ports/payment-rail.js'
 import { instrumentRazorpayClient } from '../observability/metrics.js'
-import { DEFAULT_CAPTURE_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, isNotFound, receiptFor, sleep, toInstrument, toPaymentStatusValue, type RazorpayPaymentLike } from './razorpay-shared.js'
+import { DEFAULT_CAPTURE_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, isNotFound, parseRazorpaySdkError, receiptFor, sleep, toInstrument, toPaymentStatusValue, type RazorpayPaymentLike } from './razorpay-shared.js'
 
 export interface ManualCaptureRailOptions {
   keyId: string
@@ -84,7 +84,7 @@ export class ManualCaptureRail implements PaymentRail {
         })
       }
     } catch (err) {
-      throw new PaymentRailError(params.reference, err)
+      throw new PaymentRailError(params.reference, err, parseRazorpaySdkError(err))
     }
 
     const deadline = Date.now() + this.authorizeTimeoutMs
@@ -93,7 +93,7 @@ export class ManualCaptureRail implements PaymentRail {
       try {
         payment = await this.latestPaymentFor(order.id)
       } catch (err) {
-        throw new PaymentRailError(params.reference, err)
+        throw new PaymentRailError(params.reference, err, parseRazorpaySdkError(err))
       }
 
       if (payment?.status === 'authorized') {
@@ -133,7 +133,7 @@ export class ManualCaptureRail implements PaymentRail {
       if (isAuthorizationNotFound(err)) {
         throw new AuthorizationNotFoundError(params.authorizationId)
       }
-      throw new PaymentRailError(params.reference, err)
+      throw new PaymentRailError(params.reference, err, parseRazorpaySdkError(err))
     }
   }
 
@@ -144,7 +144,7 @@ export class ManualCaptureRail implements PaymentRail {
       return { status: toPaymentStatusValue(payment.status), amountPaise: toPaise(Number(payment.amount)) }
     } catch (err) {
       if (isNotFound(err)) return { status: 'unknown', amountPaise: toPaise(0) }
-      throw new PaymentRailError(authorizationId, err)
+      throw new PaymentRailError(authorizationId, err, parseRazorpaySdkError(err))
     }
   }
 
@@ -166,27 +166,17 @@ function toRailInstrument(method: string, reference: string) {
 }
 
 /**
- * Razorpay's SDK throws `{ statusCode, error: { code, description } }` as a
- * plain object, not an `Error` instance (`node_modules/razorpay/dist/api.js`,
- * `normalizeError`). Item 7's ceiling-refusal demo depends on recognising
- * this specific rejection: "Capture amount must be equal to the amount
- * authorized" (dev-logs/005, verified against Razorpay's own docs).
+ * Item 7's ceiling-refusal demo depends on recognising this specific
+ * rejection: "Capture amount must be equal to the amount authorized"
+ * (dev-logs/005, verified against Razorpay's own docs). `parseRazorpaySdkError`
+ * (`razorpay-shared.ts`) does the shape-narrowing this used to duplicate
+ * locally — dev-logs/019.
  */
-function razorpayErrorDescription(err: unknown): string | undefined {
-  if (err && typeof err === 'object' && 'error' in err) {
-    const inner = (err as { error?: unknown }).error
-    if (inner && typeof inner === 'object' && 'description' in inner) {
-      return String((inner as { description: unknown }).description)
-    }
-  }
-  return undefined
-}
-
 function isCaptureAmountMismatch(err: unknown): boolean {
-  return (razorpayErrorDescription(err) ?? '').toLowerCase().includes('capture amount must be equal')
+  return (parseRazorpaySdkError(err)?.description ?? '').toLowerCase().includes('capture amount must be equal')
 }
 
 function isAuthorizationNotFound(err: unknown): boolean {
-  const description = (razorpayErrorDescription(err) ?? '').toLowerCase()
+  const description = (parseRazorpaySdkError(err)?.description ?? '').toLowerCase()
   return description.includes('does not exist') || description.includes('not found')
 }

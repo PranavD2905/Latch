@@ -13,7 +13,7 @@ import { PolicyValidationError } from '../../domain/policy-validation.js'
 import { Refusal } from '../../domain/refusals.js'
 import { PolicyVersionConflictError } from '../../ports/catalog-repo.js'
 import type { MerchantAuthStore } from '../../ports/merchant-auth.js'
-import { echoTraceIdHeader, loggingFastifyOptions } from '../observability/fastify-logging.js'
+import { echoTraceIdHeader, loggingFastifyOptions, registerErrorHandler } from '../observability/fastify-logging.js'
 import { registerMetricsRoute } from '../observability/metrics.js'
 import { verifyRazorpayWebhookSignature } from '../payment/razorpay-shared.js'
 import { registerSlotsRoute } from '../rest/slots.js'
@@ -74,6 +74,7 @@ function isPublicRoute(url: string): boolean {
 export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptions): FastifyInstance {
   const app = Fastify(loggingFastifyOptions(deps.logger))
   echoTraceIdHeader(app)
+  registerErrorHandler(app)
 
   // Captures the raw request body alongside the parsed JSON — signature
   // verification (below) must run against the exact bytes Razorpay signed,

@@ -2,7 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import type { AppDeps } from '../../app/types.js'
 import type { EventWithGlobalSequence } from '../../ports/event-store.js'
 import type { MerchantAuthStore } from '../../ports/merchant-auth.js'
-import { echoTraceIdHeader, loggingFastifyOptions } from '../observability/fastify-logging.js'
+import { echoTraceIdHeader, loggingFastifyOptions, registerErrorHandler } from '../observability/fastify-logging.js'
 import { registerMetricsRoute } from '../observability/metrics.js'
 
 export interface AuditTrailServerOptions {
@@ -53,6 +53,7 @@ interface MerchantFeed {
 export function createAuditTrailServer(deps: AppDeps, options: AuditTrailServerOptions): FastifyInstance {
   const app = Fastify(loggingFastifyOptions(deps.logger))
   echoTraceIdHeader(app)
+  registerErrorHandler(app)
 
   const feeds = new Map<string, MerchantFeed>()
 

@@ -3,7 +3,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify'
 import type { AppDeps } from '../../app/types.js'
-import { echoTraceIdHeader, loggingFastifyOptions } from '../observability/fastify-logging.js'
+import { echoTraceIdHeader, loggingFastifyOptions, registerErrorHandler } from '../observability/fastify-logging.js'
 import { mcpRateLimitTriggeredTotal, registerMetricsRoute } from '../observability/metrics.js'
 import { createServer } from './server.js'
 
@@ -80,6 +80,7 @@ function methodNotAllowed(request: FastifyRequest, reply: FastifyReply): void {
 export async function createMcpHttpServer(deps: AppDeps): Promise<FastifyInstance> {
   const app = Fastify(loggingFastifyOptions(deps.logger))
   echoTraceIdHeader(app)
+  registerErrorHandler(app)
 
   // `global: false` — registering it this way means nothing is throttled by
   // default; only routes that opt in via `config: { rateLimit: {...} }`
