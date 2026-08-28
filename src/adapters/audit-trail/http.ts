@@ -16,6 +16,7 @@ import fastifyStatic from '@fastify/static'
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { buildAppDeps, buildMerchantAuthStore, requireDatabaseUrl } from '../build-deps.js'
+import { loadEnv } from '../config.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
 import { setupGracefulShutdown } from '../observability/graceful-shutdown.js'
@@ -24,6 +25,7 @@ import { createAuditTrailServer } from './server.js'
 
 loadEnvFile()
 
+const env = loadEnv()
 const logger = createLogger('latch-viewer')
 const { db, sql } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db, logger)
@@ -46,12 +48,13 @@ if (existsSync(webDist)) {
 
 // Railway assigns the public port via $PORT for whichever service this
 // process is deployed as; AUDIT_TRAIL_PORT stays the local-dev default.
-const port = Number(process.env['PORT'] ?? process.env['AUDIT_TRAIL_PORT'] ?? 4002)
+const port = env.PORT ?? env.AUDIT_TRAIL_PORT
 await app.listen({ port, host: '0.0.0.0' })
 logger.info({ port }, 'audit trail SSE server listening')
 
 // A short timeout matters more here than anywhere else: an open SSE
 // connection (`GET /events`) may never voluntarily close on its own, so the
-// default 10s backstop is what actually lets a deploy finish rather than
-// hanging on whichever browser tab is still connected.
-setupGracefulShutdown(logger, { app, onShutdown: [() => sql.end()] })
+// backstop (`GRACEFUL_SHUTDOWN_TIMEOUT_MS`, default 10s) is what actually
+// lets a deploy finish rather than hanging on whichever browser tab is
+// still connected.
+setupGracefulShutdown(logger, { app, timeoutMs: env.GRACEFUL_SHUTDOWN_TIMEOUT_MS, onShutdown: [() => sql.end()] })

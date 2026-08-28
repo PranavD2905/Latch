@@ -8,6 +8,7 @@
  */
 import { runAuthorizationLapseWorker } from '../../app/authorization-lapse-worker.js'
 import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
+import { loadEnv } from '../config.js'
 import { withGlobalLock } from '../db/advisory-lock.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
@@ -16,11 +17,12 @@ import { createLogger } from '../observability/logger.js'
 
 loadEnvFile()
 
+const env = loadEnv()
 const logger = createLogger('latch-worker-authorization-lapse')
 const { db, sql } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db, logger)
 
-const intervalMs = Number(process.env['AUTHORIZATION_LAPSE_WORKER_INTERVAL_MS'] ?? 60_000)
+const intervalMs = env.AUTHORIZATION_LAPSE_WORKER_INTERVAL_MS
 
 // Same global-advisory-lock guard as `mcp/http.ts`'s own copy of this tick —
 // see `advisory-lock.ts`.
@@ -39,4 +41,4 @@ const interval = setInterval(() => {
   tick().catch((err) => logger.error({ err }, 'authorization-lapse worker tick failed'))
 }, intervalMs)
 
-setupGracefulShutdown(logger, { onShutdown: [() => clearInterval(interval), () => sql.end()] })
+setupGracefulShutdown(logger, { timeoutMs: env.GRACEFUL_SHUTDOWN_TIMEOUT_MS, onShutdown: [() => clearInterval(interval), () => sql.end()] })

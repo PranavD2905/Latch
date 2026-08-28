@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import pino from 'pino'
+import { loadEnv } from '../config.js'
 import type { Logger } from '../../ports/logger.js'
 
 const packageVersion: string = (() => {
@@ -27,9 +28,10 @@ const packageVersion: string = (() => {
  * see its own call site.
  */
 export function createLogger(service: string, destination: 1 | 2 = 1): Logger {
-  const isProd = process.env['NODE_ENV'] === 'production'
-  const base = { service, environment: process.env['NODE_ENV'] ?? 'development', version: packageVersion }
-  const level = process.env['LOG_LEVEL'] ?? 'info'
+  const env = loadEnv()
+  const isProd = env.NODE_ENV === 'production'
+  const base = { service, environment: env.NODE_ENV ?? 'development', version: packageVersion }
+  const level = env.LOG_LEVEL ?? 'info'
 
   if (isProd) {
     return pino({ level, base }, pino.destination(destination))

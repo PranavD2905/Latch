@@ -3,33 +3,10 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify'
 import type { AppDeps } from '../../app/types.js'
+import { loadEnv } from '../config.js'
 import { echoTraceIdHeader, loggingFastifyOptions, registerErrorHandler } from '../observability/fastify-logging.js'
 import { mcpRateLimitTriggeredTotal, registerMetricsRoute } from '../observability/metrics.js'
 import { createServer } from './server.js'
-
-/**
- * Scalability review follow-up: transport-level DoS protection, distinct
- * from (and layered underneath) `hold_slot`'s own DB-backed request-rate
- * bound (`docs/01-architecture.md` §12). That one is a *business* ceiling —
- * how many bookings-holds one agent may accumulate against one merchant —
- * and correctly needs to be exact and DB-verified because a bypass has real
- * money-adjacent consequences (calendar-lockout abuse). This one exists
- * purely to stop a raw flood of HTTP requests from exhausting the process
- * before any request ever reaches a tool handler: a fresh `McpServer` +
- * `StreamableHTTPServerTransport` is allocated per request by design (see
- * this file's own module doc comment on why), so an unthrottled flood is a
- * real resource-exhaustion path at volume. Approximate and per-process
- * (the default in-memory store, not a shared one) is the right tier of
- * correctness for that job — Redis is a deliberately rejected dependency
- * for this codebase (docs/02-tech-stack.md §15), and a coarse throttle that
- * only has to survive a *single* replica's own flood doesn't need
- * cross-replica exactness the way a real money bound would. With N
- * `latch-mcp` replicas, the effective ceiling is N × `MCP_RATE_LIMIT_MAX`
- * across the fleet, not a hard fleet-wide cap — an accepted tradeoff, not
- * an oversight.
- */
-const MCP_RATE_LIMIT_MAX = Number(process.env['MCP_RATE_LIMIT_MAX'] ?? 300)
-const MCP_RATE_LIMIT_WINDOW_MS = Number(process.env['MCP_RATE_LIMIT_WINDOW_MS'] ?? 60_000)
 
 function methodNotAllowed(request: FastifyRequest, reply: FastifyReply): void {
   reply.hijack()
@@ -78,6 +55,35 @@ function methodNotAllowed(request: FastifyRequest, reply: FastifyReply): void {
  * integration should always address a merchant explicitly.
  */
 export async function createMcpHttpServer(deps: AppDeps): Promise<FastifyInstance> {
+  const env = loadEnv()
+  // Scalability review follow-up: transport-level DoS protection, distinct
+  // from (and layered underneath) `hold_slot`'s own DB-backed request-rate
+  // bound (`docs/01-architecture.md` §12). That one is a *business* ceiling —
+  // how many bookings-holds one agent may accumulate against one merchant —
+  // and correctly needs to be exact and DB-verified because a bypass has real
+  // money-adjacent consequences (calendar-lockout abuse). This one exists
+  // purely to stop a raw flood of HTTP requests from exhausting the process
+  // before any request ever reaches a tool handler: a fresh `McpServer` +
+  // `StreamableHTTPServerTransport` is allocated per request by design (see
+  // this file's own module doc comment on why), so an unthrottled flood is a
+  // real resource-exhaustion path at volume. Approximate and per-process
+  // (the default in-memory store, not a shared one) is the right tier of
+  // correctness for that job — Redis is a deliberately rejected dependency
+  // for this codebase (docs/02-tech-stack.md §15), and a coarse throttle that
+  // only has to survive a *single* replica's own flood doesn't need
+  // cross-replica exactness the way a real money bound would. With N
+  // `latch-mcp` replicas, the effective ceiling is N × `MCP_RATE_LIMIT_MAX`
+  // across the fleet, not a hard fleet-wide cap — an accepted tradeoff, not
+  // an oversight.
+  //
+  // Read inside this function, not at module scope: this module is
+  // statically imported (by `mcp/http.ts`/`stdio.ts`) before the entrypoint's
+  // own body calls `loadEnvFile()`, so a module-scope read would silently
+  // miss any local-only `.env` override — the same ordering hazard
+  // `config.ts`'s own doc comment calls out.
+  const MCP_RATE_LIMIT_MAX = env.MCP_RATE_LIMIT_MAX
+  const MCP_RATE_LIMIT_WINDOW_MS = env.MCP_RATE_LIMIT_WINDOW_MS
+
   const app = Fastify(loggingFastifyOptions(deps.logger))
   echoTraceIdHeader(app)
   registerErrorHandler(app)

@@ -15,6 +15,7 @@ import { runIdempotencyCleanupWorker } from '../../app/idempotency-cleanup-worke
 import { runNoShowEligibilityWorker } from '../../app/no-show-eligibility-worker.js'
 import { runReconciliationWorker } from '../../app/reconciliation-worker.js'
 import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
+import { loadEnv } from '../config.js'
 import { withGlobalLock } from '../db/advisory-lock.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
@@ -23,11 +24,12 @@ import { createLogger } from '../observability/logger.js'
 
 loadEnvFile()
 
+const env = loadEnv()
 const logger = createLogger('latch-worker-background')
 const { db, sql } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db, logger)
 
-const intervalMs = Number(process.env['BACKGROUND_WORKER_INTERVAL_MS'] ?? 60_000)
+const intervalMs = env.BACKGROUND_WORKER_INTERVAL_MS
 
 // Same global-advisory-lock guard `mcp/http.ts` uses on its own copy of this
 // tick — see `advisory-lock.ts`'s doc comment. Not load-bearing for this
@@ -72,4 +74,4 @@ const interval = setInterval(() => {
   tick().catch((err) => logger.error({ err }, 'background worker tick failed'))
 }, intervalMs)
 
-setupGracefulShutdown(logger, { onShutdown: [() => clearInterval(interval), () => sql.end()] })
+setupGracefulShutdown(logger, { timeoutMs: env.GRACEFUL_SHUTDOWN_TIMEOUT_MS, onShutdown: [() => clearInterval(interval), () => sql.end()] })

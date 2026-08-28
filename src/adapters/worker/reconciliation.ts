@@ -14,6 +14,7 @@
  */
 import { runReconciliationWorker } from '../../app/reconciliation-worker.js'
 import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
+import { loadEnv } from '../config.js'
 import { withGlobalLock } from '../db/advisory-lock.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
@@ -22,11 +23,12 @@ import { createLogger } from '../observability/logger.js'
 
 loadEnvFile()
 
+const env = loadEnv()
 const logger = createLogger('latch-worker-reconciliation')
 const { db, sql } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db, logger)
 
-const intervalMs = Number(process.env['RECONCILIATION_WORKER_INTERVAL_MS'] ?? 60_000)
+const intervalMs = env.RECONCILIATION_WORKER_INTERVAL_MS
 
 // Same global-advisory-lock guard as `mcp/http.ts`'s own copy of this tick
 // (the one that actually matters most here — this is the job with real
@@ -49,4 +51,4 @@ const interval = setInterval(() => {
   tick().catch((err) => logger.error({ err }, 'reconciliation worker tick failed'))
 }, intervalMs)
 
-setupGracefulShutdown(logger, { onShutdown: [() => clearInterval(interval), () => sql.end()] })
+setupGracefulShutdown(logger, { timeoutMs: env.GRACEFUL_SHUTDOWN_TIMEOUT_MS, onShutdown: [() => clearInterval(interval), () => sql.end()] })

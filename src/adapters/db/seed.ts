@@ -7,6 +7,7 @@
  * (`onConflictDoNothing`) and the MCP client / tests can refer to them by
  * name instead of looking them up first.
  */
+import { requireDatabaseUrl } from '../build-deps.js'
 import { loadEnvFile } from '../load-env.js'
 import { createDbClient } from './client.js'
 import { PostgresMerchantAuthStore } from './postgres-merchant-auth.js'
@@ -15,13 +16,10 @@ import { SEED_MERCHANT_ID, SEED_PRACTITIONER_ID, SEED_SERVICE_ID } from './seed-
 
 loadEnvFile()
 
-const databaseUrl = process.env['DATABASE_URL']
-if (!databaseUrl) {
-  throw new Error('DATABASE_URL is not set')
-}
+const databaseUrl = requireDatabaseUrl()
 
 async function seed() {
-  const { sql, db } = createDbClient(databaseUrl!)
+  const { sql, db } = createDbClient(databaseUrl)
   const now = new Date()
 
   await db

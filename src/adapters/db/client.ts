@@ -1,5 +1,6 @@
 import { drizzle } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
+import { loadEnv } from '../config.js'
 import * as schema from './schema.js'
 
 /**
@@ -29,17 +30,16 @@ import * as schema from './schema.js'
  * pool — see the flag's own comment.
  */
 export function createDbClient(databaseUrl: string) {
-  const max = Number(process.env['DB_POOL_MAX'] ?? 5)
-  const usingTransactionPooler = process.env['DB_TRANSACTION_POOLER'] === 'true'
+  const env = loadEnv()
   const sql = postgres(databaseUrl, {
-    max,
+    max: env.DB_POOL_MAX,
     // Proactively hands idle/long-lived connections back rather than
     // holding `max` open indefinitely regardless of actual load — cheap
     // insurance against a replica sitting on connections it isn't using,
     // though it does not raise the hard ceiling `max` x process/replica
     // count still sets (see the pooler note above).
-    idle_timeout: Number(process.env['DB_IDLE_TIMEOUT_SECONDS'] ?? 60),
-    max_lifetime: Number(process.env['DB_MAX_LIFETIME_SECONDS'] ?? 30 * 60),
+    idle_timeout: env.DB_IDLE_TIMEOUT_SECONDS,
+    max_lifetime: env.DB_MAX_LIFETIME_SECONDS,
     // `DB_TRANSACTION_POOLER=true` — set this when `DATABASE_URL` points at
     // a transaction-mode pooler (PgBouncer, Railway's Postgres connection
     // pooling add-on) rather than Postgres directly. Transaction-mode
@@ -49,7 +49,7 @@ export function createDbClient(databaseUrl: string) {
     // option must be off in that mode. Left on (the `postgres-js` default)
     // for a direct connection, where prepared statements are safe and
     // measurably faster.
-    prepare: !usingTransactionPooler,
+    prepare: !env.DB_TRANSACTION_POOLER,
   })
   const db = drizzle(sql, { schema })
   return { sql, db }

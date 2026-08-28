@@ -16,6 +16,7 @@
  * script is proving the auth/tenancy model, not modelling a real clinic.
  */
 import { ulid } from 'ulid'
+import { requireDatabaseUrl } from '../build-deps.js'
 import { loadEnvFile } from '../load-env.js'
 import { createDbClient } from './client.js'
 import { PostgresMerchantAuthStore } from './postgres-merchant-auth.js'
@@ -23,10 +24,7 @@ import { merchants, policies, practitioners, services } from './schema.js'
 
 loadEnvFile()
 
-const databaseUrl = process.env['DATABASE_URL']
-if (!databaseUrl) {
-  throw new Error('DATABASE_URL is not set')
-}
+const databaseUrl = requireDatabaseUrl()
 
 const [merchantName, practitionerName = 'Dr. Practitioner', serviceName = 'General consult, 30 min', durationArg = '30', priceArg = '80000'] = process.argv.slice(2)
 
@@ -36,7 +34,7 @@ if (!merchantName) {
 }
 
 async function createMerchant(): Promise<void> {
-  const { sql, db } = createDbClient(databaseUrl!)
+  const { sql, db } = createDbClient(databaseUrl)
   const now = new Date()
 
   const merchantId = `mer_${ulid()}`

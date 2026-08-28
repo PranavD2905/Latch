@@ -6,6 +6,7 @@ import type { MerchantAuthStore } from '../ports/merchant-auth.js'
 import type { PaymentProvider } from '../ports/payment-provider.js'
 import type { PaymentRail } from '../ports/payment-rail.js'
 import { SystemClock } from './clock/system-clock.js'
+import { loadEnv } from './config.js'
 import type { Db } from './db/client.js'
 import { PostgresCatalogRepo } from './db/postgres-catalog-repo.js'
 import { PostgresEventStore } from './db/postgres-event-store.js'
@@ -19,8 +20,13 @@ import { ManualCaptureRail } from './payment/manual-capture-rail.js'
 import { RazorpayPaymentProvider } from './payment/razorpay-payment-provider.js'
 import { ReservePayRail } from './payment/reserve-pay-rail.js'
 
+/**
+ * dev-logs/023. `config.ts`'s schema deliberately leaves `DATABASE_URL`
+ * optional (see its own comment) — this is the one place that actually
+ * requires it, for every real entrypoint.
+ */
 export function requireDatabaseUrl(): string {
-  const databaseUrl = process.env['DATABASE_URL']
+  const databaseUrl = loadEnv().DATABASE_URL
   if (!databaseUrl) {
     throw new Error('DATABASE_URL is not set')
   }
@@ -28,16 +34,13 @@ export function requireDatabaseUrl(): string {
 }
 
 function usingRazorpay(): boolean {
-  return process.env['PAYMENT_PROVIDER'] === 'razorpay'
+  return loadEnv().PAYMENT_PROVIDER === 'razorpay'
 }
 
+/** `loadEnv()`'s own `superRefine` already guarantees both are set whenever `PAYMENT_PROVIDER=razorpay` — the `!` below reflects that, not a fresh assumption. */
 function razorpayCredentials(): { keyId: string; keySecret: string } {
-  const keyId = process.env['RAZORPAY_KEY_ID']
-  const keySecret = process.env['RAZORPAY_KEY_SECRET']
-  if (!keyId || !keySecret) {
-    throw new Error('PAYMENT_PROVIDER=razorpay requires RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to be set')
-  }
-  return { keyId, keySecret }
+  const env = loadEnv()
+  return { keyId: env.RAZORPAY_KEY_ID!, keySecret: env.RAZORPAY_KEY_SECRET! }
 }
 
 function buildPaymentProvider(): PaymentProvider {
@@ -53,7 +56,7 @@ function buildPaymentProvider(): PaymentProvider {
  */
 function buildPaymentRail(): PaymentRail {
   if (!usingRazorpay()) return new FakePaymentRail()
-  if (process.env['PAYMENT_RAIL'] === 'reserve_pay') return new ReservePayRail()
+  if (loadEnv().PAYMENT_RAIL === 'reserve_pay') return new ReservePayRail()
   return new ManualCaptureRail(razorpayCredentials())
 }
 
@@ -96,7 +99,7 @@ export function buildAppDeps(db: Db, logger: Logger): AppDeps {
     paymentProvider: buildPaymentProvider(),
     paymentRail: buildPaymentRail(),
     idempotencyStore: new PostgresIdempotencyStore(db),
-    merchantId: process.env['MERCHANT_ID'] ?? SEED_MERCHANT_ID,
+    merchantId: loadEnv().MERCHANT_ID ?? SEED_MERCHANT_ID,
     // dev-logs/016. One breaker per process (`buildAppDeps` itself is only
     // ever called once per entrypoint — see the file-level callers, all
     // top-level `const deps = buildAppDeps(db)`), shared across every
@@ -128,9 +131,7 @@ export function buildAppDeps(db: Db, logger: Logger): AppDeps {
  * happens to run with the fake provider in some other environment.
  */
 export function buildWebhookOptions(): { secret: string; razorpay: Razorpay } | undefined {
-  const secret = process.env['RAZORPAY_WEBHOOK_SECRET']
-  const keyId = process.env['RAZORPAY_KEY_ID']
-  const keySecret = process.env['RAZORPAY_KEY_SECRET']
-  if (!secret || !keyId || !keySecret) return undefined
-  return { secret, razorpay: new Razorpay({ key_id: keyId, key_secret: keySecret }) }
+  const env = loadEnv()
+  if (!env.RAZORPAY_WEBHOOK_SECRET || !env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) return undefined
+  return { secret: env.RAZORPAY_WEBHOOK_SECRET, razorpay: new Razorpay({ key_id: env.RAZORPAY_KEY_ID, key_secret: env.RAZORPAY_KEY_SECRET }) }
 }

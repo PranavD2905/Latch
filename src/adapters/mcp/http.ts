@@ -20,6 +20,7 @@ import { runIdempotencyCleanupWorker } from '../../app/idempotency-cleanup-worke
 import { runNoShowEligibilityWorker } from '../../app/no-show-eligibility-worker.js'
 import { runReconciliationWorker } from '../../app/reconciliation-worker.js'
 import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
+import { loadEnv } from '../config.js'
 import { withGlobalLock } from '../db/advisory-lock.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
@@ -29,6 +30,7 @@ import { createMcpHttpServer } from './streamable-http-server.js'
 
 loadEnvFile()
 
+const env = loadEnv()
 const logger = createLogger('latch-mcp')
 const { db, sql } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db, logger)
@@ -36,11 +38,11 @@ const deps = buildAppDeps(db, logger)
 const app = await createMcpHttpServer(deps)
 // Railway assigns the public port via $PORT; MCP_HTTP_PORT stays the
 // local-dev default (mirrors merchant-api's MERCHANT_API_PORT).
-const port = Number(process.env['PORT'] ?? process.env['MCP_HTTP_PORT'] ?? 4000)
+const port = env.PORT ?? env.MCP_HTTP_PORT
 await app.listen({ port, host: '0.0.0.0' })
 logger.info({ port }, 'MCP Streamable HTTP server listening')
 
-const backgroundIntervalMs = Number(process.env['BACKGROUND_WORKER_INTERVAL_MS'] ?? 60_000)
+const backgroundIntervalMs = env.BACKGROUND_WORKER_INTERVAL_MS
 
 /**
  * Scalability: guarded by a single global advisory lock (`withGlobalLock`)
@@ -91,7 +93,7 @@ const backgroundInterval = setInterval(() => {
   backgroundTick().catch((err) => logger.error({ err }, 'background worker tick failed'))
 }, backgroundIntervalMs)
 
-const authLapseIntervalMs = Number(process.env['AUTHORIZATION_LAPSE_WORKER_INTERVAL_MS'] ?? 60_000)
+const authLapseIntervalMs = env.AUTHORIZATION_LAPSE_WORKER_INTERVAL_MS
 
 async function authorizationLapseTick(): Promise<void> {
   await withGlobalLock(sql, 'latch:authorization-lapse-worker-tick', async () => {
@@ -110,5 +112,6 @@ const authLapseInterval = setInterval(() => {
 
 setupGracefulShutdown(logger, {
   app,
+  timeoutMs: env.GRACEFUL_SHUTDOWN_TIMEOUT_MS,
   onShutdown: [() => clearInterval(backgroundInterval), () => clearInterval(authLapseInterval), () => sql.end()],
 })
