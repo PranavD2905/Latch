@@ -106,6 +106,11 @@ export function buildAppDeps(db: Db, logger: Logger): AppDeps {
     // this never trips on the kind of one-off blip a single retry would
     // have absorbed anyway.
     reconciliationCircuitBreaker: new CircuitBreaker({ name: 'razorpay-reconciliation', clock, failureThreshold: 3, cooldownMs: 2 * 60_000 }),
+    // dev-logs/020 — separate instance, separate failure domain (see
+    // AppDeps.paymentCircuitBreaker's own doc comment). Same tuning as
+    // reconciliation's: 3 consecutive genuine provider failures, 2 minute
+    // cooldown before one half-open probe.
+    paymentCircuitBreaker: new CircuitBreaker({ name: 'razorpay-payments', clock, failureThreshold: 3, cooldownMs: 2 * 60_000 }),
     webhookDeadLetterStore: new PostgresWebhookDeadLetterStore(db),
   }
 }

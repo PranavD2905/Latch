@@ -42,6 +42,7 @@ let POLICY_MERCHANT_TOKEN: string
 const deps: AppDeps = {
   clock,
   logger: createNoopLogger(),
+  paymentCircuitBreaker: new CircuitBreaker({ name: 'test', clock, failureThreshold: 3, cooldownMs: 2 * 60_000 }),
   eventStore: new PostgresEventStore(db),
   catalogRepo: new PostgresCatalogRepo(db),
   paymentProvider: new FakePaymentProvider(),

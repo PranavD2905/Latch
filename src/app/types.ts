@@ -46,6 +46,21 @@ export interface AppDeps {
    * exactly like every other timing-sensitive thing in this codebase.
    */
   reconciliationCircuitBreaker: CircuitBreaker
+  /**
+   * Guards the customer-facing money-moving calls (`confirm_with_deposit`'s
+   * `captureDeposit`/`authorize`, `charge_no_show`/`mark_session_complete`'s
+   * `captureAuthorization`, `decline_booking`/`cancel_booking`'s
+   * `refundDeposit`) — dev-logs/020. Deliberately a *separate* instance from
+   * `reconciliationCircuitBreaker` above, not a shared one: reconciliation's
+   * read-only lookups and these money-moving writes are different failure
+   * domains, and sharing one breaker would mean a spike of read-side
+   * failures could start rejecting real customer payments (or vice versa)
+   * for an unrelated reason. Always wrap a call through it via
+   * `executePaymentCall` (`app/payment-circuit-breaker.ts`), never
+   * `.execute` directly — that helper is what keeps an ordinary customer
+   * decline from counting as a circuit failure.
+   */
+  paymentCircuitBreaker: CircuitBreaker
   /** Where a persistently-failing `POST /webhooks/razorpay` delivery gets recorded once it's failed enough times in a row that more Razorpay redeliveries alone won't fix it — see `app/webhook-dead-letter.ts`. */
   webhookDeadLetterStore: WebhookDeadLetterStore
   /**

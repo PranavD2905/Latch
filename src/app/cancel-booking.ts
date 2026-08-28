@@ -10,6 +10,7 @@ import { evaluateLadder } from '../domain/ladder.js'
 import { floorPercentageOf, subtractPaise, type Paise } from '../domain/money.js'
 import type { Policy } from '../domain/policy.js'
 import type { BookingSnapshot } from '../ports/event-store.js'
+import { executePaymentCall } from './payment-circuit-breaker.js'
 import { refuseAgainstBooking } from './refusal.js'
 import { ownedByMerchant } from './tenant-guard.js'
 import type { AppDeps } from './types.js'
@@ -158,12 +159,14 @@ async function cancelBookingClaimed(cmd: CancelBookingCommand, deps: AppDeps): P
   // tier are both legitimate — no Razorpay refund of ₹0 is ever attempted).
   const refund =
     refundAmount > 0
-      ? await deps.paymentProvider.refundDeposit({
-          paymentId,
-          amountPaise: refundAmount,
-          idempotencyKey: cmd.idempotencyKey,
-          reference: cmd.bookingId,
-        })
+      ? await executePaymentCall(deps.paymentCircuitBreaker, () =>
+          deps.paymentProvider.refundDeposit({
+            paymentId,
+            amountPaise: refundAmount,
+            idempotencyKey: cmd.idempotencyKey,
+            reference: cmd.bookingId,
+          }),
+        )
       : undefined
 
   await deps.eventStore.transaction(async (tx) => {

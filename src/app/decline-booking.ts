@@ -9,6 +9,7 @@ import {
 import type { AuthorizationHeldEvent, BookingEvent, DepositCapturedEvent } from '../domain/events.js'
 import { subtractPaise } from '../domain/money.js'
 import { findSlots } from './find-slots.js'
+import { executePaymentCall } from './payment-circuit-breaker.js'
 import { ownedByMerchant } from './tenant-guard.js'
 import type { AppDeps } from './types.js'
 
@@ -128,12 +129,14 @@ export async function declineBooking(cmd: DeclineBookingCommand, deps: AppDeps):
   // Outside any DB lock, deliberately — same discipline as confirm_with_deposit
   // (dev-logs/004): never hold a row lock across a network call. Both of
   // these are reads/writes against outside systems, not the booking row.
-  const refund = await deps.paymentProvider.refundDeposit({
-    paymentId,
-    amountPaise: deposit.action.amountPaise,
-    idempotencyKey: cmd.idempotencyKey,
-    reference: cmd.bookingId,
-  })
+  const refund = await executePaymentCall(deps.paymentCircuitBreaker, () =>
+    deps.paymentProvider.refundDeposit({
+      paymentId,
+      amountPaise: deposit.action.amountPaise,
+      idempotencyKey: cmd.idempotencyKey,
+      reference: cmd.bookingId,
+    }),
+  )
 
   // ALTERNATIVES_OFFERED is a calendar query, not a model (docs/05-cost-model.md
   // §1 / slice-3.md item 4) — this literally reuses find_slots, then drops the

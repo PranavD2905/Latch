@@ -12,6 +12,7 @@ import { Refusal, type RefusalCode } from '../domain/refusals.js'
 import type { ServiceRecord } from '../ports/catalog-repo.js'
 import type { BookingSnapshot } from '../ports/event-store.js'
 import { NoActivePolicyError } from './get-policy.js'
+import { executePaymentCall } from './payment-circuit-breaker.js'
 import { appendRefusalEvent, refuseAgainstBooking } from './refusal.js'
 import { ownedByMerchant } from './tenant-guard.js'
 import type { AppDeps } from './types.js'
@@ -238,27 +239,33 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
   // up to three separate Checkout completions can exist in this build, so a
   // human waiting on them should not wait on them serially.
   const [captured, noShowAuthorized, sessionCompleteAuthorized] = await Promise.all([
-    deps.paymentProvider.captureDeposit({
-      amountPaise: policy.depositAmountPaise,
-      idempotencyKey: cmd.idempotencyKey,
-      reference: snapshot.bookingId,
-    }),
+    executePaymentCall(deps.paymentCircuitBreaker, () =>
+      deps.paymentProvider.captureDeposit({
+        amountPaise: policy.depositAmountPaise,
+        idempotencyKey: cmd.idempotencyKey,
+        reference: snapshot.bookingId,
+      }),
+    ),
     policy.noShowFeePaise === undefined
       ? Promise.resolve(undefined)
-      : deps.paymentRail.authorize({
-          amountPaise: policy.noShowFeePaise,
-          idempotencyKey: authorizationIdempotencyKey(cmd.idempotencyKey, 'no_show_auth'),
-          reference: snapshot.bookingId,
-          now,
-        }),
+      : executePaymentCall(deps.paymentCircuitBreaker, () =>
+          deps.paymentRail.authorize({
+            amountPaise: policy.noShowFeePaise!,
+            idempotencyKey: authorizationIdempotencyKey(cmd.idempotencyKey, 'no_show_auth'),
+            reference: snapshot.bookingId,
+            now,
+          }),
+        ),
     sessionCompleteMandateAmountPaise === 0
       ? Promise.resolve(undefined)
-      : deps.paymentRail.authorize({
-          amountPaise: sessionCompleteMandateAmountPaise,
-          idempotencyKey: authorizationIdempotencyKey(cmd.idempotencyKey, 'session_complete_auth'),
-          reference: snapshot.bookingId,
-          now,
-        }),
+      : executePaymentCall(deps.paymentCircuitBreaker, () =>
+          deps.paymentRail.authorize({
+            amountPaise: sessionCompleteMandateAmountPaise,
+            idempotencyKey: authorizationIdempotencyKey(cmd.idempotencyKey, 'session_complete_auth'),
+            reference: snapshot.bookingId,
+            now,
+          }),
+        ),
   ])
 
   await deps.eventStore.transaction(async (tx) => {

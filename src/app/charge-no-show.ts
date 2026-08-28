@@ -5,6 +5,7 @@ import { Refusal, type RefusalCode } from '../domain/refusals.js'
 import type { BookingSnapshot } from '../ports/event-store.js'
 import { CaptureAmountMismatchError } from '../ports/payment-rail.js'
 import { NoActivePolicyError } from './get-policy.js'
+import { executePaymentCall } from './payment-circuit-breaker.js'
 import { appendRefusalEvent, refuseAgainstBooking } from './refusal.js'
 import { ownedByMerchant } from './tenant-guard.js'
 import type { AppDeps } from './types.js'
@@ -164,11 +165,13 @@ async function chargeNoShowClaimed(cmd: ChargeNoShowCommand, deps: AppDeps): Pro
   // caller, not just documented.
   let captured
   try {
-    captured = await deps.paymentRail.captureAuthorization({
-      authorizationId,
-      amountPaise: authorizationAmountPaise,
-      reference: cmd.bookingId,
-    })
+    captured = await executePaymentCall(deps.paymentCircuitBreaker, () =>
+      deps.paymentRail.captureAuthorization({
+        authorizationId,
+        amountPaise: authorizationAmountPaise,
+        reference: cmd.bookingId,
+      }),
+    )
   } catch (err) {
     if (err instanceof CaptureAmountMismatchError) {
       await deps.eventStore.transaction(async (tx) => {

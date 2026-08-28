@@ -78,4 +78,24 @@ describe('CircuitBreaker', () => {
     clock.advance(1) // still inside the fresh cooldown that reopening just started
     await expect(breaker.execute(succeeding('too soon again'))).rejects.toThrow(CircuitOpenError)
   })
+
+  it('an `isFailure`-excluded rejection propagates but does not count toward the failure streak', async () => {
+    const clock = new FrozenClock(new Date('2026-08-26T00:00:00Z'))
+    const breaker = new CircuitBreaker({ name: 'test', clock, failureThreshold: 2, cooldownMs: 60_000 })
+    const isFailure = (err: unknown): boolean => !(err instanceof Error && err.message === 'expected outcome')
+
+    // Three "expected outcome" rejections in a row — well past a threshold
+    // of 2 — never open the breaker, because none of them count.
+    await expect(breaker.execute(failing('expected outcome'), { isFailure })).rejects.toThrow('expected outcome')
+    await expect(breaker.execute(failing('expected outcome'), { isFailure })).rejects.toThrow('expected outcome')
+    await expect(breaker.execute(failing('expected outcome'), { isFailure })).rejects.toThrow('expected outcome')
+    expect(breaker.currentState).toBe('closed')
+
+    // A real failure still counts, and still opens the breaker at the
+    // configured threshold — `isFailure` narrows what counts, it doesn't
+    // disable counting altogether.
+    await expect(breaker.execute(failing('boom'), { isFailure })).rejects.toThrow('boom')
+    await expect(breaker.execute(failing('boom'), { isFailure })).rejects.toThrow('boom')
+    expect(breaker.currentState).toBe('open')
+  })
 })

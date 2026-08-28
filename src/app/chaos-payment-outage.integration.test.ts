@@ -102,6 +102,7 @@ describe('chaos: a payment-provider outage mid confirm_with_deposit', () => {
     const deps: AppDeps = {
       clock,
       logger: createNoopLogger(),
+      paymentCircuitBreaker: new CircuitBreaker({ name: 'test', clock, failureThreshold: 3, cooldownMs: 60_000 }),
       eventStore: new PostgresEventStore(db),
       catalogRepo: new PostgresCatalogRepo(db),
       paymentProvider,

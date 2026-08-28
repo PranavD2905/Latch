@@ -60,6 +60,7 @@ const clock = new FrozenClock(new Date('2026-08-25T00:00:00+05:30'))
 const deps: AppDeps = {
   clock,
   logger: createNoopLogger(),
+  paymentCircuitBreaker: new CircuitBreaker({ name: 'test', clock, failureThreshold: 3, cooldownMs: 2 * 60_000 }),
   eventStore: new PostgresEventStore(db),
   catalogRepo: new PostgresCatalogRepo(db),
   paymentProvider: new FakePaymentProvider(),

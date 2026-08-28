@@ -4,6 +4,7 @@ import { subtractPaise, type Paise } from '../domain/money.js'
 import { Refusal } from '../domain/refusals.js'
 import type { BookingSnapshot } from '../ports/event-store.js'
 import { CaptureAmountMismatchError } from '../ports/payment-rail.js'
+import { executePaymentCall } from './payment-circuit-breaker.js'
 import { appendRefusalEvent } from './refusal.js'
 import { ownedByMerchant } from './tenant-guard.js'
 import type { AppDeps } from './types.js'
@@ -78,7 +79,9 @@ export async function markSessionComplete(cmd: MarkSessionCompleteCommand, deps:
     // Outside any DB lock, deliberately — same discipline as charge_no_show/
     // decline_booking: never hold a row lock across a network call.
     try {
-      const captured = await deps.paymentRail.captureAuthorization({ authorizationId, amountPaise: authorizationAmountPaise, reference: cmd.bookingId })
+      const captured = await executePaymentCall(deps.paymentCircuitBreaker, () =>
+        deps.paymentRail.captureAuthorization({ authorizationId, amountPaise: authorizationAmountPaise, reference: cmd.bookingId }),
+      )
       capture = {
         action: { direction: 'debit', amountPaise: captured.amountPaise, instrument: captured.instrument },
         ceilingPaise: authorizationAmountPaise,

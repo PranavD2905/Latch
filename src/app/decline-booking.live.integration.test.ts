@@ -98,6 +98,7 @@ describe('decline_booking against real Razorpay test mode', () => {
     const deps: AppDeps = {
       clock,
       logger: createNoopLogger(),
+      paymentCircuitBreaker: new CircuitBreaker({ name: 'test', clock, failureThreshold: 3, cooldownMs: 2 * 60_000 }),
       eventStore: new PostgresEventStore(db),
       catalogRepo: new PostgresCatalogRepo(db),
       paymentProvider: new RazorpayPaymentProvider({ keyId: keyId!, keySecret: keySecret! }),

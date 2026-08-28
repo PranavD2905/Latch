@@ -60,7 +60,19 @@ export class CircuitBreaker {
     return this.state
   }
 
-  async execute<T>(fn: () => Promise<T>): Promise<T> {
+  /**
+   * `isFailure` (default: every rejection counts) lets a caller exclude
+   * *expected* outcomes from the failure streak — dev-logs/020: wrapping a
+   * money-moving call (`captureDeposit`/`authorize`/`captureAuthorization`/
+   * `refundDeposit`) means an ordinary customer decline or a
+   * `CaptureAmountMismatchError` gate refusal would otherwise count the same
+   * as Razorpay itself being down, tripping the breaker on business-as-usual
+   * traffic. `reconciliation.ts`'s existing calls never pass this — every
+   * error `fetchPaymentStatus`/`fetchAuthorizationStatus` can throw already
+   * means "the provider call itself failed," so the default is correct
+   * there unchanged.
+   */
+  async execute<T>(fn: () => Promise<T>, options?: { isFailure?: (err: unknown) => boolean }): Promise<T> {
     this.maybeTransitionToHalfOpen()
     if (this.state === 'open') {
       throw new CircuitOpenError(this.opts.name)
@@ -71,7 +83,9 @@ export class CircuitBreaker {
       this.onSuccess()
       return result
     } catch (err) {
-      this.onFailure()
+      if (options?.isFailure?.(err) ?? true) {
+        this.onFailure()
+      }
       throw err
     }
   }
