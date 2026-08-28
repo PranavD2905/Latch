@@ -20,12 +20,14 @@ import { withGlobalLock } from '../db/advisory-lock.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
 import { setupGracefulShutdown } from '../observability/graceful-shutdown.js'
+import { shutdownTracing, startTracing } from '../observability/tracing.js'
 import { createLogger } from '../observability/logger.js'
 
 loadEnvFile()
 
 const env = loadEnv()
 const logger = createLogger('latch-worker-background')
+startTracing('latch-worker-background')
 const { db, sql } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db, logger)
 
@@ -74,4 +76,4 @@ const interval = setInterval(() => {
   tick().catch((err) => logger.error({ err }, 'background worker tick failed'))
 }, intervalMs)
 
-setupGracefulShutdown(logger, { timeoutMs: env.GRACEFUL_SHUTDOWN_TIMEOUT_MS, onShutdown: [() => clearInterval(interval), () => sql.end()] })
+setupGracefulShutdown(logger, { timeoutMs: env.GRACEFUL_SHUTDOWN_TIMEOUT_MS, onShutdown: [() => clearInterval(interval), shutdownTracing, () => sql.end()] })

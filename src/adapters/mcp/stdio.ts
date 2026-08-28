@@ -29,6 +29,13 @@ loadEnvFile()
 // fd 1 would corrupt the protocol stream. See `observability/logger.ts`'s
 // own doc comment.
 const logger = createLogger('latch-mcp-stdio', 2)
+// Deliberately no `startTracing()` call here, unlike every other
+// entrypoint — dev-logs/027: `ConsoleSpanExporter` (the fallback when
+// `OTEL_EXPORTER_OTLP_ENDPOINT` is unset) writes to stdout with no way to
+// redirect it, the exact same hazard the stderr destination above exists to
+// avoid for logging. `mcp/server.ts`'s `withToolLogging` still opens a real
+// span here (`getTracer()` is safe to call whether or not a provider is
+// registered) — it's just never exported anywhere from this entrypoint.
 const { db } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db, logger)
 

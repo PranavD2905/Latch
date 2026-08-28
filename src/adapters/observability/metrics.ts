@@ -1,5 +1,7 @@
+import { SpanStatusCode } from '@opentelemetry/api'
 import { Counter, Histogram, Registry, collectDefaultMetrics } from 'prom-client'
 import type { FastifyInstance } from 'fastify'
+import { getTracer } from './tracing.js'
 
 /**
  * One process-wide registry, matching this codebase's "one X per process"
@@ -82,16 +84,24 @@ export const razorpayApiCallDurationMs = new Histogram({
 })
 
 /**
- * Wraps a `Razorpay` client instance in a Proxy that times and counts every
- * `client.<resource>.<method>(...)` call transparently — applied once at
- * construction (`new Razorpay(...)`), not at each call site. The
- * alternative (hand-instrumenting every `orders.create`/`orders.all`/
- * `payments.fetch`/`payments.capture`/... call individually across the two
- * real adapters) is the same information for roughly 5x the diff and a much
- * easier place to miss one on the next SDK call this codebase adds.
- * Transparent: the wrapped client behaves identically to the caller,
- * including rethrowing the original error unchanged — this only ever adds a
- * side-effecting metric, never changes control flow.
+ * Wraps a `Razorpay` client instance in a Proxy that times, counts, and
+ * traces every `client.<resource>.<method>(...)` call transparently —
+ * applied once at construction (`new Razorpay(...)`), not at each call
+ * site. The alternative (hand-instrumenting every `orders.create`/
+ * `orders.all`/`payments.fetch`/`payments.capture`/... call individually
+ * across the two real adapters) is the same information for roughly 5x the
+ * diff and a much easier place to miss one on the next SDK call this
+ * codebase adds. Transparent: the wrapped client behaves identically to the
+ * caller, including rethrowing the original error unchanged — this only
+ * ever adds side-effecting telemetry, never changes control flow.
+ *
+ * `getTracer().startActiveSpan` (dev-logs/027) is what makes a call made
+ * from inside an MCP tool handler show up as a *child* span of that tool's
+ * own span (`mcp/server.ts`'s `withToolLogging`) — `startActiveSpan` picks
+ * up whatever span is already active in the current async context, so
+ * `confirm_with_deposit`'s trace ends up genuinely showing "captureDeposit
+ * called payments.capture," not two disconnected spans a reader has to
+ * correlate by hand.
  */
 export function instrumentRazorpayClient<T extends object>(client: T): T {
   return new Proxy(client, {
@@ -104,17 +114,23 @@ export function instrumentRazorpayClient<T extends object>(client: T): T {
           if (typeof method !== 'function') return method
           return async function instrumented(...args: unknown[]): Promise<unknown> {
             const label = `${String(resourceKey)}.${String(methodKey)}`
-            const stopTimer = razorpayApiCallDurationMs.startTimer({ method: label })
-            try {
-              const result: unknown = await Reflect.apply(method, resourceTarget, args)
-              razorpayApiCallsTotal.inc({ method: label, status: 'success' })
-              return result
-            } catch (err) {
-              razorpayApiCallsTotal.inc({ method: label, status: 'error' })
-              throw err
-            } finally {
-              stopTimer()
-            }
+            return getTracer().startActiveSpan(`razorpay.${label}`, async (span) => {
+              const stopTimer = razorpayApiCallDurationMs.startTimer({ method: label })
+              try {
+                const result: unknown = await Reflect.apply(method, resourceTarget, args)
+                razorpayApiCallsTotal.inc({ method: label, status: 'success' })
+                span.setStatus({ code: SpanStatusCode.OK })
+                return result
+              } catch (err) {
+                razorpayApiCallsTotal.inc({ method: label, status: 'error' })
+                span.recordException(err instanceof Error ? err : new Error(String(err)))
+                span.setStatus({ code: SpanStatusCode.ERROR, message: err instanceof Error ? err.message : String(err) })
+                throw err
+              } finally {
+                stopTimer()
+                span.end()
+              }
+            })
           }
         },
       })

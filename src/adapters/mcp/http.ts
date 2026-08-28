@@ -25,6 +25,7 @@ import { withGlobalLock } from '../db/advisory-lock.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
 import { setupGracefulShutdown } from '../observability/graceful-shutdown.js'
+import { shutdownTracing, startTracing } from '../observability/tracing.js'
 import { createLogger } from '../observability/logger.js'
 import { createMcpHttpServer } from './streamable-http-server.js'
 
@@ -32,6 +33,7 @@ loadEnvFile()
 
 const env = loadEnv()
 const logger = createLogger('latch-mcp')
+startTracing('latch-mcp')
 const { db, sql } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db, logger)
 
@@ -113,5 +115,5 @@ const authLapseInterval = setInterval(() => {
 setupGracefulShutdown(logger, {
   app,
   timeoutMs: env.GRACEFUL_SHUTDOWN_TIMEOUT_MS,
-  onShutdown: [() => clearInterval(backgroundInterval), () => clearInterval(authLapseInterval), () => sql.end()],
+  onShutdown: [() => clearInterval(backgroundInterval), () => clearInterval(authLapseInterval), shutdownTracing, () => sql.end()],
 })

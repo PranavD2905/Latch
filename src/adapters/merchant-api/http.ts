@@ -11,6 +11,7 @@ import { loadEnv } from '../config.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
 import { setupGracefulShutdown } from '../observability/graceful-shutdown.js'
+import { shutdownTracing, startTracing } from '../observability/tracing.js'
 import { createLogger } from '../observability/logger.js'
 import { createMerchantApiServer } from './server.js'
 
@@ -18,6 +19,7 @@ loadEnvFile()
 
 const env = loadEnv()
 const logger = createLogger('latch-merchant-api')
+startTracing('latch-merchant-api')
 const { db, sql } = createDbClient(requireDatabaseUrl())
 const deps = buildAppDeps(db, logger)
 // Migration 0011: per-merchant, DB-issued credentials replace the old
@@ -36,4 +38,4 @@ const port = env.PORT ?? env.MERCHANT_API_PORT
 await app.listen({ port, host: '0.0.0.0' })
 logger.info({ port }, 'merchant API listening')
 
-setupGracefulShutdown(logger, { app, timeoutMs: env.GRACEFUL_SHUTDOWN_TIMEOUT_MS, onShutdown: [() => sql.end()] })
+setupGracefulShutdown(logger, { app, timeoutMs: env.GRACEFUL_SHUTDOWN_TIMEOUT_MS, onShutdown: [shutdownTracing, () => sql.end()] })
