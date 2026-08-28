@@ -11,6 +11,7 @@
  * this process calls it).
  */
 import { runHoldExpiryWorker } from '../../app/hold-expiry-worker.js'
+import { runIdempotencyCleanupWorker } from '../../app/idempotency-cleanup-worker.js'
 import { runNoShowEligibilityWorker } from '../../app/no-show-eligibility-worker.js'
 import { runReconciliationWorker } from '../../app/reconciliation-worker.js'
 import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
@@ -55,6 +56,11 @@ async function tick(): Promise<void> {
     }
     if (circuitOpen) {
       logger.error({}, 'background worker: circuit open — Razorpay looks down, this tick skipped some or all remaining reconciliation checks rather than hammering it')
+    }
+
+    const { deletedCount } = await runIdempotencyCleanupWorker(deps)
+    if (deletedCount > 0) {
+      logger.info({ deletedCount, workerType: 'idempotency-cleanup' }, 'background worker completed')
     }
   })
 }

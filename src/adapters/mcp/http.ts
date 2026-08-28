@@ -16,6 +16,7 @@
  */
 import { runAuthorizationLapseWorker } from '../../app/authorization-lapse-worker.js'
 import { runHoldExpiryWorker } from '../../app/hold-expiry-worker.js'
+import { runIdempotencyCleanupWorker } from '../../app/idempotency-cleanup-worker.js'
 import { runNoShowEligibilityWorker } from '../../app/no-show-eligibility-worker.js'
 import { runReconciliationWorker } from '../../app/reconciliation-worker.js'
 import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
@@ -69,6 +70,11 @@ async function backgroundTick(): Promise<void> {
     const { mismatchedBookingIds } = await runReconciliationWorker(deps)
     if (mismatchedBookingIds.length > 0) {
       logger.info({ mismatchedBookingIds, count: mismatchedBookingIds.length, workerType: 'reconciliation' }, 'background worker completed')
+    }
+
+    const { deletedCount } = await runIdempotencyCleanupWorker(deps)
+    if (deletedCount > 0) {
+      logger.info({ deletedCount, workerType: 'idempotency-cleanup' }, 'background worker completed')
     }
   })
 }

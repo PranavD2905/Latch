@@ -35,6 +35,31 @@ export interface IdempotencyStore {
 
   /** Abandons a claim taken by `claim` without completing it, so the key becomes retryable again. */
   release(scope: string, key: string): Promise<void>
+
+  /**
+   * dev-logs/021: garbage-collects rows nobody will ever look up again —
+   * without this, the store grows forever. Two independent thresholds, not
+   * one TTL, because a completed row and a still-pending row decay for
+   * completely different reasons:
+   *
+   *  - a **completed** row (holds a real response) older than
+   *    `completedGraceMs`: nobody retries a request from days ago expecting
+   *    a replay — safe to forget.
+   *  - a **pending** row (the claimant crashed before `put`/`release` ever
+   *    ran — a real gap `claim`'s own doc comment doesn't cover: a process
+   *    death mid-command leaves this key permanently stuck, since nothing
+   *    else ever calls `release` on someone else's claim) older than
+   *    `pendingMaxAgeMs`: the process that held this claim is not coming
+   *    back.
+   *
+   * `pendingMaxAgeMs` must stay well above the longest legitimate claim
+   * duration anywhere this store is used, or this would delete a row a
+   * still-live claimant owns — a second caller would then successfully
+   * re-claim the same key and run concurrently with the first, reopening
+   * the exact race `claim` exists to close (dev-logs/013). See
+   * `app/idempotency-cleanup-worker.ts` for the margin actually configured.
+   */
+  deleteExpired(now: Date, options: { pendingMaxAgeMs: number; completedGraceMs: number }): Promise<{ deletedCount: number }>
 }
 
 export interface ClaimOptions {

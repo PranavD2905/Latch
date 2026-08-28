@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, lt, sql } from 'drizzle-orm'
 import type { ClaimOptions, ClaimOutcome, IdempotencyStore } from '../../ports/idempotency-store.js'
 import type { Db } from './client.js'
 import { idempotencyKeys } from './schema.js'
@@ -53,6 +53,30 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
     // doc comment) — no other writer can be racing this row, so an
     // unconditional delete by (scope, key) is safe.
     await this.db.delete(idempotencyKeys).where(and(eq(idempotencyKeys.scope, scope), eq(idempotencyKeys.key, key)))
+  }
+
+  /**
+   * dev-logs/021. Two separate `DELETE`s, not one `WHERE` with an OR on the
+   * response shape: distinguishing a pending row from a completed one means
+   * testing whether `response` *is* `PENDING_MARKER`'s shape, which Drizzle
+   * has no typed condition for — a raw JSONB containment check (`@>`) is
+   * the natural way to ask that in Postgres, matching the same
+   * `PENDING_MARKER` literal `claim`/`isPending` above already use.
+   */
+  async deleteExpired(now: Date, options: { pendingMaxAgeMs: number; completedGraceMs: number }): Promise<{ deletedCount: number }> {
+    const pendingCutoff = new Date(now.getTime() - options.pendingMaxAgeMs)
+    const completedCutoff = new Date(now.getTime() - options.completedGraceMs)
+
+    const deletedPending = await this.db
+      .delete(idempotencyKeys)
+      .where(and(lt(idempotencyKeys.createdAt, pendingCutoff), sql`${idempotencyKeys.response} @> '{"__idempotencyPending":true}'::jsonb`))
+      .returning({ scope: idempotencyKeys.scope })
+    const deletedCompleted = await this.db
+      .delete(idempotencyKeys)
+      .where(and(lt(idempotencyKeys.createdAt, completedCutoff), sql`NOT (${idempotencyKeys.response} @> '{"__idempotencyPending":true}'::jsonb)`))
+      .returning({ scope: idempotencyKeys.scope })
+
+    return { deletedCount: deletedPending.length + deletedCompleted.length }
   }
 
   async claim<T>(scope: string, key: string, options?: ClaimOptions): Promise<ClaimOutcome<T>> {
