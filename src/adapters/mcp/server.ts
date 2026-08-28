@@ -30,6 +30,34 @@ function errorResult(err: unknown): CallToolResult {
 }
 
 /**
+ * One wrapper around every tool handler below, instead of a repeated
+ * try/catch in each: logs the invocation, times it against `deps.clock`
+ * (this codebase's only source of "now" — docs/01-architecture.md §5, and
+ * it means a test driving a `FrozenClock` gets deterministic durations
+ * too), and turns the same three outcomes `errorResult`/`refusalResult`
+ * already distinguish (success / refused / error) into one structured log
+ * line each. `deps.logger` already carries `traceId` by the time it reaches
+ * here — see `streamable-http-server.ts`'s `requestDeps`.
+ */
+async function withToolLogging<T>(deps: AppDeps, tool: string, args: unknown, fn: () => Promise<T>): Promise<CallToolResult> {
+  const startedAt = deps.clock.now().getTime()
+  deps.logger.info({ tool, args }, 'tool invocation started')
+  try {
+    const result = await fn()
+    deps.logger.info({ tool, status: 'success', durationMs: deps.clock.now().getTime() - startedAt }, 'tool invocation completed')
+    return jsonResult(result)
+  } catch (err) {
+    const durationMs = deps.clock.now().getTime() - startedAt
+    if (err instanceof Refusal) {
+      deps.logger.info({ tool, status: 'refused', code: err.code, durationMs }, 'tool invocation refused')
+      return refusalResult(err)
+    }
+    deps.logger.error({ tool, status: 'error', err, durationMs }, 'tool invocation failed')
+    return errorResult(err)
+  }
+}
+
+/**
  * Builds the four Slice 1 tools (docs/06-build-sequence.md — Slice 1) over
  * `deps`. Kept separate from the stdio entrypoint (`stdio.ts`) so this is
  * testable without a real subprocess/transport, and so Slice 7's
@@ -49,13 +77,7 @@ export function createServer(deps: AppDeps): McpServer {
         days: z.number().int().positive().max(60).optional().describe('How many days ahead to search. Default 14.'),
       },
     },
-    async (args) => {
-      try {
-        return jsonResult(await findSlots(args, deps))
-      } catch (err) {
-        return errorResult(err)
-      }
-    },
+    async (args) => withToolLogging(deps, 'find_slots', args, () => findSlots(args, deps)),
   )
 
   server.registerTool(
@@ -65,13 +87,7 @@ export function createServer(deps: AppDeps): McpServer {
         "Read the merchant's current versioned policy: deposit amount, the cancellation ladder (retention percentage by hours-before-appointment), no-show fee, and hold TTL. Always call this before confirm_with_deposit and pass back the returned policyVersion as acknowledgedPolicyVersion.",
       inputSchema: {},
     },
-    async () => {
-      try {
-        return jsonResult(await getPolicy(deps))
-      } catch (err) {
-        return errorResult(err)
-      }
-    },
+    async () => withToolLogging(deps, 'get_policy', {}, () => getPolicy(deps)),
   )
 
   server.registerTool(
@@ -83,13 +99,7 @@ export function createServer(deps: AppDeps): McpServer {
         bookingId: z.string().describe('bookingId returned by hold_slot'),
       },
     },
-    async (args) => {
-      try {
-        return jsonResult(await getBooking(args, deps))
-      } catch (err) {
-        return errorResult(err)
-      }
-    },
+    async (args) => withToolLogging(deps, 'get_booking', args, () => getBooking(args, deps)),
   )
 
   server.registerTool(
@@ -105,14 +115,7 @@ export function createServer(deps: AppDeps): McpServer {
         idempotencyKey: z.string(),
       },
     },
-    async (args) => {
-      try {
-        return jsonResult(await holdSlot({ ...args, startsAt: new Date(args.startsAt) }, deps))
-      } catch (err) {
-        if (err instanceof Refusal) return refusalResult(err)
-        return errorResult(err)
-      }
-    },
+    async (args) => withToolLogging(deps, 'hold_slot', args, () => holdSlot({ ...args, startsAt: new Date(args.startsAt) }, deps)),
   )
 
   server.registerTool(
@@ -127,14 +130,7 @@ export function createServer(deps: AppDeps): McpServer {
         idempotencyKey: z.string(),
       },
     },
-    async (args) => {
-      try {
-        return jsonResult(await confirmWithDeposit(args, deps))
-      } catch (err) {
-        if (err instanceof Refusal) return refusalResult(err)
-        return errorResult(err)
-      }
-    },
+    async (args) => withToolLogging(deps, 'confirm_with_deposit', args, () => confirmWithDeposit(args, deps)),
   )
 
   server.registerTool(
@@ -147,14 +143,7 @@ export function createServer(deps: AppDeps): McpServer {
         idempotencyKey: z.string(),
       },
     },
-    async (args) => {
-      try {
-        return jsonResult(await chargeNoShow(args, deps))
-      } catch (err) {
-        if (err instanceof Refusal) return refusalResult(err)
-        return errorResult(err)
-      }
-    },
+    async (args) => withToolLogging(deps, 'charge_no_show', args, () => chargeNoShow(args, deps)),
   )
 
   server.registerTool(
@@ -167,14 +156,7 @@ export function createServer(deps: AppDeps): McpServer {
         idempotencyKey: z.string(),
       },
     },
-    async (args) => {
-      try {
-        return jsonResult(await cancelBooking(args, deps))
-      } catch (err) {
-        if (err instanceof Refusal) return refusalResult(err)
-        return errorResult(err)
-      }
-    },
+    async (args) => withToolLogging(deps, 'cancel', args, () => cancelBooking(args, deps)),
   )
 
   server.registerTool(
@@ -188,14 +170,7 @@ export function createServer(deps: AppDeps): McpServer {
         idempotencyKey: z.string(),
       },
     },
-    async (args) => {
-      try {
-        return jsonResult(await rescheduleBooking({ ...args, newStartsAt: new Date(args.newStartsAt) }, deps))
-      } catch (err) {
-        if (err instanceof Refusal) return refusalResult(err)
-        return errorResult(err)
-      }
-    },
+    async (args) => withToolLogging(deps, 'reschedule', args, () => rescheduleBooking({ ...args, newStartsAt: new Date(args.newStartsAt) }, deps)),
   )
 
   return server

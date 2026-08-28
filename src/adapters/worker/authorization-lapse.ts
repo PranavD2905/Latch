@@ -11,11 +11,13 @@ import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
 import { withGlobalLock } from '../db/advisory-lock.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
+import { createLogger } from '../observability/logger.js'
 
 loadEnvFile()
 
+const logger = createLogger('latch-worker-authorization-lapse')
 const { db, sql } = createDbClient(requireDatabaseUrl())
-const deps = buildAppDeps(db)
+const deps = buildAppDeps(db, logger)
 
 const intervalMs = Number(process.env['AUTHORIZATION_LAPSE_WORKER_INTERVAL_MS'] ?? 60_000)
 
@@ -25,13 +27,13 @@ async function tick(): Promise<void> {
   await withGlobalLock(sql, 'latch:authorization-lapse-worker-tick', async () => {
     const { lapsedBookingIds } = await runAuthorizationLapseWorker(deps)
     if (lapsedBookingIds.length > 0) {
-      console.log(`authorization-lapse worker: recorded AUTHORIZATION_LAPSED for ${lapsedBookingIds.length} booking(s): ${lapsedBookingIds.join(', ')}`)
+      logger.info({ lapsedBookingIds, count: lapsedBookingIds.length, workerType: 'authorization-lapse' }, 'background worker completed')
     }
   })
 }
 
-console.log(`authorization-lapse worker started, polling every ${intervalMs}ms`)
+logger.info({ intervalMs }, 'authorization-lapse worker started')
 await tick()
 setInterval(() => {
-  tick().catch((err) => console.error('authorization-lapse worker tick failed:', err))
+  tick().catch((err) => logger.error({ err }, 'authorization-lapse worker tick failed'))
 }, intervalMs)

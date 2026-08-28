@@ -13,6 +13,7 @@ import { PolicyValidationError } from '../../domain/policy-validation.js'
 import { Refusal } from '../../domain/refusals.js'
 import { PolicyVersionConflictError } from '../../ports/catalog-repo.js'
 import type { MerchantAuthStore } from '../../ports/merchant-auth.js'
+import { echoTraceIdHeader, loggingFastifyOptions } from '../observability/fastify-logging.js'
 import { verifyRazorpayWebhookSignature } from '../payment/razorpay-shared.js'
 import { registerSlotsRoute } from '../rest/slots.js'
 import { handleRazorpayWebhookPayload, type RazorpayWebhookPayload } from '../webhook/razorpay-webhook.js'
@@ -70,7 +71,8 @@ function isPublicRoute(url: string): boolean {
  * Railway services docs/07-deployment.md already describes.
  */
 export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptions): FastifyInstance {
-  const app = Fastify({ logger: false })
+  const app = Fastify(loggingFastifyOptions(deps.logger))
+  echoTraceIdHeader(app)
 
   // Captures the raw request body alongside the parsed JSON — signature
   // verification (below) must run against the exact bytes Razorpay signed,
@@ -131,7 +133,10 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
       // instead of silently running as whatever `deps.merchantId` defaults to.
       throw new Error('requestDeps() called without an authenticated merchant on the request')
     }
-    return { ...deps, merchantId }
+    // `request.log` — already `deps.logger.child({ traceId: request.id })`
+    // via `requestIdLogLabel` (`loggingFastifyOptions`), same as the MCP
+    // transport's own `requestDeps`.
+    return { ...deps, merchantId, logger: request.log }
   }
 
   // dev-logs/014, item 2. Gated by HMAC signature (verified below), not the
@@ -155,6 +160,10 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
     const entityId =
       payload.payload?.payment?.entity?.id ?? `${payload.event}:${payload.created_at ?? Date.now()}` // best-effort fallback for an event shape this handler doesn't otherwise read
     const idempotencyKey = `${payload.event}:${entityId}`
+    // No merchant to resolve here (Razorpay is the caller, not a merchant
+    // request) — `deps` scoped only for `logger`, same `request.log`
+    // pattern `requestDeps` uses for authenticated routes.
+    const webhookDeps: AppDeps = { ...deps, logger: request.log }
 
     // Same claim/put/release pattern as every money-moving command handler
     // (src/ports/idempotency-store.ts, dev-logs/013) — keyed on Razorpay's
@@ -171,7 +180,7 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
     }
 
     try {
-      const result = await handleRazorpayWebhookPayload(payload, deps, options.webhook.razorpay)
+      const result = await handleRazorpayWebhookPayload(payload, webhookDeps, options.webhook.razorpay)
       await deps.idempotencyStore.put('razorpay_webhook', idempotencyKey, { handled: result.handled })
       return await reply.code(200).send({ ok: true, ...result })
     } catch (err) {
@@ -183,7 +192,7 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
       // and record it as dead-lettered instead of hammering forever; under
       // that budget, still 500 so the existing safe-replay retry keeps
       // working the problem exactly as it already did before this session.
-      const { deadLettered } = await recordWebhookFailure(idempotencyKey, { event: payload.event, entityId, payload, error: err }, deps)
+      const { deadLettered } = await recordWebhookFailure(idempotencyKey, { event: payload.event, entityId, payload, error: err }, webhookDeps)
       if (deadLettered) {
         return reply.code(200).send({ ok: true, deadLettered: true })
       }

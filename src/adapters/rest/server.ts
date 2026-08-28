@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { AppDeps } from '../../app/types.js'
+import { echoTraceIdHeader, loggingFastifyOptions } from '../observability/fastify-logging.js'
 import { registerSlotsRoute } from './slots.js'
 
 /**
@@ -14,7 +15,8 @@ import { registerSlotsRoute } from './slots.js'
  * for reachability without a fourth Railway service.
  */
 export function createRestServer(deps: AppDeps): FastifyInstance {
-  const app = Fastify({ logger: false })
+  const app = Fastify(loggingFastifyOptions(deps.logger))
+  echoTraceIdHeader(app)
   app.get('/healthz', async () => ({ ok: true }))
   registerSlotsRoute(app, deps)
   return app

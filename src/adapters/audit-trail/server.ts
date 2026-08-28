@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import type { AppDeps } from '../../app/types.js'
 import type { EventWithGlobalSequence } from '../../ports/event-store.js'
 import type { MerchantAuthStore } from '../../ports/merchant-auth.js'
+import { echoTraceIdHeader, loggingFastifyOptions } from '../observability/fastify-logging.js'
 
 export interface AuditTrailServerOptions {
   /**
@@ -49,7 +50,8 @@ interface MerchantFeed {
  * process (MCP server, merchant API, background worker) appended the event.
  */
 export function createAuditTrailServer(deps: AppDeps, options: AuditTrailServerOptions): FastifyInstance {
-  const app = Fastify({ logger: false })
+  const app = Fastify(loggingFastifyOptions(deps.logger))
+  echoTraceIdHeader(app)
 
   const feeds = new Map<string, MerchantFeed>()
 
@@ -103,6 +105,7 @@ export function createAuditTrailServer(deps: AppDeps, options: AuditTrailServerO
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
+      'X-Trace-ID': request.id,
     })
     // Node doesn't actually put the status line + headers on the wire at
     // `writeHead()` — by default it waits for the first `write()`/`end()`

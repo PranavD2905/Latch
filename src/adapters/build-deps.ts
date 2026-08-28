@@ -1,6 +1,7 @@
 import Razorpay from 'razorpay'
 import { CircuitBreaker } from '../app/circuit-breaker.js'
 import type { AppDeps } from '../app/types.js'
+import type { Logger } from '../ports/logger.js'
 import type { MerchantAuthStore } from '../ports/merchant-auth.js'
 import type { PaymentProvider } from '../ports/payment-provider.js'
 import type { PaymentRail } from '../ports/payment-rail.js'
@@ -77,10 +78,19 @@ export function buildMerchantAuthStore(db: Db): MerchantAuthStore {
   return new PostgresMerchantAuthStore(db)
 }
 
-export function buildAppDeps(db: Db): AppDeps {
+/**
+ * `logger` is required, not defaulted, so every entrypoint has to say which
+ * service it is (`createLogger('latch-mcp')`, `createLogger('latch-worker-
+ * reconciliation')`, ...) — the same "explicit over inferred" discipline
+ * `cancel`'s required `cause` field follows, applied here because a missing
+ * `service` field would make a shared log sink unreadable, not because it's
+ * mechanically required by anything.
+ */
+export function buildAppDeps(db: Db, logger: Logger): AppDeps {
   const clock = new SystemClock()
   return {
     clock,
+    logger,
     eventStore: new PostgresEventStore(db),
     catalogRepo: new PostgresCatalogRepo(db),
     paymentProvider: buildPaymentProvider(),

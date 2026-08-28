@@ -19,12 +19,18 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
+import { createLogger } from '../observability/logger.js'
 import { createServer } from './server.js'
 
 loadEnvFile()
 
+// Destination fd 2 (stderr), not the default fd 1 — stdout here **is** the
+// MCP JSON-RPC transport (`StdioServerTransport` below), so a log line on
+// fd 1 would corrupt the protocol stream. See `observability/logger.ts`'s
+// own doc comment.
+const logger = createLogger('latch-mcp-stdio', 2)
 const { db } = createDbClient(requireDatabaseUrl())
-const deps = buildAppDeps(db)
+const deps = buildAppDeps(db, logger)
 
 const server = createServer(deps)
 const transport = new StdioServerTransport()

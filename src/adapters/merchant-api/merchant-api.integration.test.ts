@@ -11,6 +11,7 @@ import type { SetPolicyCommand } from '../../app/set-policy.js'
 import type { AppDeps } from '../../app/types.js'
 import { WEBHOOK_MAX_ATTEMPTS } from '../../app/webhook-dead-letter.js'
 import { FrozenClock } from '../clock/frozen-clock.js'
+import { createNoopLogger } from '../observability/noop-logger.js'
 import { createDbClient } from '../db/client.js'
 import { PostgresCatalogRepo } from '../db/postgres-catalog-repo.js'
 import { PostgresEventStore } from '../db/postgres-event-store.js'
@@ -40,6 +41,7 @@ let POLICY_MERCHANT_TOKEN: string
 
 const deps: AppDeps = {
   clock,
+  logger: createNoopLogger(),
   eventStore: new PostgresEventStore(db),
   catalogRepo: new PostgresCatalogRepo(db),
   paymentProvider: new FakePaymentProvider(),

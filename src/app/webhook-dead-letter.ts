@@ -41,7 +41,10 @@ export async function recordWebhookFailure(idempotencyKey: string, params: Recor
     // nothing else in the system will otherwise surface (dev-logs/014's own
     // "report, don't auto-repair" posture, applied to the webhook's own
     // delivery health rather than a payment mismatch).
-    console.error(`webhook dead-lettered after ${record.attemptCount} attempts: ${record.event} ${record.entityId} — last error: ${record.lastError}`)
+    deps.logger.error(
+      { event: record.event, entityId: record.entityId, attemptCount: record.attemptCount, lastError: record.lastError },
+      'webhook dead-lettered',
+    )
   }
 
   return { deadLettered: record.deadLetteredAt !== null, attemptCount: record.attemptCount }

@@ -21,11 +21,14 @@ import { holdSlot } from '../../app/hold-slot.js'
 import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
 import { createDbClient } from '../db/client.js'
 import { SEED_PRACTITIONER_ID, SEED_SERVICE_ID } from '../db/seed-data.js'
+import { createLogger } from '../observability/logger.js'
 
 process.loadEnvFile?.('.env')
 
 const { db } = createDbClient(requireDatabaseUrl())
-const deps = buildAppDeps(db)
+// This script's own output below is deliberately plain `console.log` — it's
+// the pitch-video narration a human reads, not a service log line.
+const deps = buildAppDeps(db, createLogger('latch-demo'))
 
 async function freshConfirmedBooking(): Promise<string> {
   const found = await findSlots({ practitionerId: SEED_PRACTITIONER_ID, serviceId: SEED_SERVICE_ID, days: 5 }, deps)

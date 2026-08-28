@@ -83,7 +83,7 @@ export async function runReconciliationWorker(deps: AppDeps): Promise<Reconcilia
       if (err instanceof CircuitOpenError) {
         circuitOpen = true
       } else {
-        console.error(`reconciliation worker: check failed for booking ${candidate.bookingId}, will retry next tick: ${err instanceof Error ? err.message : String(err)}`)
+        deps.logger.error({ err, bookingId: candidate.bookingId }, 'reconciliation check failed, will retry next tick')
       }
       return undefined
     }

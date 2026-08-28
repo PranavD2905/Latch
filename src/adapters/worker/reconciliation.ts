@@ -17,11 +17,13 @@ import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
 import { withGlobalLock } from '../db/advisory-lock.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
+import { createLogger } from '../observability/logger.js'
 
 loadEnvFile()
 
+const logger = createLogger('latch-worker-reconciliation')
 const { db, sql } = createDbClient(requireDatabaseUrl())
-const deps = buildAppDeps(db)
+const deps = buildAppDeps(db, logger)
 
 const intervalMs = Number(process.env['RECONCILIATION_WORKER_INTERVAL_MS'] ?? 60_000)
 
@@ -32,16 +34,16 @@ async function tick(): Promise<void> {
   await withGlobalLock(sql, 'latch:background-worker-tick', async () => {
     const { mismatchedBookingIds, circuitOpen } = await runReconciliationWorker(deps)
     if (mismatchedBookingIds.length > 0) {
-      console.log(`reconciliation worker: RECONCILIATION_MISMATCH for ${mismatchedBookingIds.length} booking(s): ${mismatchedBookingIds.join(', ')}`)
+      logger.info({ mismatchedBookingIds, count: mismatchedBookingIds.length, workerType: 'reconciliation' }, 'background worker completed')
     }
     if (circuitOpen) {
-      console.error('reconciliation worker: circuit open — Razorpay looks down, this tick skipped some or all remaining checks rather than hammering it')
+      logger.error({}, 'reconciliation worker: circuit open — Razorpay looks down, this tick skipped some or all remaining checks rather than hammering it')
     }
   })
 }
 
-console.log(`reconciliation worker started, polling every ${intervalMs}ms`)
+logger.info({ intervalMs }, 'reconciliation worker started')
 await tick()
 setInterval(() => {
-  tick().catch((err) => console.error('reconciliation worker tick failed:', err))
+  tick().catch((err) => logger.error({ err }, 'reconciliation worker tick failed'))
 }, intervalMs)

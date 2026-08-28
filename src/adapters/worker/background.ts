@@ -17,11 +17,13 @@ import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
 import { withGlobalLock } from '../db/advisory-lock.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
+import { createLogger } from '../observability/logger.js'
 
 loadEnvFile()
 
+const logger = createLogger('latch-worker-background')
 const { db, sql } = createDbClient(requireDatabaseUrl())
-const deps = buildAppDeps(db)
+const deps = buildAppDeps(db, logger)
 
 const intervalMs = Number(process.env['BACKGROUND_WORKER_INTERVAL_MS'] ?? 60_000)
 
@@ -35,12 +37,12 @@ async function tick(): Promise<void> {
   await withGlobalLock(sql, 'latch:background-worker-tick', async () => {
     const { expiredBookingIds } = await runHoldExpiryWorker(deps)
     if (expiredBookingIds.length > 0) {
-      console.log(`background worker: HOLD_EXPIRED for ${expiredBookingIds.length} booking(s): ${expiredBookingIds.join(', ')}`)
+      logger.info({ expiredBookingIds, count: expiredBookingIds.length, workerType: 'hold-expiry' }, 'background worker completed')
     }
 
     const { eligibleBookingIds } = await runNoShowEligibilityWorker(deps)
     if (eligibleBookingIds.length > 0) {
-      console.log(`background worker: NO_SHOW_ELIGIBLE for ${eligibleBookingIds.length} booking(s): ${eligibleBookingIds.join(', ')}`)
+      logger.info({ eligibleBookingIds, count: eligibleBookingIds.length, workerType: 'no-show-eligibility' }, 'background worker completed')
     }
 
     // dev-logs/014, item 1 — folded in here rather than its own interval so
@@ -49,16 +51,16 @@ async function tick(): Promise<void> {
     // combining hold-expiry and no-show-eligibility.
     const { mismatchedBookingIds, circuitOpen } = await runReconciliationWorker(deps)
     if (mismatchedBookingIds.length > 0) {
-      console.log(`background worker: RECONCILIATION_MISMATCH for ${mismatchedBookingIds.length} booking(s): ${mismatchedBookingIds.join(', ')}`)
+      logger.info({ mismatchedBookingIds, count: mismatchedBookingIds.length, workerType: 'reconciliation' }, 'background worker completed')
     }
     if (circuitOpen) {
-      console.error('background worker: circuit open — Razorpay looks down, this tick skipped some or all remaining reconciliation checks rather than hammering it')
+      logger.error({}, 'background worker: circuit open — Razorpay looks down, this tick skipped some or all remaining reconciliation checks rather than hammering it')
     }
   })
 }
 
-console.log(`background worker started, polling every ${intervalMs}ms`)
+logger.info({ intervalMs }, 'background worker started')
 await tick()
 setInterval(() => {
-  tick().catch((err) => console.error('background worker tick failed:', err))
+  tick().catch((err) => logger.error({ err }, 'background worker tick failed'))
 }, intervalMs)

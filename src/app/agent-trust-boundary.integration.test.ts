@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm'
 import { ulid } from 'ulid'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { FrozenClock } from '../adapters/clock/frozen-clock.js'
+import { createNoopLogger } from '../adapters/observability/noop-logger.js'
 import { createDbClient } from '../adapters/db/client.js'
 import { PostgresCatalogRepo } from '../adapters/db/postgres-catalog-repo.js'
 import { PostgresEventStore } from '../adapters/db/postgres-event-store.js'
@@ -58,6 +59,7 @@ const clock = new FrozenClock(new Date('2026-08-25T00:00:00+05:30'))
 
 const deps: AppDeps = {
   clock,
+  logger: createNoopLogger(),
   eventStore: new PostgresEventStore(db),
   catalogRepo: new PostgresCatalogRepo(db),
   paymentProvider: new FakePaymentProvider(),

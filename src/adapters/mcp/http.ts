@@ -22,19 +22,21 @@ import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
 import { withGlobalLock } from '../db/advisory-lock.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
+import { createLogger } from '../observability/logger.js'
 import { createMcpHttpServer } from './streamable-http-server.js'
 
 loadEnvFile()
 
+const logger = createLogger('latch-mcp')
 const { db, sql } = createDbClient(requireDatabaseUrl())
-const deps = buildAppDeps(db)
+const deps = buildAppDeps(db, logger)
 
 const app = await createMcpHttpServer(deps)
 // Railway assigns the public port via $PORT; MCP_HTTP_PORT stays the
 // local-dev default (mirrors merchant-api's MERCHANT_API_PORT).
 const port = Number(process.env['PORT'] ?? process.env['MCP_HTTP_PORT'] ?? 4000)
 await app.listen({ port, host: '0.0.0.0' })
-console.log(`MCP Streamable HTTP server listening on :${port}`)
+logger.info({ port }, 'MCP Streamable HTTP server listening')
 
 const backgroundIntervalMs = Number(process.env['BACKGROUND_WORKER_INTERVAL_MS'] ?? 60_000)
 
@@ -54,32 +56,32 @@ async function backgroundTick(): Promise<void> {
   await withGlobalLock(sql, 'latch:background-worker-tick', async () => {
     const { expiredBookingIds } = await runHoldExpiryWorker(deps)
     if (expiredBookingIds.length > 0) {
-      console.log(`background worker: HOLD_EXPIRED for ${expiredBookingIds.length} booking(s): ${expiredBookingIds.join(', ')}`)
+      logger.info({ expiredBookingIds, count: expiredBookingIds.length, workerType: 'hold-expiry' }, 'background worker completed')
     }
 
     const { eligibleBookingIds } = await runNoShowEligibilityWorker(deps)
     if (eligibleBookingIds.length > 0) {
-      console.log(`background worker: NO_SHOW_ELIGIBLE for ${eligibleBookingIds.length} booking(s): ${eligibleBookingIds.join(', ')}`)
+      logger.info({ eligibleBookingIds, count: eligibleBookingIds.length, workerType: 'no-show-eligibility' }, 'background worker completed')
     }
 
     // dev-logs/014, item 1 — see docs/07-deployment.md: folded into this same
     // process for the same reason the other two workers are.
     const { mismatchedBookingIds } = await runReconciliationWorker(deps)
     if (mismatchedBookingIds.length > 0) {
-      console.log(`background worker: RECONCILIATION_MISMATCH for ${mismatchedBookingIds.length} booking(s): ${mismatchedBookingIds.join(', ')}`)
+      logger.info({ mismatchedBookingIds, count: mismatchedBookingIds.length, workerType: 'reconciliation' }, 'background worker completed')
     }
   })
 }
 
-console.log(`background worker started, polling every ${backgroundIntervalMs}ms`)
+logger.info({ intervalMs: backgroundIntervalMs }, 'background worker started')
 // Deliberately not `await`ed unguarded: an unhandled rejection here (e.g. a
 // first-tick race against migrations not having run yet on a fresh deploy)
 // would crash this entire process — taking the public MCP endpoint down
 // over a background-job failure, exactly the opposite of what folding the
 // workers into this process was supposed to buy.
-backgroundTick().catch((err) => console.error('background worker tick failed:', err))
+backgroundTick().catch((err) => logger.error({ err }, 'background worker tick failed'))
 setInterval(() => {
-  backgroundTick().catch((err) => console.error('background worker tick failed:', err))
+  backgroundTick().catch((err) => logger.error({ err }, 'background worker tick failed'))
 }, backgroundIntervalMs)
 
 const authLapseIntervalMs = Number(process.env['AUTHORIZATION_LAPSE_WORKER_INTERVAL_MS'] ?? 60_000)
@@ -88,13 +90,13 @@ async function authorizationLapseTick(): Promise<void> {
   await withGlobalLock(sql, 'latch:authorization-lapse-worker-tick', async () => {
     const { lapsedBookingIds } = await runAuthorizationLapseWorker(deps)
     if (lapsedBookingIds.length > 0) {
-      console.log(`authorization-lapse worker: recorded AUTHORIZATION_LAPSED for ${lapsedBookingIds.length} booking(s): ${lapsedBookingIds.join(', ')}`)
+      logger.info({ lapsedBookingIds, count: lapsedBookingIds.length, workerType: 'authorization-lapse' }, 'background worker completed')
     }
   })
 }
 
-console.log(`authorization-lapse worker started, polling every ${authLapseIntervalMs}ms`)
-authorizationLapseTick().catch((err) => console.error('authorization-lapse worker tick failed:', err))
+logger.info({ intervalMs: authLapseIntervalMs }, 'authorization-lapse worker started')
+authorizationLapseTick().catch((err) => logger.error({ err }, 'authorization-lapse worker tick failed'))
 setInterval(() => {
-  authorizationLapseTick().catch((err) => console.error('authorization-lapse worker tick failed:', err))
+  authorizationLapseTick().catch((err) => logger.error({ err }, 'authorization-lapse worker tick failed'))
 }, authLapseIntervalMs)

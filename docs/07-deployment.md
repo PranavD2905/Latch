@@ -77,6 +77,13 @@ to transact with, not a secret credential.
 None of the three set `PORT` — Railway injects it per service, and every entrypoint now prefers
 `process.env.PORT` over its local-dev default port.
 
+**dev-logs/017 — logging.** Set `NODE_ENV=production` on all three services: it's what
+`src/adapters/observability/logger.ts` uses to switch from a human-readable `pino-pretty` transport (this
+repo's local-dev default) to plain newline-delimited JSON on stdout — the shape a log aggregator
+(CloudWatch, Datadog, Railway's own log viewer) actually wants. Without it, a deployed service still logs
+correctly, just in the pretty-printed format meant for a terminal. `LOG_LEVEL` is optional, defaults to
+`info` (`debug`/`warn`/`error` also valid — anything Pino accepts).
+
 ## Build and start commands
 
 Every service shares the same repo and the same `npm run build` (plain `tsc` to `dist/`), except

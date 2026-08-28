@@ -3,6 +3,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify'
 import type { AppDeps } from '../../app/types.js'
+import { echoTraceIdHeader, loggingFastifyOptions } from '../observability/fastify-logging.js'
 import { createServer } from './server.js'
 
 /**
@@ -29,9 +30,9 @@ import { createServer } from './server.js'
 const MCP_RATE_LIMIT_MAX = Number(process.env['MCP_RATE_LIMIT_MAX'] ?? 300)
 const MCP_RATE_LIMIT_WINDOW_MS = Number(process.env['MCP_RATE_LIMIT_WINDOW_MS'] ?? 60_000)
 
-function methodNotAllowed(reply: import('fastify').FastifyReply): void {
+function methodNotAllowed(request: FastifyRequest, reply: FastifyReply): void {
   reply.hijack()
-  reply.raw.writeHead(405, { 'Content-Type': 'application/json' })
+  reply.raw.writeHead(405, { 'Content-Type': 'application/json', 'X-Trace-ID': request.id })
   reply.raw.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32000, message: 'Method not allowed.' }, id: null }))
 }
 
@@ -76,7 +77,8 @@ function methodNotAllowed(reply: import('fastify').FastifyReply): void {
  * integration should always address a merchant explicitly.
  */
 export async function createMcpHttpServer(deps: AppDeps): Promise<FastifyInstance> {
-  const app = Fastify({ logger: false })
+  const app = Fastify(loggingFastifyOptions(deps.logger))
+  echoTraceIdHeader(app)
 
   // `global: false` — registering it this way means nothing is throttled by
   // default; only routes that opt in via `config: { rateLimit: {...} }`
@@ -99,7 +101,7 @@ export async function createMcpHttpServer(deps: AppDeps): Promise<FastifyInstanc
     const merchant = await deps.catalogRepo.getMerchant(merchantId)
     if (!merchant) {
       reply.hijack()
-      reply.raw.writeHead(404, { 'Content-Type': 'application/json' })
+      reply.raw.writeHead(404, { 'Content-Type': 'application/json', 'X-Trace-ID': request.id })
       reply.raw.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message: `unknown merchant: ${merchantId}` }, id: null }))
       return
     }
@@ -107,7 +109,12 @@ export async function createMcpHttpServer(deps: AppDeps): Promise<FastifyInstanc
     // A fresh `AppDeps` per request, scoped to whichever merchant the path
     // named — cheap (an object spread over the same shared `db`
     // connection pool, `PaymentProvider`, etc.), never a new connection.
-    const requestDeps: AppDeps = { ...deps, merchantId }
+    // `logger` is `request.log`, not `deps.logger` directly — Fastify
+    // already built it as `deps.logger.child({ traceId: request.id })`
+    // (`requestIdLogLabel` in `loggingFastifyOptions`), so every log line an
+    // app-layer handler emits for this request carries the same traceId a
+    // Fastify access-log line for it would.
+    const requestDeps: AppDeps = { ...deps, merchantId, logger: request.log }
     const server = createServer(requestDeps)
     // Omitting sessionIdGenerator (rather than setting it to `undefined`)
     // is what puts the transport in stateless mode — see the SDK's own
@@ -117,6 +124,7 @@ export async function createMcpHttpServer(deps: AppDeps): Promise<FastifyInstanc
     const transport = new StreamableHTTPServerTransport({})
 
     reply.hijack()
+    reply.raw.setHeader('X-Trace-ID', request.id)
     reply.raw.on('close', () => {
       transport.close()
       server.close()
@@ -131,7 +139,7 @@ export async function createMcpHttpServer(deps: AppDeps): Promise<FastifyInstanc
       await server.connect(transport as Transport)
       await transport.handleRequest(request.raw, reply.raw, request.body)
     } catch (err) {
-      console.error('error handling MCP request:', err)
+      request.log.error({ err, merchantId }, 'error handling MCP request')
       if (!reply.raw.headersSent) {
         reply.raw.writeHead(500, { 'Content-Type': 'application/json' })
         reply.raw.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal server error' }, id: null }))
@@ -179,10 +187,10 @@ export async function createMcpHttpServer(deps: AppDeps): Promise<FastifyInstanc
   // The stateless pattern above never hands out a session id, so a
   // compliant client never has a reason to open the standalone GET stream
   // or send DELETE — matching the MCP SDK's own stateless example server.
-  app.get('/mcp/:merchantId', async (_request, reply) => methodNotAllowed(reply))
-  app.delete('/mcp/:merchantId', async (_request, reply) => methodNotAllowed(reply))
-  app.get('/mcp', async (_request, reply) => methodNotAllowed(reply))
-  app.delete('/mcp', async (_request, reply) => methodNotAllowed(reply))
+  app.get('/mcp/:merchantId', async (request, reply) => methodNotAllowed(request, reply))
+  app.delete('/mcp/:merchantId', async (request, reply) => methodNotAllowed(request, reply))
+  app.get('/mcp', async (request, reply) => methodNotAllowed(request, reply))
+  app.delete('/mcp', async (request, reply) => methodNotAllowed(request, reply))
 
   app.get('/healthz', async () => ({ ok: true }))
 

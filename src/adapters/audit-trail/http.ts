@@ -18,12 +18,14 @@ import { fileURLToPath } from 'node:url'
 import { buildAppDeps, buildMerchantAuthStore, requireDatabaseUrl } from '../build-deps.js'
 import { createDbClient } from '../db/client.js'
 import { loadEnvFile } from '../load-env.js'
+import { createLogger } from '../observability/logger.js'
 import { createAuditTrailServer } from './server.js'
 
 loadEnvFile()
 
+const logger = createLogger('latch-viewer')
 const { db } = createDbClient(requireDatabaseUrl())
-const deps = buildAppDeps(db)
+const deps = buildAppDeps(db, logger)
 // Migration 0011: per-merchant, DB-issued credentials replace the old
 // AUDIT_TRAIL_TOKEN env var — see `src/adapters/db/seed.ts` /
 // `src/adapters/db/create-merchant.ts` for how a merchant gets one.
@@ -38,11 +40,11 @@ const webDist = fileURLToPath(new URL('../../../web/dist', import.meta.url))
 if (existsSync(webDist)) {
   await app.register(fastifyStatic, { root: webDist })
 } else {
-  console.log(`no built web/dist at ${webDist} — skipping static viewer (run "npm run build:web" first)`)
+  logger.info({ webDist }, 'no built web/dist — skipping static viewer (run "npm run build:web" first)')
 }
 
 // Railway assigns the public port via $PORT for whichever service this
 // process is deployed as; AUDIT_TRAIL_PORT stays the local-dev default.
 const port = Number(process.env['PORT'] ?? process.env['AUDIT_TRAIL_PORT'] ?? 4002)
 await app.listen({ port, host: '0.0.0.0' })
-console.log(`audit trail SSE server listening on :${port}`)
+logger.info({ port }, 'audit trail SSE server listening')
