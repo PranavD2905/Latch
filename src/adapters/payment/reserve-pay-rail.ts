@@ -1,4 +1,4 @@
-import type { AuthorizationStatus, AuthorizeParams, AuthorizeResult, CaptureAuthorizationParams, CaptureAuthorizationResult, PaymentRail } from '../../ports/payment-rail.js'
+import type { AuthorizationOrder, AuthorizationStatus, AuthorizeParams, AuthorizeResult, CaptureAuthorizationParams, CaptureAuthorizationResult, PaymentRail } from '../../ports/payment-rail.js'
 
 /**
  * The documented, unbuilt production rail (dev-logs/005/007). UPI Reserve
@@ -21,11 +21,15 @@ import type { AuthorizationStatus, AuthorizeParams, AuthorizeResult, CaptureAuth
 export class ReservePayRail implements PaymentRail {
   readonly name = 'reserve_pay' as const
 
-  async authorize(_params: AuthorizeParams): Promise<AuthorizeResult> {
+  async ensureAuthorizationOrder(_params: AuthorizeParams): Promise<AuthorizationOrder> {
     throw new Error(
       'ReservePayRail is not built — UPI Reserve Pay is activation-gated with no documented test-mode flow (dev-logs/005/007). ' +
         'This class exists to prove the PaymentRail port is a real module boundary; it is not wired into any entrypoint.',
     )
+  }
+
+  async pollAuthorization(_order: AuthorizationOrder, _reference: string, _now: Date): Promise<AuthorizeResult | undefined> {
+    throw new Error('ReservePayRail is not built — see ensureAuthorizationOrder() for why.')
   }
 
   async captureAuthorization(_params: CaptureAuthorizationParams): Promise<CaptureAuthorizationResult> {

@@ -45,6 +45,19 @@ describe('validatePolicyInput', () => {
     it('rejects a fractional deposit (rupees, not paise)', () => {
       expect(codeOf(() => validatePolicyInput(validInput({ depositAmountPaise: 300.5 })))).toBe('AMOUNT_NOT_POSITIVE_INTEGER')
     })
+    // Payment-link feature follow-up: a merchant may run with no upfront
+    // deposit at all. `undefined` is how that's expressed — deliberately not
+    // `0`, which stays rejected above: an explicit zero is far more likely a
+    // mistake than an intent, and keeping "no deposit" as a distinct absent
+    // value is what makes a ₹0 Razorpay order structurally impossible rather
+    // than merely avoided (`confirm_with_deposit` skips the leg entirely on
+    // `undefined`).
+    it('accepts an absent deposit — a merchant running with no upfront deposit at all', () => {
+      expect(() => validatePolicyInput(validInput({ depositAmountPaise: undefined }))).not.toThrow()
+    })
+    it('accepts an absent deposit alongside an absent no-show fee — leaving only the session-complete leg', () => {
+      expect(() => validatePolicyInput(validInput({ depositAmountPaise: undefined, noShowFeePaise: undefined, noShowGraceMinutes: undefined }))).not.toThrow()
+    })
     it('rejects a zero no-show fee', () => {
       expect(codeOf(() => validatePolicyInput(validInput({ noShowFeePaise: 0 })))).toBe('AMOUNT_NOT_POSITIVE_INTEGER')
     })

@@ -1,6 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import { toPaise } from '../../domain/money.js'
-import { PaymentTimeoutError } from '../../ports/payment-provider.js'
 import { RazorpayPaymentProvider } from './razorpay-payment-provider.js'
 
 /**
@@ -49,40 +48,45 @@ beforeAll(() => {
 })
 
 describe('RazorpayPaymentProvider — real Razorpay test mode', () => {
-  it('captureDeposit replays the same real payment for a repeated idempotency key, without creating a new order', async () => {
+  it('ensureDepositOrder is idempotent by receipt — a repeated call with the same key finds the same real order, never creates a second one', async () => {
     const provider = new RazorpayPaymentProvider({ keyId: keyId!, keySecret: keySecret! })
 
-    const first = await provider.captureDeposit({
-      amountPaise: DEPOSIT_AMOUNT_PAISE,
-      idempotencyKey: KEEPER_IDEMPOTENCY_KEY,
-      reference: 'live-test-keeper',
-    })
-    expect(first.paymentId).toBe(KEEPER_PAYMENT_ID)
-    expect(first.amountPaise).toBe(30000)
-
-    const second = await provider.captureDeposit({
-      amountPaise: DEPOSIT_AMOUNT_PAISE,
-      idempotencyKey: KEEPER_IDEMPOTENCY_KEY,
-      reference: 'live-test-keeper',
-    })
-    expect(second.paymentId).toBe(first.paymentId)
+    const first = await provider.ensureDepositOrder({ amountPaise: DEPOSIT_AMOUNT_PAISE, idempotencyKey: KEEPER_IDEMPOTENCY_KEY, reference: 'live-test-keeper' })
+    const second = await provider.ensureDepositOrder({ amountPaise: DEPOSIT_AMOUNT_PAISE, idempotencyKey: KEEPER_IDEMPOTENCY_KEY, reference: 'live-test-keeper' })
+    expect(second.orderId).toBe(first.orderId)
   })
 
-  it('captureDeposit throws PaymentTimeoutError for a fresh order nobody pays', async () => {
-    const provider = new RazorpayPaymentProvider({
-      keyId: keyId!,
-      keySecret: keySecret!,
-      captureTimeoutMs: 4000,
-      capturePollIntervalMs: 1000,
-    })
+  it('pollDepositCapture finds the real captured payment already sitting on the keeper order', async () => {
+    const provider = new RazorpayPaymentProvider({ keyId: keyId!, keySecret: keySecret! })
 
-    await expect(
-      provider.captureDeposit({
-        amountPaise: DEPOSIT_AMOUNT_PAISE,
-        idempotencyKey: `live-test-unpaid-${Date.now()}`,
-        reference: 'live-test-unpaid',
-      }),
-    ).rejects.toThrow(PaymentTimeoutError)
+    const order = await provider.ensureDepositOrder({ amountPaise: DEPOSIT_AMOUNT_PAISE, idempotencyKey: KEEPER_IDEMPOTENCY_KEY, reference: 'live-test-keeper' })
+    const result = await provider.pollDepositCapture(order, 'live-test-keeper')
+    expect(result?.paymentId).toBe(KEEPER_PAYMENT_ID)
+    expect(result?.amountPaise).toBe(30000)
+  })
+
+  it('ensureDepositOrder creates a real order fast, without waiting for a payment', async () => {
+    const provider = new RazorpayPaymentProvider({ keyId: keyId!, keySecret: keySecret! })
+
+    const order = await provider.ensureDepositOrder({
+      amountPaise: DEPOSIT_AMOUNT_PAISE,
+      idempotencyKey: `live-test-order-${Date.now()}`,
+      reference: 'live-test-order',
+    })
+    expect(order.orderId).toMatch(/^order_/)
+    expect(order.amountPaise).toBe(30000)
+  })
+
+  it('pollDepositCapture returns undefined — never throws — for a fresh order nobody pays', async () => {
+    const provider = new RazorpayPaymentProvider({ keyId: keyId!, keySecret: keySecret! })
+
+    const order = await provider.ensureDepositOrder({
+      amountPaise: DEPOSIT_AMOUNT_PAISE,
+      idempotencyKey: `live-test-unpaid-${Date.now()}`,
+      reference: 'live-test-unpaid',
+    })
+    const result = await provider.pollDepositCapture(order, 'live-test-unpaid', { timeoutMs: 4000 })
+    expect(result).toBeUndefined()
   }, 10_000)
 
   it('refundDeposit is idempotent against Razorpay: same key never produces a second refund', async () => {

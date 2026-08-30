@@ -28,6 +28,7 @@ function heldSnapshot(overrides: Partial<BookingSnapshot> = {}): BookingSnapshot
     noShowEligibleMarkedAt: undefined,
     agentId: 'agent_1',
     holdExpiresAt: new Date(NOW.getTime() + 60_000),
+    pendingPaymentLegs: undefined,
     lastEventSequence: 1,
     ...overrides,
   }

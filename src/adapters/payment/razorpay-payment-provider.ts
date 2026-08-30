@@ -3,32 +3,20 @@ import { toPaise } from '../../domain/money.js'
 import {
   PaymentDeclinedError,
   PaymentProviderError,
-  PaymentTimeoutError,
   type CaptureDepositParams,
   type CaptureDepositResult,
+  type DepositOrder,
   type PaymentProvider,
   type PaymentStatus,
   type RefundDepositParams,
   type RefundDepositResult,
 } from '../../ports/payment-provider.js'
 import { instrumentRazorpayClient } from '../observability/metrics.js'
-import { DEFAULT_CAPTURE_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, isNotFound, parseRazorpaySdkError, receiptFor, sleep, toInstrument, toPaymentStatusValue, type RazorpayPaymentLike } from './razorpay-shared.js'
+import { DEFAULT_POLL_INTERVAL_MS, DEFAULT_QUICK_POLL_TIMEOUT_MS, isNotFound, parseRazorpaySdkError, receiptFor, sleep, toInstrument, toPaymentStatusValue, type RazorpayPaymentLike } from './razorpay-shared.js'
 
 export interface RazorpayPaymentProviderOptions {
   keyId: string
   keySecret: string
-  /**
-   * How long `captureDeposit` waits for a customer to complete Checkout
-   * against a freshly created order before giving up with
-   * `PaymentTimeoutError`. Production default is generous (Checkout
-   * sessions themselves run well under this); tests override it short to
-   * prove the timeout path without actually waiting minutes. See
-   * dev-logs/006 for why this polling shape exists at all — Razorpay has no
-   * server-to-server way to *submit* a payment on a standard (non-TPV)
-   * account, only to ask whether one has landed yet.
-   */
-  captureTimeoutMs?: number
-  capturePollIntervalMs?: number
 }
 
 /**
@@ -39,29 +27,28 @@ export interface RazorpayPaymentProviderOptions {
  * endpoints 404 — verified live; Razorpay's own docs confirm both require
  * contacting support to enable TPV, the same activation-gating dev-logs/005
  * already rejected Reserve Pay over). The only way a payment gets attached
- * to an order is a customer completing Checkout. `captureDeposit` therefore
- * creates the order, then polls for a payment to land against it, rather
- * than submitting one itself.
+ * to an order is a customer completing Checkout — `ensureDepositOrder`
+ * creates the order (or finds it, by receipt, if this idempotency key
+ * already has one) and `pollDepositCapture` checks whether a payment has
+ * landed against it, rather than submitting one itself. Payment-link feature
+ * (dev-logs entry for this slice): this used to be one long-blocking
+ * create-then-poll-for-five-minutes call (`captureDeposit`) — split so
+ * `confirm_with_deposit` can hand back a payable link the instant the order
+ * exists, instead of blocking with nothing to show a human.
  */
 export class RazorpayPaymentProvider implements PaymentProvider {
   private readonly client: Razorpay
-  private readonly captureTimeoutMs: number
-  private readonly capturePollIntervalMs: number
 
   constructor(options: RazorpayPaymentProviderOptions) {
     this.client = instrumentRazorpayClient(new Razorpay({ key_id: options.keyId, key_secret: options.keySecret }))
-    this.captureTimeoutMs = options.captureTimeoutMs ?? DEFAULT_CAPTURE_TIMEOUT_MS
-    this.capturePollIntervalMs = options.capturePollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
   }
 
-  async captureDeposit(params: CaptureDepositParams): Promise<CaptureDepositResult> {
+  async ensureDepositOrder(params: CaptureDepositParams): Promise<DepositOrder> {
     const receipt = receiptFor(params.idempotencyKey)
-
-    let order
     try {
-      order = await this.findOrder(receipt)
-      if (!order) {
-        order = await this.client.orders.create({
+      const order =
+        (await this.findOrder(receipt)) ??
+        (await this.client.orders.create({
           amount: params.amountPaise,
           currency: 'INR',
           receipt,
@@ -73,19 +60,23 @@ export class RazorpayPaymentProvider implements PaymentProvider {
           // string, which is why this is read from the order rather than
           // guessed from the payment entity.
           notes: { bookingId: params.reference },
-        })
-      }
+        }))
+      return { orderId: order.id, amountPaise: toPaise(Number(order.amount)) }
     } catch (err) {
       throw new PaymentProviderError(params.reference, err, parseRazorpaySdkError(err))
     }
+  }
 
-    const deadline = Date.now() + this.captureTimeoutMs
+  async pollDepositCapture(order: DepositOrder, reference: string, options?: { timeoutMs?: number }): Promise<CaptureDepositResult | undefined> {
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_QUICK_POLL_TIMEOUT_MS
+    const deadline = Date.now() + timeoutMs
+
     for (;;) {
       let payment: RazorpayPaymentLike | undefined
       try {
-        payment = await this.latestPaymentFor(order.id)
+        payment = await this.latestPaymentFor(order.orderId)
       } catch (err) {
-        throw new PaymentProviderError(params.reference, err, parseRazorpaySdkError(err))
+        throw new PaymentProviderError(reference, err, parseRazorpaySdkError(err))
       }
 
       if (payment?.status === 'captured') {
@@ -93,17 +84,17 @@ export class RazorpayPaymentProvider implements PaymentProvider {
           paymentId: payment.id,
           amountPaise: toPaise(Number(payment.amount)),
           instrument: toInstrument(payment.method, (message) => {
-            throw new PaymentProviderError(params.reference, new Error(message))
+            throw new PaymentProviderError(reference, new Error(message))
           }),
         }
       }
       if (payment?.status === 'failed') {
-        throw new PaymentDeclinedError(params.reference)
+        throw new PaymentDeclinedError(reference)
       }
       if (Date.now() >= deadline) {
-        throw new PaymentTimeoutError(params.reference)
+        return undefined
       }
-      await sleep(this.capturePollIntervalMs)
+      await sleep(DEFAULT_POLL_INTERVAL_MS)
     }
   }
 

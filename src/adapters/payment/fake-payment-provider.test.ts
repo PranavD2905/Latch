@@ -1,44 +1,68 @@
 import { describe, expect, it } from 'vitest'
 import { toPaise } from '../../domain/money.js'
-import { PaymentDeclinedError, PaymentTimeoutError } from '../../ports/payment-provider.js'
+import { PaymentDeclinedError } from '../../ports/payment-provider.js'
 import { FakePaymentProvider } from './fake-payment-provider.js'
 
 describe('FakePaymentProvider', () => {
   it('defaults to success', async () => {
     const provider = new FakePaymentProvider()
-    const result = await provider.captureDeposit({ amountPaise: toPaise(30000), idempotencyKey: 'k1', reference: 'bkg_1' })
-    expect(result.amountPaise).toBe(30000)
-    expect(result.paymentId).toMatch(/^pay_/)
+    const params = { amountPaise: toPaise(30000), idempotencyKey: 'k1', reference: 'bkg_1' }
+    const order = await provider.ensureDepositOrder(params)
+    const result = await provider.pollDepositCapture(order, params.reference)
+    expect(result?.amountPaise).toBe(30000)
+    expect(result?.paymentId).toMatch(/^pay_/)
   })
 
   it('simulates a decline', async () => {
     const provider = new FakePaymentProvider()
     provider.setScenario('k2', 'decline')
-    await expect(provider.captureDeposit({ amountPaise: toPaise(30000), idempotencyKey: 'k2', reference: 'bkg_2' })).rejects.toThrow(
-      PaymentDeclinedError,
-    )
+    const params = { amountPaise: toPaise(30000), idempotencyKey: 'k2', reference: 'bkg_2' }
+    const order = await provider.ensureDepositOrder(params)
+    await expect(provider.pollDepositCapture(order, params.reference)).rejects.toThrow(PaymentDeclinedError)
   })
 
-  it('simulates a timeout', async () => {
+  it('a pending scenario returns undefined — not paid yet is not an error', async () => {
     const provider = new FakePaymentProvider()
-    provider.setScenario('k3', 'timeout')
-    await expect(provider.captureDeposit({ amountPaise: toPaise(30000), idempotencyKey: 'k3', reference: 'bkg_3' })).rejects.toThrow(
-      PaymentTimeoutError,
-    )
+    provider.setScenario('k3', 'pending')
+    const params = { amountPaise: toPaise(30000), idempotencyKey: 'k3', reference: 'bkg_3' }
+    const order = await provider.ensureDepositOrder(params)
+    await expect(provider.pollDepositCapture(order, params.reference)).resolves.toBeUndefined()
   })
 
-  it('replays the stored result for a repeated idempotency key instead of charging again', async () => {
+  it('completeDeposit flips a pending scenario to captured, modelling a human paying the link later', async () => {
     const provider = new FakePaymentProvider()
-    const first = await provider.captureDeposit({ amountPaise: toPaise(30000), idempotencyKey: 'k5', reference: 'bkg_5' })
-    const second = await provider.captureDeposit({ amountPaise: toPaise(30000), idempotencyKey: 'k5', reference: 'bkg_5' })
-    expect(second.paymentId).toBe(first.paymentId)
+    provider.setScenario('k4', 'pending')
+    const params = { amountPaise: toPaise(30000), idempotencyKey: 'k4', reference: 'bkg_4' }
+    const order = await provider.ensureDepositOrder(params)
+    await expect(provider.pollDepositCapture(order, params.reference)).resolves.toBeUndefined()
+
+    provider.completeDeposit('k4')
+    const result = await provider.pollDepositCapture(order, params.reference)
+    expect(result?.amountPaise).toBe(30000)
+  })
+
+  it('ensureDepositOrder is idempotent — a repeated call with the same key returns the same order, not a second one', async () => {
+    const provider = new FakePaymentProvider()
+    const params = { amountPaise: toPaise(30000), idempotencyKey: 'k5', reference: 'bkg_5' }
+    const first = await provider.ensureDepositOrder(params)
+    const second = await provider.ensureDepositOrder(params)
+    expect(second.orderId).toBe(first.orderId)
+  })
+
+  it('replays the stored result for a repeated poll against the same order instead of charging again', async () => {
+    const provider = new FakePaymentProvider()
+    const params = { amountPaise: toPaise(30000), idempotencyKey: 'k6', reference: 'bkg_6' }
+    const order = await provider.ensureDepositOrder(params)
+    const first = await provider.pollDepositCapture(order, params.reference)
+    const second = await provider.pollDepositCapture(order, params.reference)
+    expect(second?.paymentId).toBe(first?.paymentId)
   })
 
   it('refunds, and replays the stored refund result for a repeated idempotency key', async () => {
     const provider = new FakePaymentProvider()
-    const first = await provider.refundDeposit({ paymentId: 'pay_x', amountPaise: toPaise(30000), idempotencyKey: 'k6', reference: 'bkg_6' })
+    const first = await provider.refundDeposit({ paymentId: 'pay_x', amountPaise: toPaise(30000), idempotencyKey: 'k7', reference: 'bkg_7' })
     expect(first.refundId).toMatch(/^rfnd_/)
-    const second = await provider.refundDeposit({ paymentId: 'pay_x', amountPaise: toPaise(30000), idempotencyKey: 'k6', reference: 'bkg_6' })
+    const second = await provider.refundDeposit({ paymentId: 'pay_x', amountPaise: toPaise(30000), idempotencyKey: 'k7', reference: 'bkg_7' })
     expect(second.refundId).toBe(first.refundId)
   })
 })

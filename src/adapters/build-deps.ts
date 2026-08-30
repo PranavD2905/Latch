@@ -100,6 +100,8 @@ export function buildAppDeps(db: Db, logger: Logger): AppDeps {
     paymentRail: buildPaymentRail(),
     idempotencyStore: new PostgresIdempotencyStore(db),
     merchantId: loadEnv().MERCHANT_ID ?? SEED_MERCHANT_ID,
+    // Payment-link feature (dev-logs entry for this slice) — see PAY_PAGE_BASE_URL's own doc comment in config.ts.
+    payPageBaseUrl: loadEnv().PAY_PAGE_BASE_URL ?? `http://localhost:${loadEnv().AUDIT_TRAIL_PORT}`,
     // dev-logs/016. One breaker per process (`buildAppDeps` itself is only
     // ever called once per entrypoint — see the file-level callers, all
     // top-level `const deps = buildAppDeps(db)`), shared across every

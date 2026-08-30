@@ -19,8 +19,7 @@ const COMPLETED_GRACE_MS = 7 * 24 * 60 * 60 * 1000
  * process death mid-command leaves the key permanently stuck otherwise).
  * Must stay well above the longest legitimate claim duration anywhere this
  * store is used — `confirm_with_deposit`'s own `IDEMPOTENCY_CLAIM_TIMEOUT_MS`
- * (5 minutes, matching `razorpay-shared.ts`'s `DEFAULT_CAPTURE_TIMEOUT_MS`)
- * is the longest in this codebase today. 1 hour leaves better than a 10x
+ * (5 minutes) is the longest in this codebase today. 1 hour leaves better than a 10x
  * margin — deleting a row a still-live claimant owns would let a second
  * caller re-claim the same key and run concurrently with the first,
  * reopening dev-logs/013's race.

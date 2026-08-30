@@ -61,7 +61,7 @@ beforeAll(async () => {
     merchantId: SEED_MERCHANT_ID,
     version: RATE_LIMIT_TEST_POLICY_VERSION,
     depositType: 'fixed',
-    depositAmountPaise: currentPolicy.policy.depositAmountPaise,
+    depositAmountPaise: currentPolicy.policy.depositAmountPaise ?? null,
     cancellationLadder: currentPolicy.policy.cancellationLadder,
     noShowFeePaise: currentPolicy.policy.noShowFeePaise ?? null,
     noShowGraceMinutes: currentPolicy.policy.noShowGraceMinutes ?? null,

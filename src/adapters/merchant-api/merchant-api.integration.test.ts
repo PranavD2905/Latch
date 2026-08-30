@@ -648,4 +648,23 @@ describe('merchant API — GET/POST /policy, dev-logs/015 (originally cut, reins
     expect(body.policy.policyVersion).toBe((before?.policyVersion ?? 0) + 1)
     expect(body.policy.policyVersion).not.toBe(999)
   })
+
+  // Payment-link feature follow-up (dev-logs entry): a merchant may run with
+  // no upfront deposit at all — the wire schema no longer requires the field,
+  // and the whole service price becomes the session-complete mandate.
+  it('publishes a policy with no deposit at all — depositAmountPaise omitted entirely', async () => {
+    const body = validPolicyBody()
+    delete (body as { depositAmountPaise?: number }).depositAmountPaise
+    const publish = await policyApp.inject({
+      method: 'POST',
+      url: '/policy',
+      headers: { authorization: `Bearer ${POLICY_MERCHANT_TOKEN}` },
+      payload: body,
+    })
+    expect(publish.statusCode).toBe(200)
+    expect(publish.json().policy.depositAmountPaise).toBeUndefined()
+
+    const read = await policyApp.inject({ method: 'GET', url: '/policy', headers: { authorization: `Bearer ${POLICY_MERCHANT_TOKEN}` } })
+    expect(read.json().policy.depositAmountPaise).toBeUndefined()
+  })
 })

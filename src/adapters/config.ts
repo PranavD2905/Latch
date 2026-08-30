@@ -64,6 +64,16 @@ const envSchema = z
     // than crashing merchant-api on boot.
     RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
 
+    /**
+     * Payment-link feature (dev-logs entry for this slice). The public
+     * origin `confirm_with_deposit` builds pay links against —
+     * `GET /pay/:bookingId` is served by `audit-trail/server.ts`
+     * (docs/07-deployment.md: `latch-viewer`'s own public URL in
+     * production). Undefined falls back to `http://localhost:${AUDIT_TRAIL_PORT}`
+     * for local dev (`build-deps.ts`).
+     */
+    PAY_PAGE_BASE_URL: z.string().optional(),
+
     MERCHANT_ID: z.string().optional(),
 
     DB_POOL_MAX: z.coerce.number().int().positive().optional().default(5),

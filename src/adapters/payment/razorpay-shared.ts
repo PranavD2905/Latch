@@ -2,8 +2,18 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import type { Instrument } from '../../domain/events.js'
 import type { PaymentStatusValue } from '../../ports/payment-provider.js'
 
-export const DEFAULT_CAPTURE_TIMEOUT_MS = 5 * 60 * 1000
 export const DEFAULT_POLL_INTERVAL_MS = 3000
+/**
+ * Payment-link feature (dev-logs entry for this slice): `pollDepositCapture`/
+ * `pollAuthorization` no longer block for minutes waiting on a human who
+ * hasn't even seen the pay link yet — this is a quick check, meant to catch
+ * a payer who was already mid-Checkout when `confirm_with_deposit` was
+ * called (e.g. a retry after the human says "I've paid"), not to wait one
+ * out. Two ticks at `DEFAULT_POLL_INTERVAL_MS` — long enough to absorb one
+ * round trip to Razorpay without feeling broken, short enough that the
+ * *common* case (nobody has clicked the link yet) returns promptly.
+ */
+export const DEFAULT_QUICK_POLL_TIMEOUT_MS = 2 * DEFAULT_POLL_INTERVAL_MS
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))

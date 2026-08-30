@@ -12,6 +12,7 @@ import { Refusal } from '../domain/refusals.js'
 import type { WorkingHours } from '../domain/slots.js'
 import { CircuitBreaker } from './circuit-breaker.js'
 import { confirmWithDeposit } from './confirm-with-deposit.js'
+import { requireConfirmed } from './confirm-with-deposit-test-support.js'
 import { holdSlot } from './hold-slot.js'
 import type { AppDeps } from './types.js'
 
@@ -136,9 +137,9 @@ describe('confirm_with_deposit — fast, fake-backed gate/refusal coverage', () 
   it('happy path: confirms, captures the deposit, and registers both optional authorisation legs', async () => {
     const deps = buildDeps()
     const held = await holdFreshSlot(deps, new Date('2026-08-25T10:00:00+05:30'))
-    const result = await confirmWithDeposit({ bookingId: held.bookingId, agentId: 'agent_1', acknowledgedPolicyVersion: 1, idempotencyKey: freshKey() }, deps)
+    const result = requireConfirmed(await confirmWithDeposit({ bookingId: held.bookingId, agentId: 'agent_1', acknowledgedPolicyVersion: 1, idempotencyKey: freshKey() }, deps))
     expect(result.status).toBe('CONFIRMED')
-    expect(result.deposit.amountPaise).toBe(30000)
+    expect(result.deposit!.amountPaise).toBe(30000)
     expect(result.authorization?.amountPaise).toBe(40000)
     expect(result.sessionCompleteMandate?.amountPaise).toBe(50000) // 80000 - 30000
     expect((await deps.eventStore.loadSnapshot(held.bookingId))?.status).toBe('CONFIRMED')
@@ -160,7 +161,7 @@ describe('confirm_with_deposit — fast, fake-backed gate/refusal coverage', () 
     const key = freshKey()
     paymentRail.setScenario(`${key}:no_show_auth`, 'decline')
 
-    const result = await confirmWithDeposit({ bookingId: held.bookingId, agentId: 'agent_1', acknowledgedPolicyVersion: 1, idempotencyKey: key }, deps)
+    const result = requireConfirmed(await confirmWithDeposit({ bookingId: held.bookingId, agentId: 'agent_1', acknowledgedPolicyVersion: 1, idempotencyKey: key }, deps))
     expect(result.status).toBe('CONFIRMED')
     expect(result.authorization).toBeUndefined()
     expect(result.sessionCompleteMandate).toBeDefined()
@@ -179,5 +180,168 @@ describe('confirm_with_deposit — fast, fake-backed gate/refusal coverage', () 
 
     await expect(confirmWithDeposit({ bookingId: held.bookingId, agentId: 'agent_1', acknowledgedPolicyVersion: 1, idempotencyKey: key }, deps)).rejects.toThrow()
     expect((await deps.eventStore.loadSnapshot(held.bookingId))?.status).toBe('HELD')
+  })
+})
+
+/**
+ * Payment-link feature follow-up (dev-logs entry): one combined pay page,
+ * and only the legs the merchant's policy actually calls for. These pin the
+ * leg-selection matrix and the PENDING -> pay -> retry -> CONFIRMED
+ * conversation the MCP tool descriptions instruct an agent to drive.
+ */
+describe('confirm_with_deposit — which legs apply, and the PENDING/retry cycle', () => {
+  it('returns exactly one payUrl covering every outstanding leg, not one link per leg', async () => {
+    const paymentProvider = new FakePaymentProvider()
+    const paymentRail = new FakePaymentRail()
+    const deps = buildDeps({ paymentProvider, paymentRail })
+    const held = await holdFreshSlot(deps, new Date('2026-08-25T10:00:00+05:30'))
+    const key = freshKey()
+    paymentProvider.setScenario(key, 'pending')
+    paymentRail.setScenario(`${key}:no_show_auth`, 'pending')
+    paymentRail.setScenario(`${key}:session_complete_auth`, 'pending')
+
+    const result = await confirmWithDeposit({ bookingId: held.bookingId, agentId: 'agent_1', acknowledgedPolicyVersion: 1, idempotencyKey: key }, deps)
+    expect(result.status).toBe('PENDING')
+    if (result.status !== 'PENDING') return
+    expect(result.payUrl).toMatch(new RegExp(`/pay/${held.bookingId}$`))
+    expect(result.outstanding.map((o) => o.leg)).toEqual(['deposit', 'no_show_authorization', 'session_complete_authorization'])
+    // Every label is a sentence an agent can say out loud, not an identifier.
+    for (const leg of result.outstanding) expect(leg.label).toMatch(/₹/)
+    expect((await deps.eventStore.loadSnapshot(held.bookingId))?.status).toBe('HELD') // PENDING is a result shape, never a booking status
+  })
+
+  it('a policy with no deposit offers no deposit leg at all', async () => {
+    const catalogRepo = new FakeCatalogRepo()
+    catalogRepo.setPractitioner({ practitionerId: PRACTITIONER_ID, merchantId: MERCHANT_ID, name: 'Dr Test', workingHours: WORKING_HOURS })
+    catalogRepo.setService({ serviceId: SERVICE_ID, merchantId: MERCHANT_ID, name: 'Consult', durationMinutes: 30, pricePaise: toPaise(80000) })
+    catalogRepo.seedPolicy(MERCHANT_ID, {
+      policyVersion: 1,
+      depositAmountPaise: undefined, // no upfront deposit at all
+      cancellationLadder: [],
+      noShowFeePaise: toPaise(40000),
+      noShowGraceMinutes: 15,
+      holdTtlSeconds: 600,
+      maxConcurrentHoldsPerAgent: 5,
+      holdRateLimitPerMinute: 20,
+    })
+    const paymentRail = new FakePaymentRail()
+    const deps = buildDeps({ catalogRepo, paymentRail })
+    const held = await holdFreshSlot(deps, new Date('2026-08-25T10:00:00+05:30'))
+    const key = freshKey()
+    paymentRail.setScenario(`${key}:no_show_auth`, 'pending')
+    paymentRail.setScenario(`${key}:session_complete_auth`, 'pending')
+
+    const result = await confirmWithDeposit({ bookingId: held.bookingId, agentId: 'agent_1', acknowledgedPolicyVersion: 1, idempotencyKey: key }, deps)
+    expect(result.status).toBe('PENDING')
+    if (result.status !== 'PENDING') return
+    expect(result.outstanding.map((o) => o.leg)).toEqual(['no_show_authorization', 'session_complete_authorization'])
+    // The whole service price is the session-complete mandate when no deposit is taken.
+    expect(result.outstanding.find((o) => o.leg === 'session_complete_authorization')?.amountPaise).toBe(80000)
+  })
+
+  it('a policy with no deposit and no no-show fee leaves exactly one leg — never an empty page', async () => {
+    const catalogRepo = new FakeCatalogRepo()
+    catalogRepo.setPractitioner({ practitionerId: PRACTITIONER_ID, merchantId: MERCHANT_ID, name: 'Dr Test', workingHours: WORKING_HOURS })
+    catalogRepo.setService({ serviceId: SERVICE_ID, merchantId: MERCHANT_ID, name: 'Consult', durationMinutes: 30, pricePaise: toPaise(80000) })
+    catalogRepo.seedPolicy(MERCHANT_ID, {
+      policyVersion: 1,
+      depositAmountPaise: undefined,
+      cancellationLadder: [],
+      noShowFeePaise: undefined,
+      noShowGraceMinutes: undefined,
+      holdTtlSeconds: 600,
+      maxConcurrentHoldsPerAgent: 5,
+      holdRateLimitPerMinute: 20,
+    })
+    const paymentRail = new FakePaymentRail()
+    const deps = buildDeps({ catalogRepo, paymentRail })
+    const held = await holdFreshSlot(deps, new Date('2026-08-25T10:00:00+05:30'))
+    const key = freshKey()
+    paymentRail.setScenario(`${key}:session_complete_auth`, 'pending')
+
+    const result = await confirmWithDeposit({ bookingId: held.bookingId, agentId: 'agent_1', acknowledgedPolicyVersion: 1, idempotencyKey: key }, deps)
+    expect(result.status).toBe('PENDING')
+    if (result.status !== 'PENDING') return
+    expect(result.outstanding).toHaveLength(1)
+    expect(result.outstanding[0]!.leg).toBe('session_complete_authorization')
+  })
+
+  it('a no-deposit policy confirms with no DEPOSIT_CAPTURED event and an undefined deposit in the result', async () => {
+    const catalogRepo = new FakeCatalogRepo()
+    catalogRepo.setPractitioner({ practitionerId: PRACTITIONER_ID, merchantId: MERCHANT_ID, name: 'Dr Test', workingHours: WORKING_HOURS })
+    catalogRepo.setService({ serviceId: SERVICE_ID, merchantId: MERCHANT_ID, name: 'Consult', durationMinutes: 30, pricePaise: toPaise(80000) })
+    catalogRepo.seedPolicy(MERCHANT_ID, {
+      policyVersion: 1,
+      depositAmountPaise: undefined,
+      cancellationLadder: [],
+      noShowFeePaise: toPaise(40000),
+      noShowGraceMinutes: 15,
+      holdTtlSeconds: 600,
+      maxConcurrentHoldsPerAgent: 5,
+      holdRateLimitPerMinute: 20,
+    })
+    const deps = buildDeps({ catalogRepo })
+    const held = await holdFreshSlot(deps, new Date('2026-08-25T10:00:00+05:30'))
+
+    const result = requireConfirmed(await confirmWithDeposit({ bookingId: held.bookingId, agentId: 'agent_1', acknowledgedPolicyVersion: 1, idempotencyKey: freshKey() }, deps))
+    expect(result.deposit).toBeUndefined()
+    expect(result.authorization?.amountPaise).toBe(40000)
+    expect(result.sessionCompleteMandate?.amountPaise).toBe(80000)
+
+    const trail = await deps.eventStore.loadEvents(held.bookingId)
+    expect(trail.some((e) => e.type === 'DEPOSIT_CAPTURED')).toBe(false) // no ₹0 money event, ever
+    expect(trail.some((e) => e.type === 'BOOKING_CONFIRMED')).toBe(true)
+  })
+
+  it('an optional leg that simply has not been paid yet keeps the booking PENDING rather than confirming without it', async () => {
+    const paymentRail = new FakePaymentRail()
+    const deps = buildDeps({ paymentRail })
+    const held = await holdFreshSlot(deps, new Date('2026-08-25T10:00:00+05:30'))
+    const key = freshKey()
+    // Deposit + no-show land immediately; only the session-complete mandate lags.
+    paymentRail.setScenario(`${key}:session_complete_auth`, 'pending')
+
+    const result = await confirmWithDeposit({ bookingId: held.bookingId, agentId: 'agent_1', acknowledgedPolicyVersion: 1, idempotencyKey: key }, deps)
+    expect(result.status).toBe('PENDING')
+    if (result.status !== 'PENDING') return
+    expect(result.outstanding.map((o) => o.leg)).toEqual(['session_complete_authorization'])
+    expect((await deps.eventStore.loadSnapshot(held.bookingId))?.status).toBe('HELD')
+  })
+
+  it('the PENDING -> human pays -> retry same key -> CONFIRMED cycle, with no duplicate money events', async () => {
+    const paymentProvider = new FakePaymentProvider()
+    const paymentRail = new FakePaymentRail()
+    const deps = buildDeps({ paymentProvider, paymentRail })
+    const held = await holdFreshSlot(deps, new Date('2026-08-25T10:00:00+05:30'))
+    const key = freshKey()
+    paymentProvider.setScenario(key, 'pending')
+    paymentRail.setScenario(`${key}:no_show_auth`, 'pending')
+    paymentRail.setScenario(`${key}:session_complete_auth`, 'pending')
+
+    const first = await confirmWithDeposit({ bookingId: held.bookingId, agentId: 'agent_1', acknowledgedPolicyVersion: 1, idempotencyKey: key }, deps)
+    expect(first.status).toBe('PENDING')
+
+    // The human pays the deposit only — a retry must still report the two holds as outstanding.
+    paymentProvider.completeDeposit(key)
+    const second = await confirmWithDeposit({ bookingId: held.bookingId, agentId: 'agent_1', acknowledgedPolicyVersion: 1, idempotencyKey: key }, deps)
+    expect(second.status).toBe('PENDING')
+    if (second.status !== 'PENDING') return
+    expect(second.outstanding.map((o) => o.leg)).toEqual(['no_show_authorization', 'session_complete_authorization'])
+
+    // Then the rest.
+    paymentRail.completeAuthorization(`${key}:no_show_auth`)
+    paymentRail.completeAuthorization(`${key}:session_complete_auth`)
+    const third = requireConfirmed(await confirmWithDeposit({ bookingId: held.bookingId, agentId: 'agent_1', acknowledgedPolicyVersion: 1, idempotencyKey: key }, deps))
+    expect(third.deposit?.amountPaise).toBe(30000)
+    expect(third.authorization?.amountPaise).toBe(40000)
+    expect(third.sessionCompleteMandate?.amountPaise).toBe(50000)
+
+    const trail = await deps.eventStore.loadEvents(held.bookingId)
+    expect(trail.filter((e) => e.type === 'DEPOSIT_CAPTURED')).toHaveLength(1)
+    expect(trail.filter((e) => e.type === 'AUTHORIZATION_HELD')).toHaveLength(1)
+    expect(trail.filter((e) => e.type === 'BOOKING_CONFIRMED')).toHaveLength(1)
+    // Every PENDING round records why the gap exists, for the audit trail.
+    expect(trail.filter((e) => e.type === 'PAYMENT_REQUESTED').length).toBeGreaterThanOrEqual(1)
+    expect((await deps.eventStore.loadSnapshot(held.bookingId))?.pendingPaymentLegs).toBeUndefined() // cleared on confirm — stale links stop resolving
   })
 })

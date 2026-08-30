@@ -163,6 +163,7 @@ describe('decline_booking against real Razorpay test mode', () => {
         noShowEligibleMarkedAt: undefined,
         agentId: 'agent_live_decline_seed',
         holdExpiresAt: undefined,
+        pendingPaymentLegs: undefined,
         lastEventSequence: 5,
       }
       await tx.append([holdEvent, ackEvent, depositEvent, authorizationEvent, confirmedEvent], projection, SEED_MERCHANT_ID)

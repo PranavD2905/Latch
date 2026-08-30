@@ -127,6 +127,7 @@ async function holdSlotClaimed(cmd: HoldSlotCommand, deps: AppDeps): Promise<Hol
     noShowEligibleMarkedAt: undefined,
     agentId: cmd.agentId,
     holdExpiresAt,
+    pendingPaymentLegs: undefined,
     lastEventSequence: 1,
   }
 

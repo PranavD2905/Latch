@@ -237,13 +237,20 @@ from the original brief — see below.
 | `cancel` | refund / retention | Booking exists; tier from **server clock** | Retention ≤ ladder tier for true timestamp | Latch |
 | `charge_no_show` | debit | Start time elapsed **and** merchant marked non-attendance | The authorised amount | **Razorpay** |
 
-**Why `get_booking` exists.** `confirm_with_deposit` can take minutes in practice — it blocks on a real
-human completing Razorpay Checkout — and a long-held HTTP response is exactly the kind of thing an
-intermediate proxy can kill while the server keeps working underneath it (dev-logs/012, hit for real
-against the Slice 7 deployment). Before this tool, an agent facing a dead connection after a write had
-nothing to check against — `find_slots` can't distinguish a live hold from a confirmed booking, let alone
-report deposit or authorisation state. `get_booking` is the one call that's always safe to retry: no
-gate, no money, just the truth of what the server already did.
+**Why `get_booking` exists.** Originally added because `confirm_with_deposit` used to block for minutes
+in-process waiting on a human to complete Razorpay Checkout, and a long-held HTTP response is exactly the
+kind of thing an intermediate proxy can kill while the server keeps working underneath it (dev-logs/012,
+hit for real against the Slice 7 deployment). The payment-link feature (dev-logs entry for this slice)
+removed that multi-minute block — `confirm_with_deposit` now returns quickly either way, `CONFIRMED` or
+`PENDING` with pay links — so the original proxy-timeout trigger is gone. `get_booking` stays useful
+regardless: it's still the one call that's always safe to retry with no gate and no money, and it's what
+an agent should reach for if a human says "I've paid" and it's simplest to just check status rather than
+re-issue `confirm_with_deposit` (though the latter is also safe — see that command's own doc comment).
+
+`confirm_with_deposit`'s `PENDING` result is a **result shape**, never a booking status
+(docs/03-domain-model.md §3) — the booking itself stays `HELD` throughout, exactly as it always was
+before this command was ever called, until either the deposit is actually captured or the hold's claim
+window lapses and the existing hold-expiry worker reclaims it. No new state was added to the machine.
 
 Note the shape of the risk curve. `hold_slot` is the most frequently called tool and carries **zero**
 money exposure — that is deliberate (brief §6.3: *"All risk is pushed into the cheap, reversible

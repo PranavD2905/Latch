@@ -34,6 +34,7 @@ export const eventTypeEnum = pgEnum('event_type', [
   'BOOKING_COMPLETED',
   'ACTION_REFUSED',
   'RECONCILIATION_MISMATCH',
+  'PAYMENT_REQUESTED',
 ])
 
 export const bookingStatusEnum = pgEnum('booking_status', [
@@ -154,6 +155,18 @@ export const bookings = pgTable('bookings', {
    */
   agentId: text('agent_id'),
   holdExpiresAt: timestamp('hold_expires_at', { withTimezone: true }),
+  /**
+   * The payment-link feature: whichever legs `confirm_with_deposit` has
+   * issued a pay link for and is still waiting on, as of the most recent
+   * `PAYMENT_REQUESTED` event — `{leg, orderId, amountPaise, label}[]`, same
+   * shape as `PaymentRequestedEvent.legs`. This is what `GET /pay/:bookingId`
+   * (`audit-trail/server.ts`) resolves a link's amount/order/label from,
+   * deliberately *not* trusting anything the URL itself carries beyond
+   * `bookingId`/`leg` — see dev-logs entry for this feature. Cleared (set to
+   * `null`) once the booking reaches `CONFIRMED`: there is nothing left
+   * pending, and a stale link should 404 rather than keep resolving.
+   */
+  pendingPaymentLegs: jsonb('pending_payment_legs'),
   lastEventSequence: integer('last_event_sequence').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
@@ -222,7 +235,8 @@ export const policies = pgTable(
       .references(() => merchants.merchantId),
     version: integer('version').notNull(),
     depositType: text('deposit_type').notNull(),
-    depositAmountPaise: integer('deposit_amount_paise').notNull(),
+    /** Optional (payment-link feature follow-up) — a merchant may run with no upfront deposit at all. */
+    depositAmountPaise: integer('deposit_amount_paise'),
     /** Ordered array of { hoursBefore, retainPct } — docs/03-domain-model.md §2. */
     cancellationLadder: jsonb('cancellation_ladder').notNull(),
     /** Optional now — both null together, or both set together (validated in `validatePolicyInput`, not here). A merchant can run with no no-show fee at all. */

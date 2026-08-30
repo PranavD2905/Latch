@@ -14,6 +14,7 @@ import { bookings, events } from '../adapters/db/schema.js'
 import { FakePaymentProvider } from '../adapters/payment/fake-payment-provider.js'
 import { FakePaymentRail } from '../adapters/payment/fake-payment-rail.js'
 import { confirmWithDeposit } from './confirm-with-deposit.js'
+import { requireConfirmed } from './confirm-with-deposit-test-support.js'
 import { findSlots } from './find-slots.js'
 import { getPolicy } from './get-policy.js'
 import { holdSlot } from './hold-slot.js'
@@ -91,12 +92,14 @@ describe('booking-flow (real Postgres + FakePaymentProvider + FrozenClock)', () 
     createdBookingIds.push(held.bookingId)
     expect(held.status).toBe('HELD')
 
-    const confirmed = await confirmWithDeposit(
-      { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: freshKey() },
-      deps,
+    const confirmed = requireConfirmed(
+      await confirmWithDeposit(
+        { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: freshKey() },
+        deps,
+      ),
     )
     expect(confirmed.status).toBe('CONFIRMED')
-    expect(confirmed.deposit.amountPaise).toBe(policyResult.policy.depositAmountPaise)
+    expect(confirmed.deposit!.amountPaise).toBe(policyResult.policy.depositAmountPaise)
 
     const snapshot = await deps.eventStore.loadSnapshot(held.bookingId)
     expect(snapshot?.status).toBe('CONFIRMED')

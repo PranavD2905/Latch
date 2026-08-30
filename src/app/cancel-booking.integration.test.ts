@@ -17,6 +17,7 @@ import type { BookingEvent } from '../domain/events.js'
 import { runAuthorizationLapseWorker } from './authorization-lapse-worker.js'
 import { BookingNotCancellableError, type CancelBookingCommand, cancelBooking } from './cancel-booking.js'
 import { confirmWithDeposit } from './confirm-with-deposit.js'
+import { requireConfirmed } from './confirm-with-deposit-test-support.js'
 import { getPolicy } from './get-policy.js'
 import { holdSlot } from './hold-slot.js'
 import type { AppDeps } from './types.js'
@@ -64,11 +65,13 @@ async function holdAndConfirm(hhmm: string): Promise<{ bookingId: string; starts
   const held = await holdSlot({ agentId, practitionerId: SEED_PRACTITIONER_ID, serviceId: SEED_SERVICE_ID, startsAt, idempotencyKey: freshKey() }, deps)
   createdBookingIds.push(held.bookingId)
   const policyResult = await getPolicy(deps)
-  const confirmed = await confirmWithDeposit(
-    { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: freshKey() },
-    deps,
+  const confirmed = requireConfirmed(
+    await confirmWithDeposit(
+      { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: freshKey() },
+      deps,
+    ),
   )
-  return { bookingId: held.bookingId, startsAt, depositAmountPaise: confirmed.deposit.amountPaise, authorizationId: confirmed.authorization!.authorizationId }
+  return { bookingId: held.bookingId, startsAt, depositAmountPaise: confirmed.deposit!.amountPaise, authorizationId: confirmed.authorization!.authorizationId }
 }
 
 beforeAll(async () => {

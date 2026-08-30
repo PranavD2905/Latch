@@ -18,6 +18,7 @@ import type { BookingEvent } from '../domain/events.js'
 import { cancelBooking } from './cancel-booking.js'
 import { chargeNoShow } from './charge-no-show.js'
 import { confirmWithDeposit } from './confirm-with-deposit.js'
+import { requireConfirmed } from './confirm-with-deposit-test-support.js'
 import { getPolicy } from './get-policy.js'
 import { holdSlot } from './hold-slot.js'
 import { markNoShow } from './mark-no-show.js'
@@ -118,8 +119,9 @@ describe('idempotency under genuinely concurrent retry (docs/01-architecture.md 
     )
 
     // Every caller sees the exact same payment/authorization — one real money movement, N replays.
-    const paymentIds = new Set(results.map((r) => r.deposit.paymentId))
-    const authorizationIds = new Set(results.map((r) => r.authorization!.authorizationId))
+    const confirmedResults = results.map(requireConfirmed)
+    const paymentIds = new Set(confirmedResults.map((r) => r.deposit!.paymentId))
+    const authorizationIds = new Set(confirmedResults.map((r) => r.authorization!.authorizationId))
     expect(paymentIds.size).toBe(1)
     expect(authorizationIds.size).toBe(1)
 
@@ -254,7 +256,7 @@ describe('POLICY_VERSION_STALE (docs/03-domain-model.md §5)', () => {
       merchantId: SEED_MERCHANT_ID,
       version: STALE_TEST_POLICY_VERSION,
       depositType: 'fixed',
-      depositAmountPaise: currentPolicy.policy.depositAmountPaise,
+      depositAmountPaise: currentPolicy.policy.depositAmountPaise ?? null,
       cancellationLadder: [
         { hoursBefore: 48, retainPct: 0 },
         { hoursBefore: 12, retainPct: 50 },

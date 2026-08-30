@@ -17,7 +17,15 @@ export interface LadderTier {
  */
 export interface Policy {
   policyVersion: number
-  depositAmountPaise: Paise
+  /**
+   * Fully optional, same discipline as `noShowFeePaise` below — a merchant
+   * may run with no upfront deposit at all (payment-link feature follow-up:
+   * "if no deposit is set, it should not show the deposit link"). Unlike
+   * the no-show fee, there is no paired field to keep in sync — `undefined`
+   * simply means `confirm_with_deposit` never creates a deposit order or
+   * captures anything for that leg.
+   */
+  depositAmountPaise: Paise | undefined
   cancellationLadder: readonly LadderTier[]
   /**
    * The no-show fee leg is now fully optional — a merchant may run without
@@ -54,7 +62,7 @@ export interface Policy {
  * `toPaise` throw a merchant never sees a clean code for).
  */
 export interface PolicyDraft {
-  depositAmountPaise: number
+  depositAmountPaise: number | undefined
   cancellationLadder: readonly LadderTier[]
   /** Both present or both absent — see `Policy.noShowFeePaise`'s doc comment. */
   noShowFeePaise: number | undefined
@@ -71,6 +79,6 @@ export interface PolicyDraft {
  * never an UPDATE of an existing one.
  */
 export type PolicyInput = Omit<PolicyDraft, 'depositAmountPaise' | 'noShowFeePaise'> & {
-  depositAmountPaise: Paise
+  depositAmountPaise: Paise | undefined
   noShowFeePaise: Paise | undefined
 }

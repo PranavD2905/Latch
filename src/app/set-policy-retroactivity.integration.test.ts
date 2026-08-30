@@ -151,8 +151,8 @@ describe('retroactivity: a booking cancels under the policy version it was confi
     const cancelAt = new Date(startsAt.getTime() - 20 * 3_600_000) // 20h before the appointment
     clock.set(cancelAt)
     const expectedLadderResult = evaluateLadder(originalPolicy.cancellationLadder, startsAt, cancelAt)
-    const expectedRetained = floorPercentageOf(originalPolicy.depositAmountPaise, expectedLadderResult.retainPct)
-    const expectedRefund = subtractPaise(originalPolicy.depositAmountPaise, expectedRetained)
+    const expectedRetained = floorPercentageOf(originalPolicy.depositAmountPaise!, expectedLadderResult.retainPct)
+    const expectedRefund = subtractPaise(originalPolicy.depositAmountPaise!, expectedRetained)
 
     const result = await cancelBooking({ bookingId: held.bookingId, idempotencyKey: freshKey() }, deps)
 

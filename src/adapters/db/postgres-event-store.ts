@@ -2,6 +2,7 @@ import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, sql } from 'drizzle-o
 import type { BookingEvent } from '../../domain/events.js'
 import type { BookingStatus } from '../../domain/fold.js'
 import { toPaise } from '../../domain/money.js'
+import type { PaymentRequestedLeg } from '../../domain/events.js'
 import type { BookingSnapshot, BusyInterval, EventStore, EventStoreTx, EventWithGlobalSequence } from '../../ports/event-store.js'
 import type { Db } from './client.js'
 import { bookings, events, services } from './schema.js'
@@ -59,6 +60,7 @@ function rowToSnapshot(row: typeof bookings.$inferSelect): BookingSnapshot {
     noShowEligibleMarkedAt: row.noShowEligibleMarkedAt ?? undefined,
     agentId: row.agentId ?? undefined,
     holdExpiresAt: row.holdExpiresAt ?? undefined,
+    pendingPaymentLegs: (row.pendingPaymentLegs as readonly PaymentRequestedLeg[] | null) ?? undefined,
     lastEventSequence: row.lastEventSequence,
   }
 }
@@ -118,6 +120,7 @@ async function appendFor(db: Queryable, evts: readonly BookingEvent[], projectio
       noShowEligibleMarkedAt: projection.noShowEligibleMarkedAt ?? null,
       agentId: projection.agentId ?? null,
       holdExpiresAt: projection.holdExpiresAt ?? null,
+      pendingPaymentLegs: projection.pendingPaymentLegs ?? null,
       lastEventSequence: projection.lastEventSequence,
       createdAt: now,
       updatedAt: now,
@@ -144,6 +147,7 @@ async function appendFor(db: Queryable, evts: readonly BookingEvent[], projectio
         noShowEligibleMarkedAt: projection.noShowEligibleMarkedAt ?? null,
         agentId: projection.agentId ?? null,
         holdExpiresAt: projection.holdExpiresAt ?? null,
+        pendingPaymentLegs: projection.pendingPaymentLegs ?? null,
         lastEventSequence: projection.lastEventSequence,
         updatedAt: now,
       },

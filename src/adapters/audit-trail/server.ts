@@ -2,9 +2,12 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import type { AppDeps } from '../../app/types.js'
 import type { EventWithGlobalSequence } from '../../ports/event-store.js'
 import type { MerchantAuthStore } from '../../ports/merchant-auth.js'
+import { checkAllPendingLegs } from '../../app/pending-payment-status.js'
+import { loadEnv } from '../config.js'
 import { echoTraceIdHeader, loggingFastifyOptions, registerErrorHandler } from '../observability/fastify-logging.js'
 import { registerMetricsRoute } from '../observability/metrics.js'
 import { registerSecurityHeaders } from '../observability/security-headers.js'
+import { renderPayNotFoundPage, renderPayPage, type PayPageLeg } from './pay-page.js'
 
 export interface AuditTrailServerOptions {
   /**
@@ -100,6 +103,45 @@ export function createAuditTrailServer(deps: AppDeps, options: AuditTrailServerO
   // needs to reach this without the viewer token.
   app.get('/healthz', async () => ({ ok: true }))
   registerMetricsRoute(app)
+
+  // Payment-link feature (dev-logs entry for this slice; rebuilt in the
+  // follow-up to cover every applicable leg on one page) — the page a human
+  // actually pays from. Unauthenticated, same posture as `/`: a bookingId is
+  // an unguessable ULID, the same "possession of the link is the capability"
+  // model every Checkout-style payment link uses. Deliberately narrow in
+  // what it can leak: it resolves *one* booking's own applicable legs by id
+  // — no policy internals, no other bookings, no merchant token — and 404s
+  // for anything else (unknown booking, or a booking with nothing left in
+  // `pendingPaymentLegs`). Served here rather than from `merchant-api` because this is the one server
+  // with Helmet's CSP already off (see `registerSecurityHeaders` call
+  // above) — Checkout.js is a cross-origin script load a default CSP would
+  // block, and merchant-api's contract (JSON only, Bearer-token gated) isn't
+  // worth reshaping for one HTML route.
+  app.get<{ Params: { bookingId: string } }>('/pay/:bookingId', async (request, reply) => {
+    const { bookingId } = request.params
+    const snapshot = await deps.eventStore.loadSnapshot(bookingId)
+    const legs = snapshot?.pendingPaymentLegs
+    if (!snapshot || !legs || legs.length === 0) {
+      await reply.code(404).type('text/html').send(renderPayNotFoundPage())
+      return
+    }
+
+    // Live per-leg status, same primitive `get_booking` uses
+    // (`pending-payment-status.ts`) — the trail only records a leg as
+    // captured/authorised once every applicable leg is done, so this page
+    // has to ask Razorpay directly to know which legs are actually already
+    // paid and render them as done rather than a re-clickable button.
+    const statuses = await checkAllPendingLegs(deps, legs, bookingId, deps.clock.now())
+    const payPageLegs: PayPageLeg[] = legs.map((leg) => ({
+      leg: leg.leg,
+      label: leg.label,
+      amountPaise: leg.amountPaise,
+      orderId: leg.orderId,
+      done: statuses?.find((s) => s.leg === leg.leg)?.done ?? false,
+    }))
+
+    await reply.type('text/html').send(renderPayPage({ bookingId, legs: payPageLegs, keyId: loadEnv().RAZORPAY_KEY_ID }))
+  })
 
   app.get<{ Querystring: { token?: string } }>('/events', async (request, reply) => {
     const token = request.query.token

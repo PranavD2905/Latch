@@ -16,7 +16,7 @@ at the deployment layer too, rather than merging them into one process:
 |---|---|---|---|
 | `latch-mcp` | `npm run start:mcp` (`src/adapters/mcp/http.ts`) | Yes | The public HTTPS MCP endpoint a remote agent connects to. Also runs both Slice 5 background jobs (hold-expiry, no-show-eligibility), the Slice 4 authorisation-lapse worker, and (dev-logs/014) the reconciliation worker as in-process `setInterval` loops — none of the four bind a port or hold per-connection state, so folding them in here satisfies "the background worker running in the deployed process" without a fifth service. |
 | `latch-merchant-api` | `npm run start:merchant-api` (`src/adapters/merchant-api/http.ts`) | Yes | The merchant-only decline/mark-no-show routes, exercised during the demo from outside the deployed environment (curl / a script on the presenter's machine, not the agent). Also hosts `GET /slots` (dev-logs/014, item 4 — public, read-only, same posture as MCP's `find_slots`) and `POST /webhooks/razorpay` (dev-logs/014, item 2 — HMAC-signature-gated, not the merchant Bearer token), both mounted on this same already-public Fastify instance rather than provisioning a fourth service. |
-| `latch-viewer` | `npm run start:viewer` (`src/adapters/audit-trail/http.ts`) | Yes | The SSE feed **and** the built `web/dist` viewer, served from the same origin — no CORS handling needed, same reasoning `web/vite.config.ts`'s dev-time proxy already used. |
+| `latch-viewer` | `npm run start:viewer` (`src/adapters/audit-trail/http.ts`) | Yes | The SSE feed **and** the built `web/dist` viewer, served from the same origin — no CORS handling needed, same reasoning `web/vite.config.ts`'s dev-time proxy already used. Also serves `GET /pay/:bookingId` (payment-link feature, dev-logs entry for this slice) — the single page a human actually pays a `confirm_with_deposit` link from, covering every applicable leg. Mounted here, not on `latch-merchant-api`, because this is the one server with Helmet's CSP already off (`registerSecurityHeaders`'s own comment) — Checkout.js is a cross-origin script load a default CSP would block. |
 | Postgres | Railway managed Postgres | No (internal) | Shared `DATABASE_URL` across all three services. |
 
 **Why not one combined process.** Was considered, since it would mean one Railway service instead of
@@ -45,6 +45,12 @@ All three services need:
 - `DB_POOL_MAX` — optional, defaults to 5 per process (`src/adapters/db/client.ts`). Three services x 5 =
   15 connections against Postgres at rest, before `db:migrate`/`db:seed` one-off runs stack on top.
   Lower it if the managed instance's connection limit is tight.
+- `PAY_PAGE_BASE_URL` — payment-link feature (dev-logs entry for this slice). `latch-mcp` needs this set
+  to `latch-viewer`'s public URL (`https://latch-viewer-production.up.railway.app` or equivalent) so the
+  pay links `confirm_with_deposit` builds actually resolve — unset falls back to
+  `http://localhost:${AUDIT_TRAIL_PORT}`, which is only correct for local dev where both processes share
+  a machine. Harmless to set on the other two services too (they never read it), but only `latch-mcp`
+  needs it.
 
 **Migration 0011 superseded this section's original `MERCHANT_API_TOKEN`/`AUDIT_TRAIL_TOKEN` env vars** —
 neither exists anymore. Both surfaces now authenticate against real, per-merchant, DB-issued credentials

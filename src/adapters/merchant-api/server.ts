@@ -335,11 +335,12 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
       schema: {
         body: {
           type: 'object',
-          // noShowFeePaise/noShowGraceMinutes are deliberately absent from
-          // `required` now — the no-show fee is fully optional. Paired-or-
-          // neither is validatePolicyInput's job (NO_SHOW_FIELDS_MUST_BE_PAIRED),
-          // not something the wire schema enforces.
-          required: ['depositAmountPaise', 'cancellationLadder', 'holdTtlSeconds', 'maxConcurrentHoldsPerAgent', 'holdRateLimitPerMinute'],
+          // noShowFeePaise/noShowGraceMinutes/depositAmountPaise are
+          // deliberately absent from `required` now — both the no-show fee
+          // and the deposit are fully optional (payment-link feature
+          // follow-up). "Positive integer when set" is validatePolicyInput's
+          // job, not something the wire schema enforces.
+          required: ['cancellationLadder', 'holdTtlSeconds', 'maxConcurrentHoldsPerAgent', 'holdRateLimitPerMinute'],
           properties: {
             depositAmountPaise: { type: 'number' },
             cancellationLadder: {

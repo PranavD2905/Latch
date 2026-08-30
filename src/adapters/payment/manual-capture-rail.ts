@@ -4,6 +4,7 @@ import {
   AuthorizationNotFoundError,
   CaptureAmountMismatchError,
   PaymentRailError,
+  type AuthorizationOrder,
   type AuthorizationStatus,
   type AuthorizeParams,
   type AuthorizeResult,
@@ -12,14 +13,11 @@ import {
   type PaymentRail,
 } from '../../ports/payment-rail.js'
 import { instrumentRazorpayClient } from '../observability/metrics.js'
-import { DEFAULT_CAPTURE_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, isNotFound, parseRazorpaySdkError, receiptFor, sleep, toInstrument, toPaymentStatusValue, type RazorpayPaymentLike } from './razorpay-shared.js'
+import { DEFAULT_POLL_INTERVAL_MS, DEFAULT_QUICK_POLL_TIMEOUT_MS, isNotFound, parseRazorpaySdkError, receiptFor, sleep, toInstrument, toPaymentStatusValue, type RazorpayPaymentLike } from './razorpay-shared.js'
 
 export interface ManualCaptureRailOptions {
   keyId: string
   keySecret: string
-  /** Same shape as `RazorpayPaymentProviderOptions` — see dev-logs/006/007 for why authorising still needs a human at Checkout. */
-  authorizeTimeoutMs?: number
-  authorizePollIntervalMs?: number
 }
 
 /** dev-logs/005 constraint 3: `manual_expiry_period` maxes at 7200 minutes (5 days) — not a default we chose, a ceiling Razorpay enforces. */
@@ -34,33 +32,31 @@ export const MAX_MANUAL_EXPIRY_MINUTES = 7200
  *
  * Shares `RazorpayPaymentProvider`'s create-order-then-poll shape
  * (dev-logs/006/007): a standard test account cannot submit a payment
- * server-side, so `authorize()` creates an order with manual capture and
- * waits for a human to complete Checkout against it, exactly like
- * `captureDeposit`. The two payment objects at `confirm_with_deposit`
- * (deposit + authorisation) are therefore two separate Checkout completions
- * in this build — an honest consequence of the account-permission gate
- * dev-logs/006/007 already documented, not a new one.
+ * server-side, so `ensureAuthorizationOrder` creates an order with manual
+ * capture and `pollAuthorization` checks whether a human has completed
+ * Checkout against it, exactly like the deposit leg. The two (or three,
+ * counting the session-complete mandate) payment objects at
+ * `confirm_with_deposit` are therefore separate Checkout completions in this
+ * build — an honest consequence of the account-permission gate
+ * dev-logs/006/007 already documented, not a new one. Payment-link feature
+ * (dev-logs entry for this slice): `authorize()` used to be one
+ * long-blocking create-then-poll-for-five-minutes call — split for the same
+ * reason `RazorpayPaymentProvider`'s was.
  */
 export class ManualCaptureRail implements PaymentRail {
   readonly name = 'manual_capture' as const
   private readonly client: Razorpay
-  private readonly authorizeTimeoutMs: number
-  private readonly authorizePollIntervalMs: number
 
   constructor(options: ManualCaptureRailOptions) {
     this.client = instrumentRazorpayClient(new Razorpay({ key_id: options.keyId, key_secret: options.keySecret }))
-    this.authorizeTimeoutMs = options.authorizeTimeoutMs ?? DEFAULT_CAPTURE_TIMEOUT_MS
-    this.authorizePollIntervalMs = options.authorizePollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
   }
 
-  async authorize(params: AuthorizeParams): Promise<AuthorizeResult> {
+  async ensureAuthorizationOrder(params: AuthorizeParams): Promise<AuthorizationOrder> {
     const receipt = receiptFor(params.idempotencyKey)
-
-    let order
     try {
-      order = await this.findOrder(receipt)
-      if (!order) {
-        order = await this.client.orders.create({
+      const order =
+        (await this.findOrder(receipt)) ??
+        (await this.client.orders.create({
           amount: params.amountPaise,
           currency: 'INR',
           receipt,
@@ -81,35 +77,39 @@ export class ManualCaptureRail implements PaymentRail {
           // fetching the order a `payment.authorized`/`payment.captured`
           // event's `order_id` points at.
           notes: { bookingId: params.reference },
-        })
-      }
+        }))
+      return { orderId: order.id, amountPaise: toPaise(Number(order.amount)) }
     } catch (err) {
       throw new PaymentRailError(params.reference, err, parseRazorpaySdkError(err))
     }
+  }
 
-    const deadline = Date.now() + this.authorizeTimeoutMs
+  async pollAuthorization(order: AuthorizationOrder, reference: string, now: Date, options?: { timeoutMs?: number }): Promise<AuthorizeResult | undefined> {
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_QUICK_POLL_TIMEOUT_MS
+    const deadline = Date.now() + timeoutMs
+
     for (;;) {
       let payment: RazorpayPaymentLike | undefined
       try {
-        payment = await this.latestPaymentFor(order.id)
+        payment = await this.latestPaymentFor(order.orderId)
       } catch (err) {
-        throw new PaymentRailError(params.reference, err, parseRazorpaySdkError(err))
+        throw new PaymentRailError(reference, err, parseRazorpaySdkError(err))
       }
 
       if (payment?.status === 'authorized') {
         return {
           authorizationId: payment.id,
           amountPaise: toPaise(Number(payment.amount)),
-          expiresAt: new Date(params.now.getTime() + MAX_MANUAL_EXPIRY_MINUTES * 60_000),
+          expiresAt: new Date(now.getTime() + MAX_MANUAL_EXPIRY_MINUTES * 60_000),
         }
       }
       if (payment?.status === 'failed') {
-        throw new PaymentRailError(params.reference, new Error(`authorization attempt failed for ${params.reference}`))
+        throw new PaymentRailError(reference, new Error(`authorization attempt failed for ${reference}`))
       }
       if (Date.now() >= deadline) {
-        throw new PaymentRailError(params.reference, new Error(`no authorization landed for ${params.reference} within ${this.authorizeTimeoutMs}ms`))
+        return undefined
       }
-      await sleep(this.authorizePollIntervalMs)
+      await sleep(DEFAULT_POLL_INTERVAL_MS)
     }
   }
 

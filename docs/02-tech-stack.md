@@ -290,9 +290,9 @@ near-instant.
 ## 13. Payments — Razorpay Node SDK, test mode
 
 Mandated by the competition, and correct anyway. Wrapped behind a `PaymentProvider` port so the domain
-never imports the SDK, and so `FakePaymentProvider` can simulate declines, timeouts, and — importantly
-— **a rail-side capture rejection**, which is hard to trigger reliably against a live sandbox but must be
-proven to work.
+never imports the SDK, and so `FakePaymentProvider` can simulate declines, a payment link nobody has paid
+yet (`'pending'`), and — importantly — **a rail-side capture rejection**, which is hard to trigger
+reliably against a live sandbox but must be proven to work.
 
 ---
 

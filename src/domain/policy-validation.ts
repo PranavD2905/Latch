@@ -67,9 +67,13 @@ function inBounds(n: number, bounds: { min: number; max: number }): boolean {
  * named in this task's own brief; see each branch's comment for which one.
  */
 export function validatePolicyInput(input: PolicyDraft): void {
-  // "All amounts positive integer paise."
-  if (!isPositiveInteger(input.depositAmountPaise)) {
-    throw new PolicyValidationError('AMOUNT_NOT_POSITIVE_INTEGER', `depositAmountPaise must be a positive integer, got ${input.depositAmountPaise}`)
+  // Deposit is fully optional (payment-link feature follow-up) — a merchant
+  // may run with no upfront deposit at all, relying only on the no-show
+  // and/or session-complete authorisation legs. Unlike no-show fee/grace,
+  // there's no paired field to enforce here; "positive integer when set" is
+  // the whole rule.
+  if (input.depositAmountPaise !== undefined && !isPositiveInteger(input.depositAmountPaise)) {
+    throw new PolicyValidationError('AMOUNT_NOT_POSITIVE_INTEGER', `depositAmountPaise must be a positive integer when set, got ${input.depositAmountPaise}`)
   }
 
   // No-show is fully optional now — but paired: a fee with no grace period

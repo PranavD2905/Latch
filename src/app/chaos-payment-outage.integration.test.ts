@@ -12,9 +12,18 @@ import { bookings, events } from '../adapters/db/schema.js'
 import { SEED_MERCHANT_ID, SEED_PRACTITIONER_ID, SEED_SERVICE_ID } from '../adapters/db/seed-data.js'
 import { FakePaymentProvider } from '../adapters/payment/fake-payment-provider.js'
 import { FakePaymentRail } from '../adapters/payment/fake-payment-rail.js'
-import { PaymentRailError, type AuthorizeParams, type AuthorizeResult, type CaptureAuthorizationParams, type CaptureAuthorizationResult, type PaymentRail } from '../ports/payment-rail.js'
+import {
+  PaymentRailError,
+  type AuthorizationOrder,
+  type AuthorizeParams,
+  type AuthorizeResult,
+  type CaptureAuthorizationParams,
+  type CaptureAuthorizationResult,
+  type PaymentRail,
+} from '../ports/payment-rail.js'
 import { CircuitBreaker } from './circuit-breaker.js'
 import { confirmWithDeposit } from './confirm-with-deposit.js'
+import { requireConfirmed } from './confirm-with-deposit-test-support.js'
 import { getPolicy } from './get-policy.js'
 import { holdSlot } from './hold-slot.js'
 import type { AppDeps } from './types.js'
@@ -37,25 +46,30 @@ function freshKey(): string {
 const createdBookingIds: string[] = []
 
 /**
- * Wraps a real `PaymentRail` so `authorize` throws for one specific
- * idempotency key while every other call (including `captureDeposit` on the
- * separate `PaymentProvider` port `confirmWithDeposit` calls concurrently —
- * dev-logs/001, docs/01-architecture.md Idea 3) behaves normally. This is
- * the shape of a real partial outage: one leg of a payment provider's API
- * degrades while another (or another provider entirely) stays healthy —
- * `PaymentRailError` mirrors what `ManualCaptureRail` itself throws for an
- * unexpected Razorpay SDK failure (`src/adapters/payment/manual-capture-rail.ts`,
- * dev-logs/006), not a synthetic error type invented for this test.
+ * Wraps a real `PaymentRail` so `ensureAuthorizationOrder` throws for one
+ * specific idempotency key while every other call (including the deposit
+ * leg on the separate `PaymentProvider` port `confirmWithDeposit` calls
+ * concurrently — dev-logs/001, docs/01-architecture.md Idea 3) behaves
+ * normally. This is the shape of a real partial outage: one leg of a
+ * payment provider's API degrades while another (or another provider
+ * entirely) stays healthy — `PaymentRailError` mirrors what
+ * `ManualCaptureRail` itself throws for an unexpected Razorpay SDK failure
+ * (`src/adapters/payment/manual-capture-rail.ts`, dev-logs/006), not a
+ * synthetic error type invented for this test. Failing at order creation
+ * (rather than the poll) is the earliest point a real outage could hit this
+ * leg — `confirm-with-deposit.ts` treats either failure the same way.
  */
 function railThatFailsAuthorizeFor(real: PaymentRail, failingKey: string): PaymentRail {
   return {
     name: real.name,
-    authorize: async (params: AuthorizeParams): Promise<AuthorizeResult> => {
+    ensureAuthorizationOrder: async (params: AuthorizeParams): Promise<AuthorizationOrder> => {
       if (params.idempotencyKey === failingKey) {
         throw new PaymentRailError(params.reference, new Error('simulated no-show-authorization outage'))
       }
-      return real.authorize(params)
+      return real.ensureAuthorizationOrder(params)
     },
+    pollAuthorization: (order: AuthorizationOrder, reference: string, now: Date, options?: { timeoutMs?: number }): Promise<AuthorizeResult | undefined> =>
+      real.pollAuthorization(order, reference, now, options),
     captureAuthorization: (params: CaptureAuthorizationParams): Promise<CaptureAuthorizationResult> => real.captureAuthorization(params),
     fetchAuthorizationStatus: (authorizationId: string) => real.fetchAuthorizationStatus(authorizationId),
   }
@@ -130,9 +144,11 @@ describe('chaos: a payment-provider outage mid confirm_with_deposit', () => {
 
     // No longer rejects: the no-show leg's outage no longer takes the
     // already-captured deposit down with it.
-    const result = await confirmWithDeposit(
-      { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: failingIdempotencyKey },
-      deps,
+    const result = requireConfirmed(
+      await confirmWithDeposit(
+        { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: failingIdempotencyKey },
+        deps,
+      ),
     )
     expect(result.status).toBe('CONFIRMED')
     expect(result.authorization).toBeUndefined() // the failed leg — absent, not silently retried or faked

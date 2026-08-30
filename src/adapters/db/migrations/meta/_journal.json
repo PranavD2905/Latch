@@ -106,6 +106,20 @@
       "when": 1787908073493,
       "tag": "0014_idempotency_keys_created_at_index",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1787994473493,
+      "tag": "0015_payment_link",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1788091273493,
+      "tag": "0016_optional_deposit",
+      "breakpoints": true
     }
   ]
 }

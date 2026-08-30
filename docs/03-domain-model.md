@@ -47,16 +47,16 @@ never be observed out of sync."
 ```jsonc
 {
   "policy_version": 4,                    // bumped on every change; events cite the version
-  "deposit": {
+  "deposit": {                            // OPTIONAL as a whole — omit it to run with no upfront deposit
     "type": "fixed",
-    "amount_paise": 30000                 // ₹300
+    "amount_paise": 30000                 // ₹300 — a positive integer when present; never 0
   },
   "cancellation_ladder": [                // ordered, descending by hours_before
     { "hours_before": 48, "retain_pct": 0   },
     { "hours_before": 12, "retain_pct": 50  },
     { "hours_before": 0,  "retain_pct": 100 }
   ],
-  "no_show": {
+  "no_show": {                            // OPTIONAL as a whole — fee and grace are set together or not at all
     "fee_paise": 40000,                   // ₹400 — ALSO the authorised amount; there is no headroom
     "grace_minutes": 15
   },
@@ -65,6 +65,16 @@ never be observed out of sync."
   "hold_rate_limit_per_minute": 10        // dev-logs/014: request-rate ceiling, independent of the concurrent-hold count above
 }
 ```
+
+**Which legs a booking actually has is a policy consequence, not a code branch** (payment-link feature
+follow-up, dev-logs entry). `deposit` and `no_show` are each independently optional, and the
+session-complete mandate is `service.price_paise - (deposit.amount_paise ?? 0)` — zero when the service
+is priced exactly at the deposit. So a booking carries between one and three payment legs depending
+entirely on what the merchant configured, and `confirm_with_deposit` offers a pay link for exactly
+those. A merchant with no deposit and no no-show fee has a single leg: the session-complete hold for
+the full price. Absent is the only way to express "no deposit" — an explicit `0` is rejected by
+`validatePolicyInput`, which is what makes a ₹0 Razorpay order structurally impossible rather than
+merely avoided.
 
 **Why versioned.** A booking made under ladder v4 must be cancelled under ladder v4, even if the
 merchant has since published v5. Money rules cannot change retroactively on a customer who already
@@ -194,6 +204,17 @@ and `reschedule` never have to special-case a booking that's practically still c
 technically past its no-show window. The event still lands in the trail, in order, exactly where the
 diagram shows it — only the projected `status` field stays put.
 
+**A note on `confirm_with_deposit`'s `PENDING` result, added with the payment-link feature (dev-logs
+entry for this slice).** Not a state on this diagram, and deliberately so. Since a standard test account
+has no server-to-server way to submit a payment (dev-logs/006/007), a human has to actually pay before
+this transition can complete — `confirm_with_deposit` hands back one pay link (covering every
+applicable leg) and a `PENDING` *result* the first time it's called, then the *same* `HELD → CONFIRMED`
+transition shown above once every applicable leg has landed, on a later call with the same idempotency
+key. `PENDING` is a property of the response, not of
+the booking: the projection's `status` column stays `HELD` for the entire time a human is deciding
+whether to pay, exactly as it already did before this feature existed for any other reason a confirm
+attempt might not immediately succeed. No new box belongs on this diagram.
+
 ### Reschedule deserves a note
 
 Reschedule is a **self-transition**, not a cancel-and-rebook. `CONFIRMED → CONFIRMED`, same booking id,
@@ -250,6 +271,7 @@ The append-only log. Every row is immutable.
 | `BOOKING_COMPLETED` | — | `mark_complete`, when there is no session-complete mandate to capture (service priced exactly at the deposit) — the fact of completion with no money attached |
 | `ACTION_REFUSED` | — | A gate or bound rejected a command ★★ |
 | `RECONCILIATION_MISMATCH` | — | The reconciliation worker or the Razorpay webhook found the trail disagreeing with Razorpay's own record ★★★ |
+| `PAYMENT_REQUESTED` | — | `confirm_with_deposit` returns `PENDING`: one or more pay links issued, nobody has paid yet ★★★★ |
 
 ★ the B5 failure path. `AUTHORIZATION_RELEASED` is also part of it. Slice 3 appended it as a stub
 (`rail`, a free-text `note`, no `authorizationId`) because no-show authorisation registration was
@@ -269,6 +291,15 @@ Carries `subject` (`deposit` | `authorization` | `unrecorded_payment`), the Razo
 what the trail expected, what was actually observed, and `detectedVia` (`periodic_worker` | `webhook`).
 Deduplicated against the most recently recorded finding for the same subject+id, so a persistent,
 unresolved mismatch is recorded once, not every tick.
+
+★★★★ **Payment-link feature, dev-logs entry for this slice.** Not a money event — no rupee has moved,
+`action.direction` would be a lie. Carries `legs`, an array of `{leg, orderId, amountPaise, label}` for
+every leg this booking's policy actually calls for (see §2 — between one and three of `deposit` /
+`no_show_authorization` / `session_complete_authorization`), done or not: the single `/pay/:bookingId`
+page renders per-leg status from it, so it needs the whole set, not just what is outstanding. Exists purely so the trail explains the gap between `POLICY_ACKNOWLEDGED` and
+`DEPOSIT_CAPTURED` when that gap is a human taking a minute to open a link and pay, rather than leaving
+it unaccounted for. `PENDING` — the result `confirm_with_deposit` returns when this fires — is a
+**result shape**, not a booking status; see §3's own note. The booking stays `HELD` throughout.
 
 **A note on ordering the log for display, added in Slice 6.** `occurredAt` is a domain timestamp off the
 `Clock` port, and integration tests legitimately run a `FrozenClock` far into the future to simulate

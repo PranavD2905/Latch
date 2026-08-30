@@ -1,4 +1,4 @@
-import type { BookingEvent } from '../domain/events.js'
+import type { BookingEvent, PaymentRequestedLeg } from '../domain/events.js'
 import type { BookingStatus } from '../domain/fold.js'
 import type { Paise } from '../domain/money.js'
 
@@ -44,6 +44,15 @@ export interface BookingSnapshot {
   agentId: string | undefined
   /** Set only while status is HELD — when the hold's TTL expires. */
   holdExpiresAt: Date | undefined
+  /**
+   * The payment-link feature — whichever legs `confirm_with_deposit` most
+   * recently issued a pay link for and is still waiting on. `undefined` once
+   * there's nothing pending (never issued, or already resolved into
+   * `CONFIRMED`). `GET /pay/:bookingId` (`audit-trail/server.ts`)
+   * resolves a link's amount/order/label from here — see dev-logs entry for
+   * this feature on why the URL itself never carries an authoritative amount.
+   */
+  pendingPaymentLegs: readonly PaymentRequestedLeg[] | undefined
   lastEventSequence: number
 }
 

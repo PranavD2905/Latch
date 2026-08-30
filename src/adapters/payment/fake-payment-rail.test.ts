@@ -8,52 +8,86 @@ const NOW = new Date('2026-08-25T00:00:00+05:30')
 describe('FakePaymentRail', () => {
   it('defaults to success, authorising exactly the requested amount', async () => {
     const rail = new FakePaymentRail()
-    const result = await rail.authorize({ amountPaise: toPaise(40000), idempotencyKey: 'k1', reference: 'bkg_1', now: NOW })
-    expect(result.amountPaise).toBe(40000)
-    expect(result.authorizationId).toMatch(/^pay_/)
-    expect(result.expiresAt.getTime()).toBeGreaterThan(NOW.getTime())
+    const params = { amountPaise: toPaise(40000), idempotencyKey: 'k1', reference: 'bkg_1', now: NOW }
+    const order = await rail.ensureAuthorizationOrder(params)
+    const result = await rail.pollAuthorization(order, params.reference, NOW)
+    expect(result?.amountPaise).toBe(40000)
+    expect(result?.authorizationId).toMatch(/^pay_/)
+    expect(result!.expiresAt.getTime()).toBeGreaterThan(NOW.getTime())
   })
 
   it('simulates a declined authorization', async () => {
     const rail = new FakePaymentRail()
     rail.setScenario('k2', 'decline')
-    await expect(rail.authorize({ amountPaise: toPaise(40000), idempotencyKey: 'k2', reference: 'bkg_2', now: NOW })).rejects.toThrow(PaymentRailError)
+    const params = { amountPaise: toPaise(40000), idempotencyKey: 'k2', reference: 'bkg_2', now: NOW }
+    const order = await rail.ensureAuthorizationOrder(params)
+    await expect(rail.pollAuthorization(order, params.reference, NOW)).rejects.toThrow(PaymentRailError)
   })
 
-  it('simulates an authorization timeout', async () => {
+  it('a pending scenario returns undefined — not authorised yet is not an error', async () => {
     const rail = new FakePaymentRail()
-    rail.setScenario('k3', 'timeout')
-    await expect(rail.authorize({ amountPaise: toPaise(40000), idempotencyKey: 'k3', reference: 'bkg_3', now: NOW })).rejects.toThrow(PaymentRailError)
+    rail.setScenario('k3', 'pending')
+    const params = { amountPaise: toPaise(40000), idempotencyKey: 'k3', reference: 'bkg_3', now: NOW }
+    const order = await rail.ensureAuthorizationOrder(params)
+    await expect(rail.pollAuthorization(order, params.reference, NOW)).resolves.toBeUndefined()
   })
 
-  it('replays the stored authorization for a repeated idempotency key instead of authorising again', async () => {
+  it('completeAuthorization flips a pending scenario to authorised, modelling a human paying the link later', async () => {
     const rail = new FakePaymentRail()
-    const first = await rail.authorize({ amountPaise: toPaise(40000), idempotencyKey: 'k4', reference: 'bkg_4', now: NOW })
-    const second = await rail.authorize({ amountPaise: toPaise(40000), idempotencyKey: 'k4', reference: 'bkg_4', now: NOW })
-    expect(second.authorizationId).toBe(first.authorizationId)
+    rail.setScenario('k9', 'pending')
+    const params = { amountPaise: toPaise(40000), idempotencyKey: 'k9', reference: 'bkg_9', now: NOW }
+    const order = await rail.ensureAuthorizationOrder(params)
+    await expect(rail.pollAuthorization(order, params.reference, NOW)).resolves.toBeUndefined()
+
+    rail.completeAuthorization('k9')
+    const result = await rail.pollAuthorization(order, params.reference, NOW)
+    expect(result?.amountPaise).toBe(40000)
+  })
+
+  it('ensureAuthorizationOrder is idempotent — a repeated call with the same key returns the same order, not a second one', async () => {
+    const rail = new FakePaymentRail()
+    const params = { amountPaise: toPaise(40000), idempotencyKey: 'k10', reference: 'bkg_10', now: NOW }
+    const first = await rail.ensureAuthorizationOrder(params)
+    const second = await rail.ensureAuthorizationOrder(params)
+    expect(second.orderId).toBe(first.orderId)
+  })
+
+  it('replays the stored authorization for a repeated poll against the same order instead of authorising again', async () => {
+    const rail = new FakePaymentRail()
+    const params = { amountPaise: toPaise(40000), idempotencyKey: 'k4', reference: 'bkg_4', now: NOW }
+    const order = await rail.ensureAuthorizationOrder(params)
+    const first = await rail.pollAuthorization(order, params.reference, NOW)
+    const second = await rail.pollAuthorization(order, params.reference, NOW)
+    expect(second?.authorizationId).toBe(first?.authorizationId)
   })
 
   it('captures an authorization in full when the amount matches exactly', async () => {
     const rail = new FakePaymentRail()
-    const authorized = await rail.authorize({ amountPaise: toPaise(40000), idempotencyKey: 'k5', reference: 'bkg_5', now: NOW })
-    const captured = await rail.captureAuthorization({ authorizationId: authorized.authorizationId, amountPaise: toPaise(40000), reference: 'bkg_5' })
-    expect(captured.paymentId).toBe(authorized.authorizationId)
+    const params = { amountPaise: toPaise(40000), idempotencyKey: 'k5', reference: 'bkg_5', now: NOW }
+    const order = await rail.ensureAuthorizationOrder(params)
+    const authorized = await rail.pollAuthorization(order, params.reference, NOW)
+    const captured = await rail.captureAuthorization({ authorizationId: authorized!.authorizationId, amountPaise: toPaise(40000), reference: 'bkg_5' })
+    expect(captured.paymentId).toBe(authorized!.authorizationId)
     expect(captured.amountPaise).toBe(40000)
   })
 
   it('replays the same capture result on a repeated call — no double-capture', async () => {
     const rail = new FakePaymentRail()
-    const authorized = await rail.authorize({ amountPaise: toPaise(40000), idempotencyKey: 'k6', reference: 'bkg_6', now: NOW })
-    const first = await rail.captureAuthorization({ authorizationId: authorized.authorizationId, amountPaise: toPaise(40000), reference: 'bkg_6' })
-    const second = await rail.captureAuthorization({ authorizationId: authorized.authorizationId, amountPaise: toPaise(40000), reference: 'bkg_6' })
+    const params = { amountPaise: toPaise(40000), idempotencyKey: 'k6', reference: 'bkg_6', now: NOW }
+    const order = await rail.ensureAuthorizationOrder(params)
+    const authorized = await rail.pollAuthorization(order, params.reference, NOW)
+    const first = await rail.captureAuthorization({ authorizationId: authorized!.authorizationId, amountPaise: toPaise(40000), reference: 'bkg_6' })
+    const second = await rail.captureAuthorization({ authorizationId: authorized!.authorizationId, amountPaise: toPaise(40000), reference: 'bkg_6' })
     expect(second).toEqual(first)
   })
 
   it('refuses a capture that is not exactly the authorised amount — the item-7 ceiling demo', async () => {
     const rail = new FakePaymentRail()
-    const authorized = await rail.authorize({ amountPaise: toPaise(40000), idempotencyKey: 'k7', reference: 'bkg_7', now: NOW })
+    const params = { amountPaise: toPaise(40000), idempotencyKey: 'k7', reference: 'bkg_7', now: NOW }
+    const order = await rail.ensureAuthorizationOrder(params)
+    const authorized = await rail.pollAuthorization(order, params.reference, NOW)
     await expect(
-      rail.captureAuthorization({ authorizationId: authorized.authorizationId, amountPaise: toPaise(40001), reference: 'bkg_7' }),
+      rail.captureAuthorization({ authorizationId: authorized!.authorizationId, amountPaise: toPaise(40001), reference: 'bkg_7' }),
     ).rejects.toThrow(CaptureAmountMismatchError)
   })
 

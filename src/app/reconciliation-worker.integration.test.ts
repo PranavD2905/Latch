@@ -16,6 +16,7 @@ import { FakePaymentProvider } from '../adapters/payment/fake-payment-provider.j
 import { FakePaymentRail } from '../adapters/payment/fake-payment-rail.js'
 import type { PaymentProvider } from '../ports/payment-provider.js'
 import { confirmWithDeposit } from './confirm-with-deposit.js'
+import { requireConfirmed } from './confirm-with-deposit-test-support.js'
 import { getPolicy } from './get-policy.js'
 import { holdSlot } from './hold-slot.js'
 import { reconcileObservedPayment } from './reconciliation.js'
@@ -62,11 +63,13 @@ async function confirmedBooking(hhmm: string): Promise<{ bookingId: string; auth
   const held = await holdSlot({ agentId, practitionerId: SEED_PRACTITIONER_ID, serviceId: SEED_SERVICE_ID, startsAt, idempotencyKey: freshKey() }, deps)
   createdBookingIds.push(held.bookingId)
   const policyResult = await getPolicy(deps)
-  const confirmed = await confirmWithDeposit(
-    { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: freshKey() },
-    deps,
+  const confirmed = requireConfirmed(
+    await confirmWithDeposit(
+      { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: freshKey() },
+      deps,
+    ),
   )
-  return { bookingId: held.bookingId, authorizationId: confirmed.authorization!.authorizationId, paymentId: confirmed.deposit.paymentId }
+  return { bookingId: held.bookingId, authorizationId: confirmed.authorization!.authorizationId, paymentId: confirmed.deposit!.paymentId }
 }
 
 beforeAll(async () => {
@@ -143,7 +146,8 @@ describe('reconciliation worker (real Postgres) — dev-logs/014 item 1, externa
     it('stops calling a Razorpay that keeps failing, and never records a failed check as a mismatch', async () => {
       let calls = 0
       const flakyProvider: PaymentProvider = {
-        captureDeposit: (p) => paymentProvider.captureDeposit(p),
+        ensureDepositOrder: (p) => paymentProvider.ensureDepositOrder(p),
+        pollDepositCapture: (order, reference) => paymentProvider.pollDepositCapture(order, reference),
         refundDeposit: (p) => paymentProvider.refundDeposit(p),
         fetchPaymentStatus: async (paymentId) => {
           calls++
@@ -194,7 +198,8 @@ describe('reconciliation worker (real Postgres) — dev-logs/014 item 1, externa
 
       const realStatus = paymentProvider.fetchPaymentStatus.bind(paymentProvider)
       const flakyProvider: PaymentProvider = {
-        captureDeposit: (p) => paymentProvider.captureDeposit(p),
+        ensureDepositOrder: (p) => paymentProvider.ensureDepositOrder(p),
+        pollDepositCapture: (order, reference) => paymentProvider.pollDepositCapture(order, reference),
         refundDeposit: (p) => paymentProvider.refundDeposit(p),
         fetchPaymentStatus: async (id) => {
           if (id === paymentId) throw new Error('simulated one-off failure for the healthy booking only')

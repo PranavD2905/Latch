@@ -41,7 +41,7 @@ export async function setPolicy(cmd: SetPolicyCommand, deps: AppDeps): Promise<S
   // non-negative integers — toPaise never throws here in practice.
   const input: PolicyInput = {
     ...cmd,
-    depositAmountPaise: toPaise(cmd.depositAmountPaise),
+    depositAmountPaise: cmd.depositAmountPaise === undefined ? undefined : toPaise(cmd.depositAmountPaise),
     noShowFeePaise: cmd.noShowFeePaise === undefined ? undefined : toPaise(cmd.noShowFeePaise),
   }
 

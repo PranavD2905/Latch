@@ -302,6 +302,31 @@ export interface ActionRefusedEvent extends EventBase {
   reason: string
 }
 
+/** One leg's pay link, as recorded on `PaymentRequestedEvent` — see that event's own doc comment. */
+export interface PaymentRequestedLeg {
+  leg: 'deposit' | 'no_show_authorization' | 'session_complete_authorization'
+  orderId: string
+  amountPaise: Paise
+  label: string
+}
+
+/**
+ * `confirm_with_deposit` returning a `PENDING` result (not a booking status —
+ * see `ConfirmWithDepositResult` in `src/app/confirm-with-deposit.ts`) issues
+ * one or more pay links and appends this so the trail explains the otherwise
+ * unaccounted-for gap between `POLICY_ACKNOWLEDGED` and `DEPOSIT_CAPTURED`:
+ * "we asked the customer for ₹300 at 14:04." Not a `MoneyFields` event — no
+ * money has moved yet, `action.direction` would be a lie; this only records
+ * that a request was made and what it was for. `orderId` is the rail's own
+ * order identifier (an opaque string here, deliberately — no Razorpay type
+ * crosses into `src/domain/`), the same id the `/pay` page resolves to build
+ * Checkout against.
+ */
+export interface PaymentRequestedEvent extends EventBase {
+  type: 'PAYMENT_REQUESTED'
+  legs: readonly PaymentRequestedLeg[]
+}
+
 // ---------------------------------------------------------------------------
 // Money-moving events — the four that carry MoneyFields.
 // ---------------------------------------------------------------------------
@@ -413,6 +438,7 @@ export type BookingEvent =
   | NoShowChargedEvent
   | ActionRefusedEvent
   | ReconciliationMismatchEvent
+  | PaymentRequestedEvent
 
 export const MONEY_EVENT_TYPES = [
   'DEPOSIT_CAPTURED',

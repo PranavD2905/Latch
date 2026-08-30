@@ -64,6 +64,18 @@ export interface AppDeps {
   /** Where a persistently-failing `POST /webhooks/razorpay` delivery gets recorded once it's failed enough times in a row that more Razorpay redeliveries alone won't fix it — see `app/webhook-dead-letter.ts`. */
   webhookDeadLetterStore: WebhookDeadLetterStore
   /**
+   * The public origin `confirm_with_deposit` builds pay links against — e.g.
+   * `https://latch-viewer-production.up.railway.app` in production,
+   * `http://localhost:4002` locally (`audit-trail/server.ts` serves
+   * `GET /pay/:bookingId`, dev-logs entry for the payment-link feature).
+   * A plain string, not a Razorpay/HTTP type, so building a URL from it stays
+   * ports-clean the same way `merchantId` already is. Optional, like
+   * `idempotencyClaimTimeoutMs` above — `confirm-with-deposit.ts` falls back
+   * to a local-dev default so the ~20 test files that construct an `AppDeps`
+   * for tools that never touch a pay link don't all need to name it.
+   */
+  payPageBaseUrl?: string
+  /**
    * Structured logging (`src/ports/logger.ts`). Request-scoped: the MCP HTTP
    * transport builds a `deps.logger.child({ traceId })` per request
    * (`streamable-http-server.ts`), so every log line an app-layer handler

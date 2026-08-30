@@ -15,13 +15,14 @@ import { FakePaymentProvider } from '../adapters/payment/fake-payment-provider.j
 import { FakePaymentRail } from '../adapters/payment/fake-payment-rail.js'
 import type { BookingEvent } from '../domain/events.js'
 import type {
+  AuthorizationOrder,
   AuthorizeParams,
   AuthorizeResult,
   CaptureAuthorizationParams,
   CaptureAuthorizationResult,
   PaymentRail as PaymentRailPort,
 } from '../ports/payment-rail.js'
-import type { CaptureDepositParams, CaptureDepositResult, PaymentProvider, RefundDepositParams, RefundDepositResult } from '../ports/payment-provider.js'
+import type { CaptureDepositParams, CaptureDepositResult, DepositOrder, PaymentProvider, RefundDepositParams, RefundDepositResult } from '../ports/payment-provider.js'
 import { confirmWithDeposit } from './confirm-with-deposit.js'
 import { getPolicy } from './get-policy.js'
 import { holdSlot } from './hold-slot.js'
@@ -38,16 +39,24 @@ function sleep(ms: number): Promise<void> {
  * final append — even FakePaymentProvider's near-instant resolution leaves
  * that window too narrow to reliably land a concurrent worker tick inside it
  * via ordinary Promise scheduling. This makes the straddled-race test below
- * deterministic instead of a timing gamble. dev-logs/013.
+ * deterministic instead of a timing gamble. dev-logs/013. The delay sits on
+ * `pollDepositCapture`/`pollAuthorization` — the step that actually decides
+ * whether money moved this round (payment-link feature, dev-logs entry for
+ * this slice split what used to be one `captureDeposit`/`authorize` call
+ * into a fast `ensureXOrder` plus this poll) — `ensureXOrder` itself stays
+ * fast, matching what it's meant to model in production.
  */
 class DelayedPaymentProvider implements PaymentProvider {
   constructor(
     private readonly inner: PaymentProvider,
     private readonly delayMs: number,
   ) {}
-  async captureDeposit(params: CaptureDepositParams): Promise<CaptureDepositResult> {
+  async ensureDepositOrder(params: CaptureDepositParams): Promise<DepositOrder> {
+    return this.inner.ensureDepositOrder(params)
+  }
+  async pollDepositCapture(order: DepositOrder, reference: string, options?: { timeoutMs?: number }): Promise<CaptureDepositResult | undefined> {
     await sleep(this.delayMs)
-    return this.inner.captureDeposit(params)
+    return this.inner.pollDepositCapture(order, reference, options)
   }
   async refundDeposit(params: RefundDepositParams): Promise<RefundDepositResult> {
     return this.inner.refundDeposit(params)
@@ -65,9 +74,12 @@ class DelayedPaymentRail implements PaymentRailPort {
   ) {
     this.name = inner.name
   }
-  async authorize(params: AuthorizeParams): Promise<AuthorizeResult> {
+  async ensureAuthorizationOrder(params: AuthorizeParams): Promise<AuthorizationOrder> {
+    return this.inner.ensureAuthorizationOrder(params)
+  }
+  async pollAuthorization(order: AuthorizationOrder, reference: string, now: Date, options?: { timeoutMs?: number }): Promise<AuthorizeResult | undefined> {
     await sleep(this.delayMs)
-    return this.inner.authorize(params)
+    return this.inner.pollAuthorization(order, reference, now, options)
   }
   async captureAuthorization(params: CaptureAuthorizationParams): Promise<CaptureAuthorizationResult> {
     return this.inner.captureAuthorization(params)

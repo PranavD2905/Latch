@@ -112,7 +112,7 @@ export class PostgresCatalogRepo implements CatalogRepo {
           merchantId,
           version: newVersion,
           depositType: 'fixed', // the only deposit type this domain models — see Policy's own doc comment
-          depositAmountPaise: input.depositAmountPaise,
+          depositAmountPaise: input.depositAmountPaise ?? null,
           cancellationLadder: input.cancellationLadder,
           noShowFeePaise: input.noShowFeePaise ?? null,
           noShowGraceMinutes: input.noShowGraceMinutes ?? null,
@@ -137,7 +137,7 @@ export class PostgresCatalogRepo implements CatalogRepo {
 function rowToPolicy(row: typeof policies.$inferSelect) {
   return {
     policyVersion: row.version,
-    depositAmountPaise: toPaise(row.depositAmountPaise),
+    depositAmountPaise: row.depositAmountPaise === null ? undefined : toPaise(row.depositAmountPaise),
     cancellationLadder: row.cancellationLadder as readonly LadderTier[],
     noShowFeePaise: row.noShowFeePaise === null ? undefined : toPaise(row.noShowFeePaise),
     noShowGraceMinutes: row.noShowGraceMinutes ?? undefined,

@@ -22,6 +22,12 @@ export interface CaptureDepositResult {
   instrument: Instrument
 }
 
+/** The order a human can pay against — `ensureDepositOrder`'s result. */
+export interface DepositOrder {
+  orderId: string
+  amountPaise: Paise
+}
+
 export interface RefundDepositParams {
   /** The `paymentId` a prior `captureDeposit` returned. */
   paymentId: string
@@ -54,13 +60,6 @@ export class PaymentDeclinedError extends Error {
   constructor(reference: string) {
     super(`Payment declined for ${reference}`)
     this.name = 'PaymentDeclinedError'
-  }
-}
-
-export class PaymentTimeoutError extends Error {
-  constructor(reference: string) {
-    super(`Payment timed out for ${reference}`)
-    this.name = 'PaymentTimeoutError'
   }
 }
 
@@ -121,7 +120,37 @@ function describeCause(cause: unknown): string {
  * type crosses into either.
  */
 export interface PaymentProvider {
-  captureDeposit(params: CaptureDepositParams): Promise<CaptureDepositResult>
+  /**
+   * Fast create-or-find, no waiting — the order a human needs to pay
+   * against. Payment-link feature (dev-logs entry for this slice): what used
+   * to be the first half of `captureDeposit`'s single long-blocking call,
+   * pulled out so `confirm_with_deposit` can hand a payable link back
+   * quickly instead of blocking with nothing to show for it. Idempotent by
+   * the same receipt-lookup-before-create mechanism `captureDeposit` always
+   * used (dev-logs/006) — calling this twice with the same `idempotencyKey`
+   * finds the same order, never creates a second one.
+   */
+  ensureDepositOrder(params: CaptureDepositParams): Promise<DepositOrder>
+  /**
+   * Polls up to `timeoutMs` (short — a few seconds by default, meant to
+   * catch a payer who was already mid-Checkout when this was called, not to
+   * wait out a real Checkout) for the given order — an `ensureDepositOrder`
+   * result the caller already holds — to show a captured payment. Takes the
+   * order directly rather than re-deriving it from `CaptureDepositParams`
+   * deliberately: a live test against real Razorpay found that calling
+   * `ensureDepositOrder` twice in quick succession (once explicitly, once
+   * again inside a naive `pollDepositCapture`) can create a *second* order
+   * for the same receipt — Razorpay's receipt lookup is not immediately
+   * consistent with a create that just happened milliseconds earlier. This
+   * shape makes that duplicate-order class of bug structurally impossible:
+   * there is no second lookup to race. Returns `undefined` — never throws a
+   * timeout — when nothing has landed yet: "not paid yet" is the ordinary
+   * case here, not a failure. Still throws `PaymentDeclinedError` for a
+   * definite decline and `PaymentProviderError` for a rail fault. Safe to
+   * call repeatedly with the same order (a later retry after the human
+   * actually pays just observes the now-captured order).
+   */
+  pollDepositCapture(order: DepositOrder, reference: string, options?: { timeoutMs?: number }): Promise<CaptureDepositResult | undefined>
   refundDeposit(params: RefundDepositParams): Promise<RefundDepositResult>
   /**
    * dev-logs/014: read-only, no side effect — asks Razorpay directly what a

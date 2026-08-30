@@ -17,6 +17,7 @@ import { createMerchantDeclinedEvent, createRefundIssuedEvent, createSlotRelease
 import type { BookingEvent } from '../domain/events.js'
 import { toPaise } from '../domain/money.js'
 import { confirmWithDeposit } from './confirm-with-deposit.js'
+import { requireConfirmed } from './confirm-with-deposit-test-support.js'
 import { BookingNotDeclinableError, declineBooking } from './decline-booking.js'
 import { getPolicy } from './get-policy.js'
 import { holdSlot } from './hold-slot.js'
@@ -66,11 +67,13 @@ async function holdAndConfirm(hhmm: string): Promise<{ bookingId: string; starts
   const held = await holdSlot({ agentId, practitionerId: SEED_PRACTITIONER_ID, serviceId: SEED_SERVICE_ID, startsAt, idempotencyKey: freshKey() }, deps)
   createdBookingIds.push(held.bookingId)
   const policyResult = await getPolicy(deps)
-  const confirmed = await confirmWithDeposit(
-    { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: freshKey() },
-    deps,
+  const confirmed = requireConfirmed(
+    await confirmWithDeposit(
+      { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: freshKey() },
+      deps,
+    ),
   )
-  return { bookingId: held.bookingId, startsAt, depositAmountPaise: confirmed.deposit.amountPaise }
+  return { bookingId: held.bookingId, startsAt, depositAmountPaise: confirmed.deposit!.amountPaise }
 }
 
 beforeAll(async () => {

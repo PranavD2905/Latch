@@ -25,6 +25,12 @@ export interface AuthorizeResult {
   expiresAt: Date
 }
 
+/** The order a human can pay against — `ensureAuthorizationOrder`'s result. */
+export interface AuthorizationOrder {
+  orderId: string
+  amountPaise: Paise
+}
+
 export interface CaptureAuthorizationParams {
   authorizationId: string
   /** Must equal the amount `authorize()` returned — docs/01-architecture.md Idea 3, constraint 1: the rail refuses anything else. */
@@ -130,7 +136,28 @@ export interface AuthorizationStatus {
 
 export interface PaymentRail {
   readonly name: PaymentRailName
-  authorize(params: AuthorizeParams): Promise<AuthorizeResult>
+  /**
+   * Fast create-or-find, no waiting — mirrors `PaymentProvider.ensureDepositOrder`,
+   * same reasoning (payment-link feature, dev-logs entry for this slice):
+   * pulled out of what used to be `authorize()`'s single long-blocking call
+   * so `confirm_with_deposit` can hand back a payable link quickly.
+   * Idempotent by the same receipt-lookup-before-create mechanism `authorize()`
+   * always used.
+   */
+  ensureAuthorizationOrder(params: AuthorizeParams): Promise<AuthorizationOrder>
+  /**
+   * Polls up to `timeoutMs` (short by default — see `PaymentProvider.pollDepositCapture`'s
+   * own comment, same reasoning) for the given order — an
+   * `ensureAuthorizationOrder` result the caller already holds — to show an
+   * authorised payment. Takes the order directly rather than re-deriving it
+   * from `AuthorizeParams`, for the same reason `pollDepositCapture` does —
+   * a live test against real Razorpay found a naive re-derive can create a
+   * duplicate order under Razorpay's own receipt-lookup consistency lag.
+   * `now` is still needed separately (not carried on `AuthorizationOrder`)
+   * to compute `expiresAt` from the server clock. Returns `undefined` rather
+   * than throwing when nothing has landed yet.
+   */
+  pollAuthorization(order: AuthorizationOrder, reference: string, now: Date, options?: { timeoutMs?: number }): Promise<AuthorizeResult | undefined>
   captureAuthorization(params: CaptureAuthorizationParams): Promise<CaptureAuthorizationResult>
   /** dev-logs/014 — the rail-side twin of `PaymentProvider.fetchPaymentStatus`, for the reconciliation worker. */
   fetchAuthorizationStatus(authorizationId: string): Promise<AuthorizationStatus>

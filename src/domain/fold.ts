@@ -145,6 +145,11 @@ function applyEvent(state: BookingState, event: BookingEvent): BookingState {
     // never changes what a pure replay believes the booking's status is,
     // same as ACTION_REFUSED above.
     case 'RECONCILIATION_MISMATCH':
+    // No money moved and the booking stays HELD — PENDING is a result shape
+    // `confirm_with_deposit` returns, never a booking status (see that
+    // command's own doc comment). This just records that a pay link was
+    // issued.
+    case 'PAYMENT_REQUESTED':
       return next
   }
 }

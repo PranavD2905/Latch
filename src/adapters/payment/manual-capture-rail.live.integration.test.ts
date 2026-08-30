@@ -1,14 +1,14 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import { toPaise } from '../../domain/money.js'
-import { PaymentRailError } from '../../ports/payment-rail.js'
 import { ManualCaptureRail } from './manual-capture-rail.js'
 
 /**
  * Hits real Razorpay test mode — no mocking, same convention as
- * razorpay-payment-provider.live.integration.test.ts. `authorize()` shares
- * that file's create-order-then-poll shape (dev-logs/006/007), so what it
- * proves live is the same class of thing: real order creation, against the
- * real API, with a real (short) timeout when nobody completes Checkout.
+ * razorpay-payment-provider.live.integration.test.ts. `ensureAuthorizationOrder`/
+ * `pollAuthorization` share that file's create-order-then-poll shape
+ * (dev-logs/006/007), so what it proves live is the same class of thing:
+ * real order creation, against the real API, with a real (short) poll that
+ * returns `undefined` rather than throwing when nobody completes Checkout.
  *
  * What this file does *not* cover: an authorised payment actually landing
  * in `authorized` state, `captureAuthorization()` succeeding, and the real
@@ -35,16 +35,30 @@ beforeAll(() => {
 })
 
 describe('ManualCaptureRail — real Razorpay test mode', () => {
-  it('authorize creates a real manual-capture order and times out with PaymentRailError when nobody completes Checkout', async () => {
-    const rail = new ManualCaptureRail({ keyId: keyId!, keySecret: keySecret!, authorizeTimeoutMs: 4000, authorizePollIntervalMs: 1000 })
+  it('ensureAuthorizationOrder creates a real manual-capture order fast, without waiting for a payment', async () => {
+    const rail = new ManualCaptureRail({ keyId: keyId!, keySecret: keySecret! })
 
-    await expect(
-      rail.authorize({
-        amountPaise: NO_SHOW_FEE_PAISE,
-        idempotencyKey: `live-test-unpaid-auth-${Date.now()}`,
-        reference: 'live-test-unpaid-authorization',
-        now: new Date(),
-      }),
-    ).rejects.toThrow(PaymentRailError)
+    const order = await rail.ensureAuthorizationOrder({
+      amountPaise: NO_SHOW_FEE_PAISE,
+      idempotencyKey: `live-test-order-auth-${Date.now()}`,
+      reference: 'live-test-order-authorization',
+      now: new Date(),
+    })
+    expect(order.orderId).toMatch(/^order_/)
+    expect(order.amountPaise).toBe(40000)
+  })
+
+  it('pollAuthorization returns undefined — never throws — when nobody completes Checkout', async () => {
+    const rail = new ManualCaptureRail({ keyId: keyId!, keySecret: keySecret! })
+
+    const now = new Date()
+    const order = await rail.ensureAuthorizationOrder({
+      amountPaise: NO_SHOW_FEE_PAISE,
+      idempotencyKey: `live-test-unpaid-auth-${Date.now()}`,
+      reference: 'live-test-unpaid-authorization',
+      now,
+    })
+    const result = await rail.pollAuthorization(order, 'live-test-unpaid-authorization', now, { timeoutMs: 4000 })
+    expect(result).toBeUndefined()
   }, 10_000)
 })

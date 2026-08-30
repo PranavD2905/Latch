@@ -19,6 +19,7 @@ import { toPaise } from '../domain/money.js'
 import { CaptureAmountMismatchError } from '../ports/payment-rail.js'
 import { cancelBooking } from './cancel-booking.js'
 import { confirmWithDeposit } from './confirm-with-deposit.js'
+import { requireConfirmed } from './confirm-with-deposit-test-support.js'
 import { getPolicy } from './get-policy.js'
 import { holdSlot } from './hold-slot.js'
 import type { AppDeps } from './types.js'
@@ -168,9 +169,11 @@ describe('agent trust boundary (docs/01-architecture.md §9)', () => {
     const held = await holdSlot({ agentId, practitionerId: SEED_PRACTITIONER_ID, serviceId: SEED_SERVICE_ID, startsAt: slotAt('10:00'), idempotencyKey: freshKey() }, deps)
     createdBookingIds.push(held.bookingId)
     const policyResult = await getPolicy(deps)
-    const confirmed = await confirmWithDeposit(
-      { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: freshKey() },
-      deps,
+    const confirmed = requireConfirmed(
+      await confirmWithDeposit(
+        { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: freshKey() },
+        deps,
+      ),
     )
 
     // ChargeNoShowCommand (src/app/charge-no-show.ts) has no amountPaise
