@@ -1,0 +1,51 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+@import 'tailwindcss';
+
+:root {
+  color-scheme: light;
+
+  /* page & surfaces */
+  --bg: #f4f4f6;
+  --surface: #ffffff;
+  --border: #e4e4e9;
+  --border-strong: #d3d3da;
+  --text: #14141a;
+  --text-muted: #6b6b76;
+  --text-faint: #9a9aa4;
+
+  /* accent (dataviz categorical slot 1) */
+  --blue: #2a78d6;
+  --blue-bg: #eaf1fc;
+  --blue-text: #1d5aa8;
+
+  /* status pills — tinted bg + darkened text-on-tint for contrast, base hues borrowed from the dataviz skill's status palette */
+  --good: #0ca30c;
+  --good-bg: #e6f6ea;
+  --good-text: #0a7d2e;
+  --warning: #fab219;
+  --warning-bg: #fdf1d9;
+  --warning-text: #8a5b0a;
+  --critical: #d03b3b;
+  --critical-bg: #fbe9ea;
+  --critical-text: #b02a3a;
+  --slate: #55555f;
+  --slate-bg: #f0f0f3;
+
+  /* chart-only series (validated: scripts/validate_palette.js "#2a78d6,#1baf7a" --mode light --surface #ffffff) */
+  --series-cost: #2a78d6;
+  --series-retention: #1baf7a;
+  --chart-grid: #e1e0d9;
+  --chart-baseline: #c3c2b7;
+  --chart-muted: #898781;
+
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}

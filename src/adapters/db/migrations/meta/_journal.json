@@ -1,0 +1,125 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1787472671212,
+      "tag": "0000_whole_onslaught",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1787472678648,
+      "tag": "0001_partial_unique_index_one_live_booking_per_slot",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787473562590,
+      "tag": "0002_slim_vulture",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787503669221,
+      "tag": "0003_lean_gorgon",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1787545200000,
+      "tag": "0004_authorization_hold",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787548800000,
+      "tag": "0005_authorization_amount",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787552400000,
+      "tag": "0006_drop_mandate_ceiling",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787556000000,
+      "tag": "0007_spicy_xavin",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787559600000,
+      "tag": "0008_aberrant_annihilus",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787664182206,
+      "tag": "0009_stiff_lethal_legion",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1787664183206,
+      "tag": "0010_policies_immutable",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1787664184206,
+      "tag": "0011_multi_tenant_auth",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1787758699771,
+      "tag": "0012_webhook_dead_letters",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1787758699772,
+      "tag": "0013_session_complete_charge",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1787908073493,
+      "tag": "0014_idempotency_keys_created_at_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1787994473493,
+      "tag": "0015_payment_link",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1788091273493,
+      "tag": "0016_optional_deposit",
+      "breakpoints": true
+    }
+  ]
+}

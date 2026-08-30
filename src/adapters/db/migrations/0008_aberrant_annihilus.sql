@@ -1,0 +1,1 @@
+ALTER TABLE "events" ADD COLUMN "global_sequence" bigserial NOT NULL;
