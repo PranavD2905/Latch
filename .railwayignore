@@ -1,0 +1,19 @@
+# `railway up` uploads the working directory as the build context. It already
+# honours .gitignore, but `.env` is worth excluding explicitly and belt-and-
+# braces: every entrypoint calls `loadEnvFile()` (src/adapters/load-env.ts),
+# so a `.env` that reached the image would *override* the variables Railway
+# injects — pointing a deployed service at `localhost:5432` and leaking real
+# Razorpay keys into the build context at the same time. Neither failure is
+# loud; both are avoided here rather than relied on not to happen.
+.env
+.env.*
+!.env.example
+
+node_modules
+web/node_modules
+dist
+web/dist
+
+# Local-only scratch: never part of a deployed image.
+.tmp-probe
+*.log
