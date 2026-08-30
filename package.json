@@ -17,6 +17,7 @@
     "db:migrate": "tsx src/adapters/db/migrate.ts",
     "db:seed": "tsx src/adapters/db/seed.ts",
     "db:create-merchant": "tsx src/adapters/db/create-merchant.ts",
+    "db:issue-token": "tsx src/adapters/db/issue-token.ts",
     "mcp:dev": "tsx src/adapters/mcp/stdio.ts",
     "mcp:dev:razorpay": "PAYMENT_PROVIDER=razorpay tsx src/adapters/mcp/stdio.ts",
     "mcp:http:dev": "tsx src/adapters/mcp/http.ts",

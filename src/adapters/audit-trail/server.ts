@@ -118,6 +118,21 @@ export function createAuditTrailServer(deps: AppDeps, options: AuditTrailServerO
   // block, and merchant-api's contract (JSON only, Bearer-token gated) isn't
   // worth reshaping for one HTML route.
   app.get<{ Params: { bookingId: string } }>('/pay/:bookingId', async (request, reply) => {
+    // Razorpay Checkout's netbanking/UPI flows hand off to the bank in a
+    // popup and then post the result back through `window.opener`. Helmet's
+    // default `Cross-Origin-Opener-Policy: same-origin` severs exactly that
+    // reference, so the popup opens, cannot navigate, and sits on
+    // `about:blank` forever — the payment stalls at Razorpay `status=created`
+    // with no error, because nothing failed; the handoff just never
+    // completed. Card payments are unaffected (no popup), which is why this
+    // survived until someone paid by netbanking.
+    //
+    // Scoped to this one route rather than the whole server: the viewer SPA
+    // opens no popups and keeps the stricter default. `unsafe-none` is
+    // Helmet's own opt-out value, and CORP is widened for the same handoff.
+    void reply.header('Cross-Origin-Opener-Policy', 'unsafe-none')
+    void reply.header('Cross-Origin-Resource-Policy', 'cross-origin')
+
     const { bookingId } = request.params
     const snapshot = await deps.eventStore.loadSnapshot(bookingId)
     const legs = snapshot?.pendingPaymentLegs

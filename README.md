@@ -6,6 +6,18 @@ Razorpay AI Buildathon 2026 · Track 01: AI Growth & Agentic Commerce
 
 ---
 
+## Try it right now — live, deployed, real Razorpay test mode
+
+No setup required. These are running services, not screenshots.
+
+| What | Link |
+|---|---|
+| **Live audit trail viewer** | **[latch-viewer-production.up.railway.app](https://latch-viewer-production.up.railway.app)** |
+| MCP endpoint (connect any agent to it) | `https://latch-mcp-production.up.railway.app/mcp/mer_clinic` |
+| Merchant API (decline / mark-no-show / policy) | `https://latch-merchant-api-production.up.railway.app` |
+
+Point any MCP-capable agent (Claude Desktop + [`mcp-remote`](https://www.npmjs.com/package/mcp-remote), Claude Code, etc.) at the MCP URL above — no API key, no partnership, no integration call needed, which is the entire thesis. Ask it to *"find a dermatology consult slot with Dr. Rao and hold it."* Then open the viewer link and watch the event land, live, in the audit trail — no refresh needed.
+
 ## The problem
 
 Tell your AI assistant *"book me a dermatologist for Thursday afternoon."*
@@ -57,13 +69,17 @@ money-and-time semantics of a service transaction, in a form an arbitrary agent 
 | `find_slots` | — | — | — | — |
 | `get_policy` | — | — | — | — |
 | `get_booking` | — | — | — | — |
-| `hold_slot` | **none** | Slot free | Concurrent holds; TTL | DB constraint |
+| `hold_slot` | **none** | Slot free | Concurrent holds; TTL; per-agent hold rate | DB constraint |
 | `confirm_with_deposit` | deposit capture | Live hold + policy acknowledged | Deposit amount; authorisation ceiling | Latch + **Razorpay** |
 | `reschedule` | price delta only | Target free + ladder permits | Delta ≤ booking value | Latch |
 | `cancel` | refund / retention | Tier from **server clock** | Ladder tier | Latch |
 | `charge_no_show` | debit | Start elapsed **+** merchant marked non-attendance | The authorised amount | **Razorpay** |
 
-## Three architectural claims
+`confirm_with_deposit` returns immediately with a payable link rather than blocking the agent for
+minutes on a human completing Checkout — the agent hands the link over, the human pays in their own
+time, and `get_booking` reports which legs (deposit, no-show authorisation) are still outstanding.
+
+## Architecture — the four ideas that shape everything
 
 **1. The audit trail is the database, not a log beside it.**
 Event-sourced. Booking state is a fold over an append-only event log. The system cannot move money
@@ -81,8 +97,35 @@ uncaptured. Razorpay's Capture API refuses any capture that is not equal to the 
 there is no headroom, and a compromised Latch server cannot capture a rupee more than the customer
 consented to in front of a stated policy.
 
-> The bar asks for bounds that are *"impossible, not merely caught."* A server-side `if` is caught. A
+> The bar asks for bounds that are *"impossible, not merely caught."* A server-side `if` is caught. An
 > authorisation ceiling, a partial unique index, and a server-owned clock are impossible.
+
+**4. Every layer is hexagonal — domain, ports, adapters.**
+`src/domain/` is pure: no HTTP, no database, no Razorpay SDK, no `Date.now()`. It only ever talks to
+`src/ports/` interfaces (`Clock`, `EventStore`, `PaymentProvider`, `PaymentRail`). Concrete
+implementations (`src/adapters/`) plug in from outside — which is what let the payment rail itself be
+replaced mid-build (mandates → card manual-capture, `dev-logs/005`) without touching a single domain
+file, and what let a second inbound surface (a plain REST `GET /slots`, reusing `find_slots`'s app-layer
+handler unchanged) get built to prove that reuse claim rather than just assert it.
+
+```
+AI Agent ──MCP──▶ MCP Server ──command──▶ Domain Core (decides, touches nothing else)
+                                                │
+                                    only through an interface ("port")
+                                                ▼
+                              Postgres · Razorpay · System Clock
+```
+
+### Also real, not just documented
+
+- **Multi-tenant**, added deliberately as a scalability proof once the core was solid (`migration 0011`) — real per-merchant, DB-issued credentials, tenant-scoped reads, `npm run db:create-merchant` onboards a new merchant with no redeploy. `docs/01-architecture.md` §10 keeps the original "not multi-tenant" call on record, struck through, with the reasoning for why it reversed cleanly — `merchantId` was threaded through the domain from Slice 0, so only the auth model ever needed to change.
+- **A reconciliation worker and a signature-verified webhook** independently check the trail against what Razorpay's own API says actually happened, and record `RECONCILIATION_MISMATCH` on disagreement rather than trusting a synchronous response alone.
+- **A circuit breaker** on outbound Razorpay calls, **webhook dead-lettering** after repeated identical failures, and **an advisory lock** that makes it safe to run more than one replica of the background workers without duplicating external API calls.
+- **Structured logging, Prometheus metrics, OpenTelemetry tracing, graceful shutdown, and a centralized, validated env config** — the observability a real deployment needs, not a demo veneer.
+
+Full rationale for every one of these, including what was evaluated and deliberately *not* built (a
+Redis-backed job queue, chief among them — re-verified against the original decision rather than added
+just because an external review suggested it), is in `docs/01-architecture.md` and the dev logs below.
 
 ## The failure, handled
 
@@ -101,9 +144,63 @@ net customer cost ₹0 · orphaned authorisations 0 · stranded holds 0 · manua
 Chosen because it is a failure of the **domain**, not of the implementation — goods commerce has no
 "seller rejects a paid order" flow at all. It is handling we had to build regardless, not a demo prop.
 
+## Running it yourself
+
+**Prerequisites:** Node ≥22, a local Postgres (this project's own dev machine uses
+[Postgres.app](https://postgresapp.com), not Docker — see `docs/07-deployment.md` for why), and (optional,
+only needed for the real-payment paths) a Razorpay test-mode account.
+
+```bash
+npm ci
+cp .env.example .env          # fill in DATABASE_URL at minimum; everything else has a sane default
+npm run db:migrate
+npm run db:seed               # creates the demo clinic, Dr. Rao, a service, a policy —
+                               # and PRINTS a merchant-api token and an audit-trail token once.
+                               # Copy them down; neither is stored anywhere in plaintext.
+```
+
+Run the pieces you need:
+
+```bash
+npm run mcp:dev                # MCP server over stdio — connect Claude Code/Desktop directly
+npm run mcp:http:dev           # MCP over Streamable HTTP, the deployed transport shape
+npm run merchant-api:dev       # decline / mark-no-show / policy — the merchant-only surface
+npm run audit-trail:dev        # the SSE feed the viewer reads
+npm run web:dev                # the viewer itself, at localhost:5173
+npm run worker:background:dev  # hold-expiry + no-show-eligibility
+npm run worker:dev             # authorisation-lapse
+npm run worker:reconciliation:dev
+```
+
+Append `:razorpay` to any of the above (e.g. `npm run mcp:dev:razorpay`) to use the real
+`RazorpayPaymentProvider`/`ManualCaptureRail` instead of the in-memory fakes — needs
+`RAZORPAY_KEY_ID`/`RAZORPAY_KEY_SECRET` in `.env`.
+
+### Running the tests
+
+Integration tests run against a **second**, separate local Postgres on port 5433, isolated from your
+dev database so test runs never pollute the live audit trail you're looking at:
+
+```bash
+initdb -D ~/.latch-test-pg-data -U latch --auth=trust
+# edit ~/.latch-test-pg-data/postgresql.conf: port = 5433
+pg_ctl -D ~/.latch-test-pg-data -l ~/.latch-test-pg-data/server.log start
+createdb -h localhost -p 5433 -U latch latch_test
+DATABASE_URL=postgres://latch:latch@localhost:5433/latch_test npm run db:migrate
+DATABASE_URL=postgres://latch:latch@localhost:5433/latch_test npm run db:seed
+
+npm test        # tsc --noEmit && vitest run — 281 tests, real Postgres, real Razorpay where the
+                 # existing convention already does that (never mocked for those paths)
+```
+
+Full deployment topology, environment variables, and everything found only by actually deploying
+(a real webhook registration, a real remote agent connecting, real bugs that never showed up locally)
+are in [`docs/07-deployment.md`](docs/07-deployment.md).
+
 ## Stack
 
-TypeScript · MCP (Streamable HTTP) · Fastify · PostgreSQL · Drizzle · Zod · Vitest · Razorpay test mode
+TypeScript · MCP (Streamable HTTP) · Fastify · PostgreSQL · Drizzle · Zod · Vitest · Razorpay test mode ·
+Pino · Prometheus · OpenTelemetry
 
 Full rationale, with rejected alternatives, in [`docs/02-tech-stack.md`](docs/02-tech-stack.md).
 
@@ -111,14 +208,15 @@ Full rationale, with rejected alternatives, in [`docs/02-tech-stack.md`](docs/02
 
 | Doc | What's in it |
 |---|---|
-| [`docs/01-architecture.md`](docs/01-architecture.md) | System design, the three shaping ideas, trust model |
+| [`docs/01-architecture.md`](docs/01-architecture.md) | System design, the shaping ideas, trust model |
 | [`docs/02-tech-stack.md`](docs/02-tech-stack.md) | Every choice, every rejected alternative, and why |
 | [`docs/03-domain-model.md`](docs/03-domain-model.md) | Entities, state machine, event catalogue, ladder maths |
 | [`docs/04-features-and-limitations.md`](docs/04-features-and-limitations.md) | Honest scope. What we won't build, and why |
 | [`docs/05-cost-model.md`](docs/05-cost-model.md) | Production costs, unit economics, what this earns |
 | [`docs/06-build-sequence.md`](docs/06-build-sequence.md) | 10 days, sliced vertically, with the video script |
+| [`docs/07-deployment.md`](docs/07-deployment.md) | The real Railway topology, env vars, and what only showed up once deployed |
 | [`prompts/`](prompts/) | One self-contained session prompt per slice |
-| [`dev-logs/`](dev-logs/) | Decision log, kept as we go |
+| [`dev-logs/`](dev-logs/) | The decision log, kept as we went — 30 entries, every judgment call and every bug this project actually hit, dated and in order. Start at `001` if you want the origin story; the most recent few are where the scalability and observability work lives. |
 | [`agentic-services-transactability-brief.md`](agentic-services-transactability-brief.md) | The original market research |
 
 ## Not to be confused with
