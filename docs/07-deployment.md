@@ -97,6 +97,32 @@ Every service shares the same repo and the same `npm run build` (plain `tsc` to 
 run build`) as its Build Command, `npm run start:viewer` as its Start Command. `latch-mcp` and
 `latch-merchant-api` use the default `npm run build` / their respective `npm run start:*`.
 
+## Deploying — manual, because the GitHub trigger is broken
+
+**Pushing to `main` does not deploy anything.** This was true as of 30 Aug 2026 and is worth stating
+loudly, because dev-logs/012 recorded the opposite ("auto-deploys on push") and the three "Force GitHub
+re-index" commits in the history are earlier sessions fighting the same thing without naming it.
+
+What was verified, rather than assumed:
+
+- Every service's Railway config still points at `PranavD2905/Latch` — checked via Railway's API, all
+  three return `repo=PranavD2905/Latch`.
+- `railway config plan` reports **0 to change**, so the `railway up` deploys below have *not* detached
+  any service from its GitHub source. The IaC and the live project agree.
+- The repo has **zero webhooks**, and a real push followed by a 90-second wait produced **no
+  deployment**.
+
+So Railway believes it is connected and simply never receives the push event: the Railway **GitHub App
+installation** has lost access to the repo. Repairing that is a browser action (re-authorise the app at
+`github.com/settings/installations`, or reconnect the source in the Railway dashboard) — it cannot be
+done from the CLI, because GitHub refuses to list App installations to a plain OAuth token and Railway's
+API rejects the CLI session token for GitHub queries.
+
+**Until it is reconnected, deploy with `npm run deploy`** (or the three `railway up --detach` commands it
+wraps). Deploy *all three* services, not just the one you changed: they share a single codebase, and the
+failure mode of deploying `latch-mcp` alone is silent — `confirm_with_deposit` starts handing out pay
+links to a `/pay/:bookingId` route that the still-old `latch-viewer` does not serve yet.
+
 ## Migrations
 
 `npm run db:migrate` runs `drizzle-orm`'s Postgres migrator, which takes its own advisory lock — safe to

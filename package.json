@@ -40,7 +40,8 @@
     "start:mcp": "node dist/adapters/mcp/http.js",
     "start:merchant-api": "node dist/adapters/merchant-api/http.js",
     "start:viewer": "node dist/adapters/audit-trail/http.js",
-    "db:seed-merchants": "tsx src/adapters/db/seed-merchants.ts"
+    "db:seed-merchants": "tsx src/adapters/db/seed-merchants.ts",
+    "deploy": "railway up --service latch-mcp --detach && railway up --service latch-merchant-api --detach && railway up --service latch-viewer --detach"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",
