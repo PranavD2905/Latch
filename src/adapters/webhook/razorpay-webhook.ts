@@ -1,6 +1,7 @@
 import type Razorpay from 'razorpay'
 import { toPaise } from '../../domain/money.js'
 import { reconcileObservedPayment } from '../../app/reconciliation.js'
+import { finalizeFromWebhook } from '../../app/finalize-from-webhook.js'
 import type { AppDeps } from '../../app/types.js'
 
 /**
@@ -70,6 +71,13 @@ export async function handleRazorpayWebhookPayload(payload: RazorpayWebhookPaylo
   }
 
   const { mismatch } = await reconcileObservedPayment(bookingId, { razorpayId: entity.id, orderId: entity.order_id, status, amountPaise: toPaise(Number(entity.amount)) }, deps)
+
+  // dev-logs/031: the payment is evidence, not just something to check the
+  // trail against. Acting on it here is what stops a fully-paid booking being
+  // reclaimed by the hold-expiry worker because the customer never told the
+  // agent they had paid.
+  await finalizeFromWebhook(bookingId, entity.order_id, deps)
+
   return { handled: true, bookingId, mismatch }
 }
 
