@@ -29,7 +29,19 @@ export default defineRailway(() => {
     build: "npm run build",
     start: "npm run start:mcp",
     healthcheck: "/healthz",
-    env: sharedEnv,
+    env: {
+      ...sharedEnv,
+      // Payment-link feature (dev-logs/029/030): the public origin
+      // confirm_with_deposit builds its pay links against — latch-viewer's
+      // own URL, since that service serves GET /pay/:bookingId. Declared
+      // here rather than only set via `railway variable set`, because
+      // `railway config plan` treats anything absent from this file as
+      // drift to destroy: with it missing, the next `railway config apply`
+      // would delete it, and confirm_with_deposit would silently start
+      // handing out http://localhost:4002 links that nobody can open. Not a
+      // secret, so it is a literal here rather than preserve().
+      PAY_PAGE_BASE_URL: "https://latch-viewer-production.up.railway.app",
+    },
   });
 
   const merchantApi = service("latch-merchant-api", {
