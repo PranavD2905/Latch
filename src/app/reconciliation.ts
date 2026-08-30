@@ -80,6 +80,12 @@ export async function detectKnownReferenceMismatches(candidate: BookingSnapshot,
  */
 export interface ObservedPayment {
   razorpayId: string
+  /**
+   * The Razorpay order this payment landed on. Optional only because a
+   * webhook payload could in principle omit it; when present it is what
+   * distinguishes an *in-flight* payment leg from a genuine unrecorded one.
+   */
+  orderId?: string | undefined
   status: 'captured' | 'authorized' | 'failed' | 'refunded'
   amountPaise: Paise
 }
@@ -102,6 +108,31 @@ export async function reconcileObservedPayment(bookingId: string, observed: Obse
   }
   if (isRecordedAnywhere(history, observed.razorpayId)) {
     return { mismatch: false } // exactly what the trail already says — no-op.
+  }
+
+  // An outstanding payment leg is *expected* to be invisible to the trail.
+  //
+  // `confirm_with_deposit` hands the customer up to three pay links and then
+  // writes nothing until every applicable leg lands, in one atomic finalize
+  // (see `pendingPaymentLegs`). So between "customer paid leg 1 of 3" and
+  // "all legs done", Razorpay legitimately knows about money the trail has
+  // not recorded yet — which is the exact shape this function was built to
+  // catch, and here it is not a fault. Without this, every partially-paid
+  // booking fires a RECONCILIATION_MISMATCH on every worker tick until the
+  // customer finishes, burying the real trail in false alarms.
+  //
+  // The narrow test is deliberate: only an order that is *still listed* as
+  // outstanding on this booking is forgiven. Once finalize clears
+  // `pendingPaymentLegs` and records the real payment ids, a later stray
+  // payment against the same booking is flagged exactly as before, and the
+  // dev-logs/014 crash-between-capture-and-append case is untouched — that
+  // booking has no pending leg for the payment either.
+  if (observed.orderId) {
+    const snapshot = await deps.eventStore.loadSnapshot(bookingId)
+    const stillOutstanding = snapshot?.pendingPaymentLegs?.some((leg) => leg.orderId === observed.orderId)
+    if (stillOutstanding) {
+      return { mismatch: false }
+    }
   }
 
   const appended = await appendReconciliationFindings(

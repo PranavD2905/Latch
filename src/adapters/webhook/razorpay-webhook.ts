@@ -69,7 +69,7 @@ export async function handleRazorpayWebhookPayload(payload: RazorpayWebhookPaylo
     return { handled: false }
   }
 
-  const { mismatch } = await reconcileObservedPayment(bookingId, { razorpayId: entity.id, status, amountPaise: toPaise(Number(entity.amount)) }, deps)
+  const { mismatch } = await reconcileObservedPayment(bookingId, { razorpayId: entity.id, orderId: entity.order_id, status, amountPaise: toPaise(Number(entity.amount)) }, deps)
   return { handled: true, bookingId, mismatch }
 }
 

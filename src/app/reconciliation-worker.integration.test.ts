@@ -138,6 +138,50 @@ describe('reconciliation worker (real Postgres) — dev-logs/014 item 1, externa
     expect(mismatch).toBe(false)
   })
 
+  it('does not report a still-outstanding payment leg — the trail is silent on purpose until every leg lands', async () => {
+    // The payment-link flow hands out up to three pay links and writes
+    // nothing until every applicable leg finalizes atomically. So a customer
+    // who has paid leg 1 of 3 leaves Razorpay knowing about money the trail
+    // has not recorded — which is precisely this function's alarm shape, and
+    // precisely what must NOT fire here. Seen live in production: four
+    // RECONCILIATION_MISMATCH events on one partially-paid booking, one per
+    // worker tick, on a booking that was behaving correctly throughout.
+    const startsAt = slotAt('11:30')
+    clock.set(new Date(startsAt.getTime() - 5 * 24 * 3_600_000))
+    const agentId = `agent_${ulid()}`
+    const held = await holdSlot({ agentId, practitionerId: SEED_PRACTITIONER_ID, serviceId: SEED_SERVICE_ID, startsAt, idempotencyKey: freshKey() }, deps)
+    createdBookingIds.push(held.bookingId)
+
+    // Nobody has paid the links yet — the state this test is about.
+    const confirmKey = freshKey()
+    paymentProvider.setScenario(confirmKey, 'pending')
+    const result = await confirmWithDeposit(
+      { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: (await getPolicy(deps)).policy.policyVersion, idempotencyKey: confirmKey },
+      deps,
+    )
+    expect(result.status).toBe('PENDING')
+
+    const snapshot = await deps.eventStore.loadSnapshot(held.bookingId)
+    const leg = snapshot?.pendingPaymentLegs?.[0]
+    expect(leg).toBeDefined()
+
+    const inFlight = await reconcileObservedPayment(
+      held.bookingId,
+      { razorpayId: `pay_inflight_${ulid()}`, orderId: leg!.orderId, status: 'authorized', amountPaise: toPaise(leg!.amountPaise) },
+      deps,
+    )
+    expect(inFlight.mismatch).toBe(false)
+
+    // The suppression stays narrow: a payment on an order this booking never
+    // issued is still a genuine unrecorded payment, and is still reported.
+    const stray = await reconcileObservedPayment(
+      held.bookingId,
+      { razorpayId: `pay_stray_${ulid()}`, orderId: 'order_never_issued_here', status: 'authorized', amountPaise: toPaise(30000) },
+      deps,
+    )
+    expect(stray.mismatch).toBe(true)
+  })
+
   // dev-logs/016: the review's "resilient queue... circuit breaker" ask,
   // applied to this worker's own outbound Razorpay calls rather than a new
   // message-queue dependency (docs/02-tech-stack.md §9's "no Redis" reasoning
