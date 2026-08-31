@@ -232,85 +232,6 @@ describe('merchant API — decline_booking, the only surface that can trigger it
   })
 })
 
-describe('merchant API — mark_no_show, the second of charge_no_show’s two independent facts', () => {
-  it('rejects a request with no Authorization header', async () => {
-    const bookingId = await confirmedBooking('13:00')
-    const response = await app.inject({ method: 'POST', url: `/bookings/${bookingId}/mark-no-show`, payload: { idempotencyKey: freshKey() } })
-    expect(response.statusCode).toBe(401)
-    const snapshot = await deps.eventStore.loadSnapshot(bookingId)
-    expect(snapshot?.nonAttendanceMarkedAt).toBeUndefined()
-  })
-
-  it('with the correct merchant token, marks a confirmed booking as a no-show', async () => {
-    const bookingId = await confirmedBooking('13:30')
-    const response = await app.inject({
-      method: 'POST',
-      url: `/bookings/${bookingId}/mark-no-show`,
-      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
-      payload: { idempotencyKey: freshKey() },
-    })
-    expect(response.statusCode).toBe(200)
-    const body = response.json()
-    expect(body.bookingId).toBe(bookingId)
-    expect(body.nonAttendanceMarkedAt).toBeTruthy()
-
-    const trail = await db.select().from(events).where(eq(events.bookingId, bookingId))
-    const marked = trail.find((e) => e.type === 'NON_ATTENDANCE_MARKED')
-    expect(marked?.payload).toMatchObject({ markedBy: 'merchant' })
-
-    const snapshot = await deps.eventStore.loadSnapshot(bookingId)
-    expect(snapshot?.nonAttendanceMarkedAt).toBeDefined()
-    expect(snapshot?.status).toBe('CONFIRMED') // marking non-attendance does not itself move money or change status
-  })
-
-  it('re-marking an already-marked booking is a no-op — exactly one NON_ATTENDANCE_MARKED event', async () => {
-    const bookingId = await confirmedBooking('14:00')
-    await app.inject({
-      method: 'POST',
-      url: `/bookings/${bookingId}/mark-no-show`,
-      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
-      payload: { idempotencyKey: freshKey() },
-    })
-    await app.inject({
-      method: 'POST',
-      url: `/bookings/${bookingId}/mark-no-show`,
-      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
-      payload: { idempotencyKey: freshKey() }, // deliberately a different key
-    })
-
-    const trail = await db.select().from(events).where(eq(events.bookingId, bookingId))
-    expect(trail.filter((e) => e.type === 'NON_ATTENDANCE_MARKED')).toHaveLength(1)
-  })
-
-  it('409s for a booking that is not CONFIRMED (still HELD)', async () => {
-    const startsAt = slotAt('15:00')
-    clock.set(new Date(startsAt.getTime() - 5 * 24 * 3_600_000))
-    const held = await holdSlot(
-      { agentId: `agent_${ulid()}`, practitionerId: SEED_PRACTITIONER_ID, serviceId: SEED_SERVICE_ID, startsAt, idempotencyKey: freshKey() },
-      deps,
-    )
-    createdBookingIds.push(held.bookingId)
-
-    const response = await app.inject({
-      method: 'POST',
-      url: `/bookings/${held.bookingId}/mark-no-show`,
-      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
-      payload: { idempotencyKey: freshKey() },
-    })
-    expect(response.statusCode).toBe(409)
-  })
-
-  it('404s for an unknown booking', async () => {
-    const response = await app.inject({
-      method: 'POST',
-      url: `/bookings/bkg_does_not_exist/mark-no-show`,
-      headers: { authorization: `Bearer ${MERCHANT_TOKEN}` },
-      payload: { idempotencyKey: freshKey() },
-    })
-    expect(response.statusCode).toBe(404)
-  })
-})
-
 describe('GET /slots — dev-logs/014 item 4, the second inbound adapter', () => {
   it('is reachable with no Authorization header at all — same posture as MCP find_slots', async () => {
     const response = await app.inject({ method: 'GET', url: `/slots?merchant=${SEED_MERCHANT_ID}&practitionerId=${SEED_PRACTITIONER_ID}&serviceId=${SEED_SERVICE_ID}` })
@@ -500,8 +421,6 @@ function validPolicyBody(overrides: Partial<SetPolicyCommand> = {}): SetPolicyCo
       { hoursBefore: 12, retainPct: 50 },
       { hoursBefore: 0, retainPct: 100 },
     ],
-    noShowFeePaise: 40_000,
-    noShowGraceMinutes: 15,
     holdTtlSeconds: 600,
     maxConcurrentHoldsPerAgent: 3,
     holdRateLimitPerMinute: 10,
@@ -596,9 +515,6 @@ describe('merchant API — GET/POST /policy, dev-logs/015 (originally cut, reins
   })
 
   it('400s a request missing a required field, before it ever reaches setPolicy', async () => {
-    // holdTtlSeconds, not noShowFeePaise — this task made the no-show fee
-    // itself optional at the wire schema (see the next test), so omitting
-    // *that* field is a legitimate 200 now, not a 400.
     const { holdTtlSeconds: _omit, ...incomplete } = validPolicyBody()
     const response = await policyApp.inject({
       method: 'POST',
@@ -607,32 +523,6 @@ describe('merchant API — GET/POST /policy, dev-logs/015 (originally cut, reins
       payload: incomplete,
     })
     expect(response.statusCode).toBe(400)
-  })
-
-  it('publishes successfully when the no-show fee is omitted entirely — it is optional now', async () => {
-    const { noShowFeePaise: _fee, noShowGraceMinutes: _grace, ...withoutNoShow } = validPolicyBody({ depositAmountPaise: 25_000 })
-    const response = await policyApp.inject({
-      method: 'POST',
-      url: '/policy',
-      headers: { authorization: `Bearer ${POLICY_MERCHANT_TOKEN}` },
-      payload: withoutNoShow,
-    })
-    expect(response.statusCode).toBe(200)
-    const body = response.json() as { policy: { noShowFeePaise?: number; noShowGraceMinutes?: number } }
-    expect(body.policy.noShowFeePaise).toBeUndefined()
-    expect(body.policy.noShowGraceMinutes).toBeUndefined()
-  })
-
-  it('422s when only one of the no-show pair is set', async () => {
-    const { noShowGraceMinutes: _grace, ...halfConfigured } = validPolicyBody()
-    const response = await policyApp.inject({
-      method: 'POST',
-      url: '/policy',
-      headers: { authorization: `Bearer ${POLICY_MERCHANT_TOKEN}` },
-      payload: halfConfigured,
-    })
-    expect(response.statusCode).toBe(422)
-    expect(response.json()).toMatchObject({ code: 'NO_SHOW_FIELDS_MUST_BE_PAIRED' })
   })
 
   it('a smuggled policyVersion field in the request body is ignored — the server still derives its own', async () => {

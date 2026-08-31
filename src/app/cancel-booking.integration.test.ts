@@ -59,7 +59,7 @@ async function loadEventLog(bookingId: string): Promise<readonly BookingEvent[]>
   return rows.map((row) => row.payload as BookingEvent)
 }
 
-async function holdAndConfirm(hhmm: string): Promise<{ bookingId: string; startsAt: Date; depositAmountPaise: number; authorizationId: string }> {
+async function holdAndConfirm(hhmm: string): Promise<{ bookingId: string; startsAt: Date; depositAmountPaise: number; sessionCompleteAuthorizationId: string }> {
   const startsAt = slotAt(hhmm)
   const agentId = `agent_${ulid()}`
   const held = await holdSlot({ agentId, practitionerId: SEED_PRACTITIONER_ID, serviceId: SEED_SERVICE_ID, startsAt, idempotencyKey: freshKey() }, deps)
@@ -71,7 +71,7 @@ async function holdAndConfirm(hhmm: string): Promise<{ bookingId: string; starts
       deps,
     ),
   )
-  return { bookingId: held.bookingId, startsAt, depositAmountPaise: confirmed.deposit!.amountPaise, authorizationId: confirmed.authorization!.authorizationId }
+  return { bookingId: held.bookingId, startsAt, depositAmountPaise: confirmed.deposit!.amountPaise, sessionCompleteAuthorizationId: confirmed.sessionCompleteMandate!.authorizationId }
 }
 
 beforeAll(async () => {
@@ -92,7 +92,7 @@ afterAll(async () => {
 describe('cancel (real Postgres + FakePaymentProvider + FrozenClock) — the customer-caused, ladder-applying path', () => {
   it('cancelling at 72h before the appointment refunds in full (0% tier)', async () => {
     clock.set(new Date(slotAt('09:00').getTime() - 5 * 24 * 3_600_000))
-    const { bookingId, depositAmountPaise, authorizationId } = await holdAndConfirm('09:00')
+    const { bookingId, depositAmountPaise, sessionCompleteAuthorizationId } = await holdAndConfirm('09:00')
 
     clock.set(new Date(slotAt('09:00').getTime() - 72 * 3_600_000))
     const cancelled = await cancelBooking({ bookingId, idempotencyKey: freshKey() }, deps)
@@ -106,15 +106,14 @@ describe('cancel (real Postgres + FakePaymentProvider + FrozenClock) — the cus
     expect(snapshot?.status).toBe('CANCELLED_BY_CUSTOMER')
 
     const allEvents = await loadEventLog(bookingId)
-    const trailing = allEvents.slice(-4).map((e) => e.type)
-    // This task: cancel_booking now also releases the session-complete
-    // mandate (a cancelled booking's session will never complete either) —
-    // one more trailing event than before.
-    expect(trailing).toEqual(['CANCELLED_BY_CUSTOMER', 'REFUND_ISSUED', 'AUTHORIZATION_RELEASED', 'SESSION_COMPLETE_AUTHORIZATION_RELEASED']) // no RETENTION_APPLIED — 0% retained
+    const trailing = allEvents.slice(-3).map((e) => e.type)
+    // cancel_booking also releases the session-complete mandate — a
+    // cancelled booking's session will never complete either.
+    expect(trailing).toEqual(['CANCELLED_BY_CUSTOMER', 'REFUND_ISSUED', 'SESSION_COMPLETE_AUTHORIZATION_RELEASED']) // no RETENTION_APPLIED — 0% retained
     expect(allEvents.some((e) => e.type === 'RETENTION_APPLIED')).toBe(false)
 
-    const released = allEvents.find((e) => e.type === 'AUTHORIZATION_RELEASED')
-    expect(released).toMatchObject({ authorizationId })
+    const released = allEvents.find((e) => e.type === 'SESSION_COMPLETE_AUTHORIZATION_RELEASED')
+    expect(released).toMatchObject({ authorizationId: sessionCompleteAuthorizationId })
 
     // The slot is free again.
     const rebooked = await holdSlot(
@@ -209,7 +208,7 @@ describe('cancel (real Postgres + FakePaymentProvider + FrozenClock) — the cus
     expect(allEvents.filter((e) => e.type === 'REFUND_ISSUED')).toHaveLength(1)
   })
 
-  it('if the authorisation already lapsed, cancel does not re-release it — no second AUTHORIZATION_RELEASED-equivalent event', async () => {
+  it('if the session-complete authorisation already lapsed, cancel does not re-release it — no second release event', async () => {
     // Confirmed 10 days out: the 5-day authorisation window (expiresAt =
     // confirm time + 5d) lapses at appointment-minus-5-days, well before the
     // 48h free-tier boundary this test also wants to land in.
@@ -226,7 +225,7 @@ describe('cancel (real Postgres + FakePaymentProvider + FrozenClock) — the cus
     expect(cancelled.status).toBe('CANCELLED_BY_CUSTOMER')
 
     const allEvents = await loadEventLog(bookingId)
-    expect(allEvents.filter((e) => e.type === 'AUTHORIZATION_RELEASED')).toHaveLength(0)
-    expect(allEvents.filter((e) => e.type === 'AUTHORIZATION_LAPSED')).toHaveLength(1) // still exactly the one the worker recorded
+    expect(allEvents.filter((e) => e.type === 'SESSION_COMPLETE_AUTHORIZATION_RELEASED')).toHaveLength(0)
+    expect(allEvents.filter((e) => e.type === 'SESSION_COMPLETE_AUTHORIZATION_LAPSED')).toHaveLength(1) // still exactly the one the worker recorded
   })
 })

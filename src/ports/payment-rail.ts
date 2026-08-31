@@ -3,7 +3,7 @@ import type { Paise } from '../domain/money.js'
 import type { PaymentStatusValue } from './payment-provider.js'
 
 export interface AuthorizeParams {
-  /** Exactly the no-show fee — docs/01-architecture.md Idea 3: authorised at the ceiling itself, no headroom. */
+  /** Exactly the amount authorised (the session-complete mandate) — docs/01-architecture.md Idea 3: authorised at the ceiling itself, no headroom. */
   amountPaise: Paise
   idempotencyKey: string
   /** What this authorisation is for, for the rail's own reference — the bookingId here. */
@@ -48,7 +48,7 @@ export interface CaptureAuthorizationResult {
  * dev-logs/005 constraint 1, made a distinct error type: the rail's own
  * refusal when a capture does not equal the amount authorised. This is the
  * error the Slice 4 ceiling-refusal demo (slice-4.md item 7) triggers and
- * asserts on — `charge_no_show`/the demo script maps it to the
+ * asserts on — `mark_complete`/the demo script maps it to the
  * `CAPTURE_AMOUNT_MISMATCH` refusal code and records an `ACTION_REFUSED`
  * event naming `payment_rail` as the enforcer.
  */
@@ -114,10 +114,12 @@ function describeCause(cause: unknown): string {
 }
 
 /**
- * Outbound port for the no-show authorisation leg — docs/01-architecture.md
- * Idea 3 / dev-logs/005. Deliberately separate from `PaymentProvider`
- * (deposit capture/refund): the deposit is captured immediately, but the
- * no-show fee is *authorised* now and *captured* weeks later, against a
+ * Outbound port for the session-complete authorisation leg (originally built
+ * for the no-show leg too — removed along with that feature; see the dev
+ * log for that removal) — docs/01-architecture.md Idea 3 / dev-logs/005.
+ * Deliberately separate from `PaymentProvider` (deposit capture/refund): the
+ * deposit is captured immediately, but the session-complete mandate is
+ * *authorised* now and *captured* weeks later, against a
  * ceiling the rail itself enforces. `src/app/` and `src/domain/` depend only
  * on this interface — no `capture`/`payment_capture` semantics, and no
  * Razorpay SDK type, cross into either.

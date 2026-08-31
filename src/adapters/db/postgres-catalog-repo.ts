@@ -114,8 +114,6 @@ export class PostgresCatalogRepo implements CatalogRepo {
           depositType: 'fixed', // the only deposit type this domain models — see Policy's own doc comment
           depositAmountPaise: input.depositAmountPaise ?? null,
           cancellationLadder: input.cancellationLadder,
-          noShowFeePaise: input.noShowFeePaise ?? null,
-          noShowGraceMinutes: input.noShowGraceMinutes ?? null,
           holdTtlSeconds: input.holdTtlSeconds,
           maxConcurrentHoldsPerAgent: input.maxConcurrentHoldsPerAgent,
           holdRateLimitPerMinute: input.holdRateLimitPerMinute,
@@ -139,8 +137,6 @@ function rowToPolicy(row: typeof policies.$inferSelect) {
     policyVersion: row.version,
     depositAmountPaise: row.depositAmountPaise === null ? undefined : toPaise(row.depositAmountPaise),
     cancellationLadder: row.cancellationLadder as readonly LadderTier[],
-    noShowFeePaise: row.noShowFeePaise === null ? undefined : toPaise(row.noShowFeePaise),
-    noShowGraceMinutes: row.noShowGraceMinutes ?? undefined,
     holdTtlSeconds: row.holdTtlSeconds,
     maxConcurrentHoldsPerAgent: row.maxConcurrentHoldsPerAgent,
     holdRateLimitPerMinute: row.holdRateLimitPerMinute,

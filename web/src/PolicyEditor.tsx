@@ -13,8 +13,6 @@ const DEFAULT_DRAFT: PolicyDraft = {
     { hoursBefore: 12, retainPct: 50 },
     { hoursBefore: 0, retainPct: 100 },
   ],
-  noShowFeePaise: 40_000,
-  noShowGraceMinutes: 15,
   holdTtlSeconds: 600,
   maxConcurrentHoldsPerAgent: 3,
   holdRateLimitPerMinute: 10,
@@ -94,28 +92,14 @@ function LadderEditor({ ladder, onChange }: { ladder: readonly LadderTier[]; onC
   )
 }
 
-/** The computed-consequence callout — dev-logs/015: surfaces the number that falls out of two independently-picked figures, without changing what's actually charged. */
+/** The computed-consequence callout — dev-logs/015: surfaces the number that falls out of the deposit + ladder, without changing what's actually charged. Used to also cover an independent no-show fee — removed along with that feature; deposit forfeiture per the ladder below is the recovery mechanism for a no-show now. */
 function ConsequencePreview({ draft }: { draft: PolicyDraft }) {
-  const noShowConfigured = draft.noShowFeePaise !== undefined
-  const total = draft.depositAmountPaise + (draft.noShowFeePaise ?? 0)
   return (
     <div className="rounded-xl border border-[var(--warning)] bg-[var(--warning-bg)] p-4">
       <div className="text-[13px] font-semibold text-[var(--warning-text)]">What a no-show actually costs this patient</div>
-      {noShowConfigured ? (
-        <>
-          <div className="mt-1 font-mono text-2xl font-semibold tabular-nums text-[var(--text)]">{formatRupees(total)}</div>
-          <div className="mt-1 text-[13px] text-[var(--text-muted)]">
-            {formatRupees(draft.depositAmountPaise)} deposit forfeited (no-show retains it in full) + {formatRupees(draft.noShowFeePaise!)} no-show fee charged separately.
-          </div>
-          <div className="mt-2 text-[12px] text-[var(--text-faint)]">
-            These two figures are set independently below and simply add up — this total isn't a number Latch asserts is correct. Deciding whether the deposit and the fee should compound, or whether the fee should offset the deposit, is a merchant call this editor makes visible but does not make for you.
-          </div>
-        </>
-      ) : (
-        <div className="mt-1 text-[13px] text-[var(--text-muted)]">
-          No no-show fee is configured — a no-show only forfeits the deposit per the ladder below. A patient who does attend is instead charged the session-complete mandate (each service's price minus this deposit) when the merchant marks the session done.
-        </div>
-      )}
+      <div className="mt-1 text-[13px] text-[var(--text-muted)]">
+        A no-show forfeits the deposit per the ladder below (the floor tier retains it in full). A patient who does attend is instead charged the session-complete mandate (each service's price minus this deposit) when the merchant marks the session done.
+      </div>
       <div className="mt-3 grid grid-cols-1 gap-1 border-t border-[var(--warning)]/30 pt-3 sm:grid-cols-3">
         {draft.cancellationLadder.map((tier, i) => (
           <div key={i} className="text-[12px] text-[var(--text-muted)]">
@@ -384,29 +368,6 @@ export function PolicyEditor() {
       <div className="grid grid-cols-1 gap-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6 lg:grid-cols-2">
         <NumberField label="Deposit (paise)" value={draft.depositAmountPaise} onChange={(n) => setDraft({ ...draft, depositAmountPaise: n })} hint={formatRupees(draft.depositAmountPaise || 0)} />
         <div />
-
-        <div className="flex items-center gap-2 lg:col-span-2">
-          <input
-            type="checkbox"
-            id="no-show-enabled"
-            checked={draft.noShowFeePaise !== undefined}
-            onChange={(e) =>
-              setDraft(
-                e.target.checked ? { ...draft, noShowFeePaise: 40_000, noShowGraceMinutes: 15 } : { ...draft, noShowFeePaise: undefined, noShowGraceMinutes: undefined },
-              )
-            }
-          />
-          <label htmlFor="no-show-enabled" className={LABEL}>
-            Charge a no-show fee (optional — a patient who never shows still forfeits the deposit per the ladder either way)
-          </label>
-        </div>
-
-        {draft.noShowFeePaise !== undefined && (
-          <>
-            <NumberField label="No-show fee (paise)" value={draft.noShowFeePaise} onChange={(n) => setDraft({ ...draft, noShowFeePaise: n })} hint={formatRupees(draft.noShowFeePaise || 0)} />
-            <NumberField label="No-show grace (minutes)" value={draft.noShowGraceMinutes ?? 0} onChange={(n) => setDraft({ ...draft, noShowGraceMinutes: n })} />
-          </>
-        )}
 
         <NumberField label="Hold TTL (seconds)" value={draft.holdTtlSeconds} onChange={(n) => setDraft({ ...draft, holdTtlSeconds: n })} />
         <NumberField label="Max concurrent holds / agent" value={draft.maxConcurrentHoldsPerAgent} onChange={(n) => setDraft({ ...draft, maxConcurrentHoldsPerAgent: n })} />

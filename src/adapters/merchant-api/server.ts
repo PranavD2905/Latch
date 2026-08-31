@@ -3,7 +3,6 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify'
 import type Razorpay from 'razorpay'
 import { BookingNotDeclinableError, BookingNotFoundError, NoDepositFoundError, declineBooking } from '../../app/decline-booking.js'
 import { getPolicy, NoActivePolicyError } from '../../app/get-policy.js'
-import { BookingNotMarkableError, BookingNotFoundError as MarkBookingNotFoundError, markNoShow } from '../../app/mark-no-show.js'
 import { BookingNotCompletableError, BookingNotFoundError as MarkCompleteBookingNotFoundError, markSessionComplete } from '../../app/mark-session-complete.js'
 import { setPolicy, type SetPolicyCommand } from '../../app/set-policy.js'
 import type { AppDeps } from '../../app/types.js'
@@ -61,7 +60,7 @@ function isPublicRoute(url: string): boolean {
  * this Fastify instance is a wholly separate process/port with its own auth.
  *
  * `set_policy` (also named in the architecture diagram) lives here too —
- * `GET`/`POST /policy`, same bearer-token gate as decline/mark-no-show below.
+ * `GET`/`POST /policy`, same bearer-token gate as decline/mark-complete below.
  * Originally cut (`04-features-and-limitations.md` §3, item 1) and reinstated
  * once the schedule allowed it — see dev-logs/015. Also hosts two routes
  * that are not merchant-authenticated at all, each with its
@@ -247,38 +246,13 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
     },
   )
 
-  // Slice 4: the second of charge_no_show's two independent facts
-  // (docs/03-domain-model.md §3 Rule 3) — merchant-only, same auth hook as
-  // decline above, and equally absent from the MCP tool list.
-  app.post<{ Params: { bookingId: string }; Body: { idempotencyKey: string } }>(
-    '/bookings/:bookingId/mark-no-show',
-    {
-      schema: {
-        params: { type: 'object', required: ['bookingId'], properties: { bookingId: { type: 'string', minLength: 1 } } },
-        body: { type: 'object', required: ['idempotencyKey'], properties: { idempotencyKey: { type: 'string', minLength: 1 } } },
-      },
-    },
-    async (request, reply) => {
-      const { bookingId } = request.params
-      const { idempotencyKey } = request.body
-
-      try {
-        const result = await markNoShow({ bookingId, idempotencyKey }, requestDeps(request))
-        return await reply.code(200).send(result)
-      } catch (err) {
-        if (err instanceof MarkBookingNotFoundError) return reply.code(404).send({ error: err.message })
-        if (err instanceof BookingNotMarkableError) return reply.code(409).send({ error: err.message })
-        throw err
-      }
-    },
-  )
-
   // The session-complete leg's own merchant action — same trust boundary as
-  // decline/mark-no-show above, and equally absent from the MCP tool list
-  // (self-reported attendance from an agent is exactly what this system
-  // already refuses to take on say-so alone). Unlike mark-no-show, this one
-  // route both marks and charges, atomically — see mark-session-complete.ts's
-  // own doc comment for why no agent-callable second step is needed here.
+  // decline above, and equally absent from the MCP tool list (self-reported
+  // attendance from an agent is exactly what this system already refuses to
+  // take on say-so alone). One route both marks and charges, atomically —
+  // see mark-session-complete.ts's own doc comment for why no agent-callable
+  // second step is needed here. (Used to have a `mark-no-show` sibling route
+  // — removed along with that feature; see the dev log for that removal.)
   app.post<{ Params: { bookingId: string }; Body: { idempotencyKey: string } }>(
     '/bookings/:bookingId/mark-complete',
     {
@@ -297,10 +271,9 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
       } catch (err) {
         if (err instanceof MarkCompleteBookingNotFoundError) return reply.code(404).send({ error: err.message })
         if (err instanceof BookingNotCompletableError) return reply.code(409).send({ error: err.message })
-        // CAPTURE_AMOUNT_MISMATCH is the one Refusal this route can produce
-        // (the rail-side ceiling firing on the frozen mandate amount) —
-        // structurally the same "nothing an agent/merchant can do about it"
-        // shape charge_no_show's own CAPTURE_AMOUNT_MISMATCH already is.
+        // CAPTURE_AMOUNT_MISMATCH is the one Refusal this route can produce —
+        // the rail-side ceiling firing on the frozen mandate amount, nothing
+        // an agent/merchant can do about it.
         if (err instanceof Refusal) return reply.code(422).send({ error: err.message, code: err.code })
         throw err
       }
@@ -335,11 +308,10 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
       schema: {
         body: {
           type: 'object',
-          // noShowFeePaise/noShowGraceMinutes/depositAmountPaise are
-          // deliberately absent from `required` now — both the no-show fee
-          // and the deposit are fully optional (payment-link feature
-          // follow-up). "Positive integer when set" is validatePolicyInput's
-          // job, not something the wire schema enforces.
+          // depositAmountPaise is deliberately absent from `required` now —
+          // the deposit is fully optional (payment-link feature follow-up).
+          // "Positive integer when set" is validatePolicyInput's job, not
+          // something the wire schema enforces.
           required: ['cancellationLadder', 'holdTtlSeconds', 'maxConcurrentHoldsPerAgent', 'holdRateLimitPerMinute'],
           properties: {
             depositAmountPaise: { type: 'number' },
@@ -351,8 +323,6 @@ export function createMerchantApiServer(deps: AppDeps, options: MerchantApiOptio
                 properties: { hoursBefore: { type: 'number' }, retainPct: { type: 'number' } },
               },
             },
-            noShowFeePaise: { type: 'number' },
-            noShowGraceMinutes: { type: 'number' },
             holdTtlSeconds: { type: 'number' },
             maxConcurrentHoldsPerAgent: { type: 'number' },
             holdRateLimitPerMinute: { type: 'number' },

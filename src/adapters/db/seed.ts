@@ -1,9 +1,9 @@
 /**
  * One-command demo-ready seed: a clinic, Dr. Rao, one service, and policy v4
  * — the exact numbers of the worked example in docs/03-domain-model.md §2
- * (which literally quotes `policy_version: 4`; the ladder/deposit/no-show
- * figures were already identical to this seed pre-Slice-7, only the version
- * number and policyId are new). Fixed IDs so re-running is safe
+ * (which literally quotes `policy_version: 4`; the ladder/deposit figures
+ * were already identical to this seed pre-Slice-7, only the version number
+ * and policyId are new). Fixed IDs so re-running is safe
  * (`onConflictDoNothing`) and the MCP client / tests can refer to them by
  * name instead of looking them up first.
  */
@@ -75,8 +75,6 @@ async function seed() {
         { hoursBefore: 12, retainPct: 50 },
         { hoursBefore: 0, retainPct: 100 },
       ],
-      noShowFeePaise: 40000, // ₹400
-      noShowGraceMinutes: 15,
       holdTtlSeconds: 600,
       maxConcurrentHoldsPerAgent: 3,
       // dev-logs/014, gap 2: 10 holds/minute/agent — generous for a real

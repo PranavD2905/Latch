@@ -40,23 +40,9 @@ export async function detectKnownReferenceMismatches(candidate: BookingSnapshot,
     }
   }
 
-  // A CONFIRMED booking's authorisation should still be sitting `authorized`
-  // (uncaptured) — charge_no_show flips status away from CONFIRMED the
-  // instant it captures, so this worker (scoped to CONFIRMED candidates)
-  // never legitimately expects to see one already `captured`.
-  if (candidate.authorizationId && candidate.authorizationAmountPaise !== undefined) {
-    const actual = await deps.reconciliationCircuitBreaker.execute(() => deps.paymentRail.fetchAuthorizationStatus(candidate.authorizationId!))
-    if (actual.status !== 'unknown' && (actual.status !== 'authorized' || actual.amountPaise !== candidate.authorizationAmountPaise)) {
-      findings.push({
-        subject: 'authorization',
-        razorpayId: candidate.authorizationId,
-        expectedStatus: 'authorized',
-        expectedAmountPaise: candidate.authorizationAmountPaise,
-        actualStatus: actual.status,
-        actualAmountPaise: actual.amountPaise,
-      })
-    }
-  }
+  // (Used to also check the no-show authorisation's own `authorized` status
+  // here — removed along with that feature, since no live booking can have
+  // one any more. See the dev log for that removal.)
 
   return findings
 }

@@ -16,31 +16,19 @@ export interface BookingSnapshot {
   startsAt: Date
   status: BookingStatus
   policyVersion: number | undefined
-  /** The no-show authorisation currently held against this booking — undefined before AUTHORIZATION_HELD, or after it's been captured/released. */
-  authorizationId: string | undefined
   /**
-   * The amount actually authorised — cited by `charge_no_show` as the
-   * capture request, never re-derived from the merchant's *current* policy
-   * (docs/03-domain-model.md §2: money rules don't change retroactively on
-   * a booking already confirmed). If the merchant has since raised the
-   * no-show fee, capturing at the new, higher figure would itself trigger
-   * dev-logs/005 constraint 1 — the rail refuses any capture that isn't
-   * exactly what was authorised.
+   * The session-complete mandate — `sessionCompleteAuthorizationAmountPaise`
+   * is `service.pricePaise - policy.depositAmountPaise`, frozen at confirm
+   * time. (The no-show leg used to mirror these four fields as a separate
+   * `authorization*` set — removed along with the no-show feature; see the
+   * dev log for that removal. The permanent `events` table still carries
+   * whatever a pre-removal booking's own no-show authorisation actually was,
+   * this disposable projection just no longer tracks it.)
    */
-  authorizationAmountPaise: Paise | undefined
-  /** Set alongside `authorizationId` — when this rail's authorisation window lapses (`manual_capture`'s `manual_expiry_period`). */
-  authorizationExpiresAt: Date | undefined
-  /** Set once the authorisation-lapse worker (or a gate check) has observed `authorizationExpiresAt` has passed. Prevents the worker re-emitting `AUTHORIZATION_LAPSED`. */
-  authorizationLapsedAt: Date | undefined
-  /** The session-complete mandate — same role as the four `authorization*` fields above, mirrored for the second, independent leg. `sessionCompleteAuthorizationAmountPaise` is `service.pricePaise - policy.depositAmountPaise`, frozen at confirm time. */
   sessionCompleteAuthorizationId: string | undefined
   sessionCompleteAuthorizationAmountPaise: Paise | undefined
   sessionCompleteAuthorizationExpiresAt: Date | undefined
   sessionCompleteAuthorizationLapsedAt: Date | undefined
-  /** Set by the merchant API's mark-no-show route — the second of `charge_no_show`'s two independent facts (docs/03-domain-model.md §3 Rule 3). */
-  nonAttendanceMarkedAt: Date | undefined
-  /** Set once the no-show-eligibility worker has recorded `NO_SHOW_ELIGIBLE` — an idempotency marker only, never gates `charge_no_show`. */
-  noShowEligibleMarkedAt: Date | undefined
   agentId: string | undefined
   /** Set only while status is HELD — when the hold's TTL expires. */
   holdExpiresAt: Date | undefined
@@ -124,17 +112,6 @@ export interface EventStoreTx {
    */
   claimHeldBookingsWithExpiredHold(now: Date, limit: number): Promise<readonly BookingSnapshot[]>
   /**
-   * `SELECT ... FOR UPDATE SKIP LOCKED` — confirmed bookings whose
-   * appointment `startsAt` has passed and `noShowEligibleMarkedAt` is not yet
-   * set. A superset of the truly-eligible set (grace period still varies by
-   * the booking's own recorded `policyVersion` — docs/03-domain-model.md §2 —
-   * so the caller must still compute `startsAt + graceMinutes` per candidate
-   * before deciding to append `NO_SHOW_ELIGIBLE`); the row lock is what makes
-   * that per-candidate check-then-append atomic against a concurrent
-   * `reschedule`/`cancel` on the same booking.
-   */
-  claimConfirmedBookingsPastStart(now: Date, limit: number): Promise<readonly BookingSnapshot[]>
-  /**
    * dev-logs/014, gap 2: how many `HOLD_CREATED` events this agent has
    * accumulated since `since` (any current booking status — a
    * released/expired hold still counts, since the point is request *rate*,
@@ -188,13 +165,12 @@ export interface EventStore {
   countLiveHoldsForAgent(merchantId: string, agentId: string): Promise<number>
 
   /**
-   * CONFIRMED bookings whose no-show authorisation has passed `expiresAt`
-   * but have not yet had that fact recorded (`authorizationLapsedAt` unset).
-   * The authorisation-lapse worker's input — docs/01-architecture.md §8.
+   * CONFIRMED bookings whose session-complete mandate has passed `expiresAt`
+   * but have not yet had that fact recorded (`sessionCompleteAuthorizationLapsedAt`
+   * unset). The authorisation-lapse worker's input — docs/01-architecture.md
+   * §8. (Used to have a no-show-leg twin, `listConfirmedBookingsWithExpiredAuthorization`
+   * — removed along with the no-show feature.)
    */
-  listConfirmedBookingsWithExpiredAuthorization(now: Date): Promise<readonly BookingSnapshot[]>
-
-  /** Same as `listConfirmedBookingsWithExpiredAuthorization`, for the session-complete leg — the authorisation-lapse worker sweeps both. */
   listConfirmedBookingsWithExpiredSessionCompleteAuthorization(now: Date): Promise<readonly BookingSnapshot[]>
 
   /**

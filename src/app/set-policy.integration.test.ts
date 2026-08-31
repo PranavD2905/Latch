@@ -61,8 +61,6 @@ function validCommand(overrides: Partial<SetPolicyCommand> = {}): SetPolicyComma
       { hoursBefore: 12, retainPct: 50 },
       { hoursBefore: 0, retainPct: 100 },
     ],
-    noShowFeePaise: 40_000,
-    noShowGraceMinutes: 15,
     holdTtlSeconds: 600,
     maxConcurrentHoldsPerAgent: 3,
     holdRateLimitPerMinute: 10,
@@ -95,7 +93,7 @@ describe('set_policy — publish is an INSERT, version is server-derived', () =>
     const before = await deps.catalogRepo.getPolicyVersion(TEST_MERCHANT_ID, 1)
     expect(before).toBeDefined()
 
-    const second = await setPolicy(validCommand({ depositAmountPaise: 50_000, noShowFeePaise: 60_000 }), deps)
+    const second = await setPolicy(validCommand({ depositAmountPaise: 50_000 }), deps)
     expect(second.policy.policyVersion).toBe(2)
     expect(second.policy.depositAmountPaise).toBe(50_000)
 
@@ -147,7 +145,7 @@ describe('set_policy — publish is an INSERT, version is server-derived', () =>
     const startVersion = activeBefore?.policyVersion ?? 0
     const N = 8
 
-    const outcomes = await Promise.allSettled(Array.from({ length: N }, (_, i) => setPolicy(validCommand({ noShowGraceMinutes: 10 + i }), deps)))
+    const outcomes = await Promise.allSettled(Array.from({ length: N }, (_, i) => setPolicy(validCommand({ holdTtlSeconds: 600 + i }), deps)))
 
     const fulfilled = outcomes.filter((o): o is PromiseFulfilledResult<Awaited<ReturnType<typeof setPolicy>>> => o.status === 'fulfilled')
     const rejected = outcomes.filter((o): o is PromiseRejectedResult => o.status === 'rejected')

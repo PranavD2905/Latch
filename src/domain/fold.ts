@@ -3,6 +3,14 @@ import type { BookingEvent } from './events.js'
 /**
  * The nine states from docs/03-domain-model.md §3. HELD/CONFIRMED/NO_SHOW_ELIGIBLE
  * are "live" — the rest are terminal.
+ *
+ * `NO_SHOW_ELIGIBLE` and `NO_SHOW_CHARGED` are **historical-only** since the
+ * no-show feature's removal (see the dev log for that removal): no live code
+ * path can ever produce either again (the no-show-eligibility worker and
+ * `charge_no_show` are both deleted), but a pre-removal booking's history may
+ * already end in one, and `fold()` — a pure replay of the permanent `events`
+ * table — must keep reporting that true historical state rather than
+ * remapping it to something that didn't actually happen.
  */
 export type BookingStatus =
   | 'HELD'

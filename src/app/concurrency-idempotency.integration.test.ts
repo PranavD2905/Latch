@@ -16,29 +16,27 @@ import { FakePaymentProvider } from '../adapters/payment/fake-payment-provider.j
 import { FakePaymentRail } from '../adapters/payment/fake-payment-rail.js'
 import type { BookingEvent } from '../domain/events.js'
 import { cancelBooking } from './cancel-booking.js'
-import { chargeNoShow } from './charge-no-show.js'
 import { confirmWithDeposit } from './confirm-with-deposit.js'
 import { requireConfirmed } from './confirm-with-deposit-test-support.js'
 import { getPolicy } from './get-policy.js'
 import { holdSlot } from './hold-slot.js'
-import { markNoShow } from './mark-no-show.js'
 import type { AppDeps } from './types.js'
 
 /**
  * prompts/slice-8.md item 3 — idempotency under genuinely concurrent retry,
  * "not sequentially — sequential retry is the easy case." Fires the *same*
- * idempotency key on `confirm_with_deposit`/`charge_no_show`/`cancel` from
+ * idempotency key on `confirm_with_deposit`/`cancel` from
  * several connections simultaneously via `Promise.all`, never awaiting one
  * before starting the next.
  *
  * dev-logs/013: before the claim-based `IdempotencyStore` fix, this was a
  * real bug, not a hypothetical — `get`-then-later-`put` let N concurrent
  * calls with the same key all miss the cache and all re-execute, and since
- * `confirm_with_deposit`/`charge_no_show`/`cancel` only flip the booking's
+ * `confirm_with_deposit`/`cancel` only flip the booking's
  * terminal status in the transaction *after* the gate check, every one of
  * them passed the gate and appended its own copy of the same money events —
  * one real payment (deduped at the fake/real provider layer), but N copies
- * of DEPOSIT_CAPTURED/NO_SHOW_CHARGED/CANCELLED_BY_CUSTOMER in the trail.
+ * of DEPOSIT_CAPTURED/CANCELLED_BY_CUSTOMER in the trail.
  */
 
 process.loadEnvFile?.('.env')
@@ -121,38 +119,18 @@ describe('idempotency under genuinely concurrent retry (docs/01-architecture.md 
     // Every caller sees the exact same payment/authorization — one real money movement, N replays.
     const confirmedResults = results.map(requireConfirmed)
     const paymentIds = new Set(confirmedResults.map((r) => r.deposit!.paymentId))
-    const authorizationIds = new Set(confirmedResults.map((r) => r.authorization!.authorizationId))
+    const authorizationIds = new Set(confirmedResults.map((r) => r.sessionCompleteMandate!.authorizationId))
     expect(paymentIds.size).toBe(1)
     expect(authorizationIds.size).toBe(1)
 
     const trail = await loadEventLog(held.bookingId)
     expect(trail.filter((e) => e.type === 'DEPOSIT_CAPTURED')).toHaveLength(1)
-    expect(trail.filter((e) => e.type === 'AUTHORIZATION_HELD')).toHaveLength(1)
+    expect(trail.filter((e) => e.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD')).toHaveLength(1)
     expect(trail.filter((e) => e.type === 'BOOKING_CONFIRMED')).toHaveLength(1)
     expect(trail.filter((e) => e.type === 'POLICY_ACKNOWLEDGED')).toHaveLength(1)
 
     const snapshot = await deps.eventStore.loadSnapshot(held.bookingId)
     expect(snapshot?.status).toBe('CONFIRMED')
-  })
-
-  it('charge_no_show: N simultaneous calls with the same key produce exactly one capture and one NO_SHOW_CHARGED event', async () => {
-    clock.set(new Date(slotAt('10:00').getTime() - 2 * 3_600_000))
-    const { bookingId, startsAt } = await holdAndConfirm('10:00')
-    clock.set(new Date(startsAt.getTime() + 16 * 60_000))
-    await markNoShow({ bookingId, idempotencyKey: freshKey() }, deps)
-
-    const key = freshKey()
-    const N = 6
-    const results = await Promise.all(Array.from({ length: N }, () => chargeNoShow({ bookingId, idempotencyKey: key }, deps)))
-
-    const paymentIds = new Set(results.map((r) => r.charge.paymentId))
-    expect(paymentIds.size).toBe(1)
-
-    const trail = await loadEventLog(bookingId)
-    expect(trail.filter((e) => e.type === 'NO_SHOW_CHARGED')).toHaveLength(1)
-
-    const snapshot = await deps.eventStore.loadSnapshot(bookingId)
-    expect(snapshot?.status).toBe('NO_SHOW_CHARGED')
   })
 
   it('cancel: N simultaneous calls with the same key produce exactly one refund and one set of cancellation events', async () => {
@@ -175,7 +153,7 @@ describe('idempotency under genuinely concurrent retry (docs/01-architecture.md 
     const trail = await loadEventLog(bookingId)
     expect(trail.filter((e) => e.type === 'CANCELLED_BY_CUSTOMER')).toHaveLength(1)
     expect(trail.filter((e) => e.type === 'REFUND_ISSUED')).toHaveLength(1)
-    expect(trail.filter((e) => e.type === 'AUTHORIZATION_RELEASED')).toHaveLength(1)
+    expect(trail.filter((e) => e.type === 'SESSION_COMPLETE_AUTHORIZATION_RELEASED')).toHaveLength(1)
 
     const snapshot = await deps.eventStore.loadSnapshot(bookingId)
     expect(snapshot?.status).toBe('CANCELLED_BY_CUSTOMER')
@@ -262,8 +240,6 @@ describe('POLICY_VERSION_STALE (docs/03-domain-model.md §5)', () => {
         { hoursBefore: 12, retainPct: 50 },
         { hoursBefore: 0, retainPct: 100 },
       ],
-      noShowFeePaise: currentPolicy.policy.noShowFeePaise ?? null,
-      noShowGraceMinutes: 15,
       holdTtlSeconds: currentPolicy.policy.holdTtlSeconds,
       maxConcurrentHoldsPerAgent: currentPolicy.policy.maxConcurrentHoldsPerAgent,
       createdAt: new Date(),

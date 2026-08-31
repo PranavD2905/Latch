@@ -1,11 +1,10 @@
 import {
-  createAuthorizationReleasedEvent,
   createCancelledByCustomerEvent,
   createRefundIssuedEvent,
   createRetentionAppliedEvent,
   createSessionCompleteAuthorizationReleasedEvent,
 } from '../domain/event-factory.js'
-import type { AuthorizationHeldEvent, DepositCapturedEvent } from '../domain/events.js'
+import type { DepositCapturedEvent } from '../domain/events.js'
 import { evaluateLadder } from '../domain/ladder.js'
 import { floorPercentageOf, subtractPaise, type Paise } from '../domain/money.js'
 import type { Policy } from '../domain/policy.js'
@@ -47,8 +46,6 @@ type GateOutcome =
       startsAt: Date
       policyVersion: number
       deposit: DepositCapturedEvent
-      authorization: AuthorizationHeldEvent | undefined
-      authorizationLapsed: boolean
     }
 
 /**
@@ -107,15 +104,12 @@ async function cancelBookingClaimed(cmd: CancelBookingCommand, deps: AppDeps): P
     if (snapshot.policyVersion === undefined) {
       return { kind: 'no_policy_version' }
     }
-    const authorization = history.find((e): e is AuthorizationHeldEvent => e.type === 'AUTHORIZATION_HELD')
 
     return {
       kind: 'ok',
       startsAt: snapshot.startsAt,
       policyVersion: snapshot.policyVersion,
       deposit,
-      authorization,
-      authorizationLapsed: snapshot.authorizationLapsedAt !== undefined,
     }
   })
 
@@ -132,7 +126,7 @@ async function cancelBookingClaimed(cmd: CancelBookingCommand, deps: AppDeps): P
     throw new PolicyVersionNotFoundError(`booking ${cmd.bookingId} is CONFIRMED but has no recorded policyVersion`)
   }
 
-  const { startsAt, policyVersion, deposit, authorization, authorizationLapsed } = gateOutcome
+  const { startsAt, policyVersion, deposit } = gateOutcome
 
   const policy: Policy | undefined = await deps.catalogRepo.getPolicyVersion(deps.merchantId, policyVersion)
   if (!policy) {
@@ -209,23 +203,7 @@ async function cancelBookingClaimed(cmd: CancelBookingCommand, deps: AppDeps): P
       )
     }
 
-    // A cancelled booking must leave no live no-show authority (slice-5.md
-    // item 1). No rail call — same "released means we simply never capture"
-    // discipline as decline_booking (dev-logs/009): Razorpay auto-refunds
-    // the authorisation on its own at `expiresAt`. Skipped entirely if the
-    // authorisation already lapsed (the authorisation-lapse worker got there
-    // first) or was never registered (a prior-slice-bug case, not expected).
-    if (authorization && !authorizationLapsed) {
-      events.push(
-        createAuthorizationReleasedEvent(cmd.bookingId, ++sequence, deps.clock, {
-          authorizationId: authorization.authorizationId,
-          rail: authorization.rail,
-          expiresAt: authorization.expiresAt,
-        }),
-      )
-    }
-
-    // Same release for the session-complete mandate — a cancelled booking's
+    // Release for the session-complete mandate — a cancelled booking's
     // session will never complete, so nothing is left owing against it.
     // Skipped in the ₹0 edge case (never authorised) or if it already
     // lapsed on its own.

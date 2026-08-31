@@ -26,7 +26,7 @@ export interface AppDeps {
   eventStore: EventStore
   catalogRepo: CatalogRepo
   paymentProvider: PaymentProvider
-  /** Slice 4: the no-show authorisation leg (dev-logs/005) — deliberately a separate port from `paymentProvider`. */
+  /** Slice 4: the session-complete authorisation leg (dev-logs/005) — deliberately a separate port from `paymentProvider`. */
   paymentRail: PaymentRail
   idempotencyStore: IdempotencyStore
   merchantId: string
@@ -48,7 +48,7 @@ export interface AppDeps {
   reconciliationCircuitBreaker: CircuitBreaker
   /**
    * Guards the customer-facing money-moving calls (`confirm_with_deposit`'s
-   * `captureDeposit`/`authorize`, `charge_no_show`/`mark_session_complete`'s
+   * `captureDeposit`/`authorize`, `mark_session_complete`'s
    * `captureAuthorization`, `decline_booking`/`cancel_booking`'s
    * `refundDeposit`) — dev-logs/020. Deliberately a *separate* instance from
    * `reconciliationCircuitBreaker` above, not a shared one: reconciliation's

@@ -1,5 +1,4 @@
 import {
-  createAuthorizationHeldEvent,
   createBookingConfirmedEvent,
   createDepositCapturedEvent,
   createPaymentRequestedEvent,
@@ -61,17 +60,18 @@ const DEFAULT_PAY_PAGE_BASE_URL = 'http://localhost:4002'
 
 /**
  * Distinct from `cmd.idempotencyKey`, which keys the deposit leg (and, via
- * this suffix, the receipt Razorpay would otherwise collide on): up to three
+ * this suffix, the receipt Razorpay would otherwise collide on): two
  * separate Checkout completions can happen at `confirm_with_deposit` —
- * deposit capture, no-show authorisation, and the session-complete mandate —
- * and `ManualCaptureRail`/`RazorpayPaymentProvider` both derive a Razorpay
+ * deposit capture and the session-complete mandate — and
+ * `ManualCaptureRail`/`RazorpayPaymentProvider` both derive a Razorpay
  * `receipt` deterministically from whatever key they're given (dev-logs/006).
  * Reusing the same raw key across legs would make them resolve to the same
  * receipt and one call would find another's order. The deposit leg's key is
  * left untouched (not suffixed) because existing fixtures reference it as a
- * raw receipt string.
+ * raw receipt string. (Used to take a third `'no_show_auth'` variant too —
+ * removed along with the no-show feature.)
  */
-function authorizationIdempotencyKey(depositIdempotencyKey: string, leg: 'no_show_auth' | 'session_complete_auth'): string {
+function authorizationIdempotencyKey(depositIdempotencyKey: string, leg: 'session_complete_auth'): string {
   return `${depositIdempotencyKey}:${leg}`
 }
 
@@ -87,6 +87,13 @@ function knownPendingLeg(snapshot: BookingSnapshot, leg: PaymentRequestedLeg['le
   return match && { orderId: match.orderId, amountPaise: match.amountPaise }
 }
 
+/**
+ * `'no_show_authorization'` is historical-only (see the no-show removal dev
+ * log) — no live code path ever creates a leg with that value any more, but
+ * the case stays so this switch remains exhaustive over `PaymentRequestedLeg['leg']`,
+ * which still names it for the sake of any pre-removal `PENDING` round whose
+ * `pendingPaymentLegs` this function might still be asked to label.
+ */
 export function legLabel(leg: PaymentRequestedLeg['leg'], amountPaise: Paise): string {
   switch (leg) {
     case 'deposit':
@@ -131,9 +138,8 @@ export interface OutstandingPaymentLeg {
  * Payment-link feature (dev-logs entry for this slice), extended in the
  * follow-up covering one combined pay page and an optional deposit: which
  * legs even apply depends on the merchant's policy — `deposit` only if
- * `policy.depositAmountPaise` is set, `no_show_authorization` only if
- * `policy.noShowFeePaise` is set, `session_complete_authorization` only if
- * the service's price exceeds the deposit. A `CONFIRMED` result means every
+ * `policy.depositAmountPaise` is set, `session_complete_authorization` only
+ * if the service's price exceeds the deposit. A `CONFIRMED` result means every
  * *applicable* leg landed. A `PENDING` result means at least one applicable
  * leg's order exists but hasn't resolved yet — it carries a single `payUrl`
  * (one page handles every applicable leg, not one link per leg) and lists
@@ -160,8 +166,6 @@ export type ConfirmWithDepositResult =
       policyVersion: number
       /** `undefined` when this policy has no deposit configured at all. */
       deposit: { paymentId: string; amountPaise: number } | undefined
-      /** The no-show authorisation registered alongside the deposit — docs/01-architecture.md Idea 3. `undefined` when this policy has no no-show fee configured. */
-      authorization: { authorizationId: string; amountPaise: number; expiresAt: string } | undefined
       /** The session-complete mandate — `service.pricePaise - (policy.depositAmountPaise ?? 0)`, captured when the merchant marks the session complete. `undefined` when the service's price exactly equals the deposit. */
       sessionCompleteMandate: { authorizationId: string; amountPaise: number; expiresAt: string } | undefined
     }
@@ -319,7 +323,6 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
   // refund: skip the rail call entirely rather than authorise nothing.
   const sessionCompleteMandateAmountPaise: Paise = subtractPaise(service.pricePaise, depositAmountPaise)
   const needsDeposit = policy.depositAmountPaise !== undefined
-  const needsNoShowAuth = policy.noShowFeePaise !== undefined
   const needsSessionCompleteAuth = sessionCompleteMandateAmountPaise !== 0
 
   // Outside the row lock, deliberately — never hold a DB lock across a
@@ -349,28 +352,15 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
   // still protected the same way dev-logs/028 originally protected the
   // deposit specifically.
   const knownDepositOrder = needsDeposit ? knownPendingLeg(snapshot, 'deposit') : undefined
-  const knownNoShowOrder = needsNoShowAuth ? knownPendingLeg(snapshot, 'no_show_authorization') : undefined
   const knownSessionCompleteOrder = needsSessionCompleteAuth ? knownPendingLeg(snapshot, 'session_complete_authorization') : undefined
 
-  const [depositOrderOutcome, noShowOrderOutcome, sessionCompleteOrderOutcome] = await Promise.allSettled([
+  const [depositOrderOutcome, sessionCompleteOrderOutcome] = await Promise.allSettled([
     !needsDeposit
       ? Promise.resolve(undefined)
       : knownDepositOrder
         ? Promise.resolve(knownDepositOrder)
         : executePaymentCall(deps.paymentCircuitBreaker, () =>
             deps.paymentProvider.ensureDepositOrder({ amountPaise: depositAmountPaise, idempotencyKey: cmd.idempotencyKey, reference: snapshot.bookingId }),
-          ),
-    !needsNoShowAuth
-      ? Promise.resolve(undefined)
-      : knownNoShowOrder
-        ? Promise.resolve(knownNoShowOrder)
-        : executePaymentCall(deps.paymentCircuitBreaker, () =>
-            deps.paymentRail.ensureAuthorizationOrder({
-              amountPaise: policy.noShowFeePaise!,
-              idempotencyKey: authorizationIdempotencyKey(cmd.idempotencyKey, 'no_show_auth'),
-              reference: snapshot.bookingId,
-              now,
-            }),
           ),
     !needsSessionCompleteAuth
       ? Promise.resolve(undefined)
@@ -388,20 +378,16 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
 
   // Only the deposit's order-creation failure is fatal — nothing captured,
   // nothing to protect, so there's no reason not to fail loudly and let the
-  // agent retry. An *optional* leg's order-creation failure stays forgiven
-  // here exactly as dev-logs/028 established for its poll — logged, no link
-  // offered for it this round, but it never blocks the deposit (or the
-  // other optional leg) from proceeding. Unlike a poll failure (see below),
-  // this can't later show up as "outstanding," since without an orderId
-  // there's nothing to build a link or check status against at all.
+  // agent retry. The session-complete leg's order-creation failure stays
+  // forgiven here exactly as dev-logs/028 established for its poll — logged,
+  // no link offered for it this round, but it never blocks the deposit from
+  // proceeding. Unlike a poll failure (see below), this can't later show up
+  // as "outstanding," since without an orderId there's nothing to build a
+  // link or check status against at all.
   if (needsDeposit && depositOrderOutcome.status === 'rejected') {
     throw depositOrderOutcome.reason
   }
   const depositOrder = depositOrderOutcome.status === 'fulfilled' ? depositOrderOutcome.value : undefined
-  const noShowOrder = noShowOrderOutcome.status === 'fulfilled' ? noShowOrderOutcome.value : undefined
-  if (needsNoShowAuth && noShowOrderOutcome.status === 'rejected') {
-    deps.logger.error({ err: noShowOrderOutcome.reason, bookingId: snapshot.bookingId }, 'confirm_with_deposit: could not create the no-show authorization order — confirming without this leg rather than waiting on it forever')
-  }
   const sessionCompleteOrder = sessionCompleteOrderOutcome.status === 'fulfilled' ? sessionCompleteOrderOutcome.value : undefined
   if (needsSessionCompleteAuth && sessionCompleteOrderOutcome.status === 'rejected') {
     deps.logger.error(
@@ -427,9 +413,8 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
   // error" result, treating it as "keep waiting" rather than "silently
   // confirm without this leg" is what makes "deposit paid, session-complete
   // hold still outstanding — wait for it" actually true.
-  const [depositPollOutcome, noShowPollOutcome, sessionCompletePollOutcome] = await Promise.allSettled([
+  const [depositPollOutcome, sessionCompletePollOutcome] = await Promise.allSettled([
     depositOrder === undefined ? Promise.resolve(undefined) : executePaymentCall(deps.paymentCircuitBreaker, () => deps.paymentProvider.pollDepositCapture(depositOrder, snapshot.bookingId)),
-    noShowOrder === undefined ? Promise.resolve(undefined) : executePaymentCall(deps.paymentCircuitBreaker, () => deps.paymentRail.pollAuthorization(noShowOrder, snapshot.bookingId, now)),
     sessionCompleteOrder === undefined
       ? Promise.resolve(undefined)
       : executePaymentCall(deps.paymentCircuitBreaker, () => deps.paymentRail.pollAuthorization(sessionCompleteOrder, snapshot.bookingId, now)),
@@ -440,13 +425,6 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
   }
   const captured = depositPollOutcome.status === 'fulfilled' ? depositPollOutcome.value : undefined
 
-  const noShowAuthorized = noShowPollOutcome.status === 'fulfilled' ? noShowPollOutcome.value : undefined
-  if (noShowPollOutcome.status === 'rejected') {
-    deps.logger.error(
-      { err: noShowPollOutcome.reason, bookingId: snapshot.bookingId },
-      'confirm_with_deposit: checking the no-show authorization order failed — confirming without this leg rather than waiting on it forever',
-    )
-  }
   const sessionCompleteAuthorized = sessionCompletePollOutcome.status === 'fulfilled' ? sessionCompletePollOutcome.value : undefined
   if (sessionCompletePollOutcome.status === 'rejected') {
     deps.logger.error(
@@ -456,21 +434,18 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
   }
 
   // Outstanding = the order exists and the poll cleanly found nothing yet
-  // (fulfilled, undefined). A *rejected* poll on an optional leg is not
+  // (fulfilled, undefined). A *rejected* poll on the optional leg is not
   // outstanding — it's forgiven, per the comment above.
   const depositOutstanding = depositOrder !== undefined && captured === undefined
-  const noShowOutstanding = noShowOrder !== undefined && noShowPollOutcome.status === 'fulfilled' && noShowAuthorized === undefined
   const sessionCompleteOutstanding = sessionCompleteOrder !== undefined && sessionCompletePollOutcome.status === 'fulfilled' && sessionCompleteAuthorized === undefined
 
-  if (depositOutstanding || noShowOutstanding || sessionCompleteOutstanding) {
+  if (depositOutstanding || sessionCompleteOutstanding) {
     const allLegs: { leg: PaymentRequestedLeg['leg']; orderId: string; amountPaise: Paise }[] = []
     if (depositOrder) allLegs.push({ leg: 'deposit', orderId: depositOrder.orderId, amountPaise: depositOrder.amountPaise })
-    if (noShowOrder) allLegs.push({ leg: 'no_show_authorization', orderId: noShowOrder.orderId, amountPaise: noShowOrder.amountPaise })
     if (sessionCompleteOrder) allLegs.push({ leg: 'session_complete_authorization', orderId: sessionCompleteOrder.orderId, amountPaise: sessionCompleteOrder.amountPaise })
 
     const outstandingLegs = new Set<PaymentRequestedLeg['leg']>()
     if (depositOutstanding) outstandingLegs.add('deposit')
-    if (noShowOutstanding) outstandingLegs.add('no_show_authorization')
     if (sessionCompleteOutstanding) outstandingLegs.add('session_complete_authorization')
 
     return recordPaymentRequested({ deps, snapshot, policy, allLegs, outstandingLegs })
@@ -515,18 +490,6 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
       )
     }
 
-    if (noShowAuthorized) {
-      events.push(
-        createAuthorizationHeldEvent(snapshot.bookingId, ++sequence, deps.clock, {
-          authorizationId: noShowAuthorized.authorizationId,
-          amountPaise: noShowAuthorized.amountPaise,
-          expiresAt: noShowAuthorized.expiresAt,
-          rail: deps.paymentRail.name,
-          enforcedBy: 'payment_rail',
-          policyVersion: policy.policyVersion,
-        }),
-      )
-    }
     if (sessionCompleteAuthorized) {
       events.push(
         createSessionCompleteAuthorizationHeldEvent(snapshot.bookingId, ++sequence, deps.clock, {
@@ -545,9 +508,6 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
       ...base,
       status: 'CONFIRMED',
       policyVersion: policy.policyVersion,
-      authorizationId: noShowAuthorized?.authorizationId,
-      authorizationAmountPaise: noShowAuthorized?.amountPaise,
-      authorizationExpiresAt: noShowAuthorized?.expiresAt,
       sessionCompleteAuthorizationId: sessionCompleteAuthorized?.authorizationId,
       sessionCompleteAuthorizationAmountPaise: sessionCompleteAuthorized?.amountPaise,
       sessionCompleteAuthorizationExpiresAt: sessionCompleteAuthorized?.expiresAt,
@@ -565,7 +525,6 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
     status: 'CONFIRMED',
     policyVersion: policy.policyVersion,
     deposit: needsDeposit && captured !== undefined ? { paymentId: captured.paymentId, amountPaise: captured.amountPaise } : undefined,
-    authorization: noShowAuthorized && { authorizationId: noShowAuthorized.authorizationId, amountPaise: noShowAuthorized.amountPaise, expiresAt: noShowAuthorized.expiresAt.toISOString() },
     sessionCompleteMandate: sessionCompleteAuthorized && {
       authorizationId: sessionCompleteAuthorized.authorizationId,
       amountPaise: sessionCompleteAuthorized.amountPaise,

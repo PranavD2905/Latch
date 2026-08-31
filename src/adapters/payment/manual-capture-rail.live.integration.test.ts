@@ -14,19 +14,19 @@ import { ManualCaptureRail } from './manual-capture-rail.js'
  * in `authorized` state, `captureAuthorization()` succeeding, and the real
  * "Capture amount must be equal to the amount authorized" refusal. Those
  * need a human to complete Checkout at least once (dev-logs/006/007) — no
- * such fixture exists yet for the no-show authorisation leg (unlike the
- * deposit leg's three fixture payments), since it would need a person
- * driving a real browser to create one. `fake-payment-rail.test.ts` proves
- * the same logic (including the item-7 ceiling refusal) fast and
- * deterministically in the meantime; `charge-no-show.integration.test.ts`
- * proves the full app-layer flow against that fake.
+ * such fixture exists yet for this authorisation leg (unlike the deposit
+ * leg's three fixture payments), since it would need a person driving a
+ * real browser to create one. `fake-payment-rail.test.ts` proves the same
+ * logic (including the item-7 ceiling refusal) fast and deterministically
+ * in the meantime; `confirm-with-deposit.fast.test.ts` proves the full
+ * app-layer flow against that fake.
  */
 
 process.loadEnvFile?.('.env')
 const keyId = process.env['RAZORPAY_KEY_ID']
 const keySecret = process.env['RAZORPAY_KEY_SECRET']
 
-const NO_SHOW_FEE_PAISE = toPaise(40000)
+const AUTHORIZATION_AMOUNT_PAISE = toPaise(40000)
 
 beforeAll(() => {
   if (!keyId || !keySecret) {
@@ -39,7 +39,7 @@ describe('ManualCaptureRail — real Razorpay test mode', () => {
     const rail = new ManualCaptureRail({ keyId: keyId!, keySecret: keySecret! })
 
     const order = await rail.ensureAuthorizationOrder({
-      amountPaise: NO_SHOW_FEE_PAISE,
+      amountPaise: AUTHORIZATION_AMOUNT_PAISE,
       idempotencyKey: `live-test-order-auth-${Date.now()}`,
       reference: 'live-test-order-authorization',
       now: new Date(),
@@ -53,7 +53,7 @@ describe('ManualCaptureRail — real Razorpay test mode', () => {
 
     const now = new Date()
     const order = await rail.ensureAuthorizationOrder({
-      amountPaise: NO_SHOW_FEE_PAISE,
+      amountPaise: AUTHORIZATION_AMOUNT_PAISE,
       idempotencyKey: `live-test-unpaid-auth-${Date.now()}`,
       reference: 'live-test-unpaid-authorization',
       now,

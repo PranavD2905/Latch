@@ -63,8 +63,6 @@ beforeAll(async () => {
     depositType: 'fixed',
     depositAmountPaise: currentPolicy.policy.depositAmountPaise ?? null,
     cancellationLadder: currentPolicy.policy.cancellationLadder,
-    noShowFeePaise: currentPolicy.policy.noShowFeePaise ?? null,
-    noShowGraceMinutes: currentPolicy.policy.noShowGraceMinutes ?? null,
     holdTtlSeconds: currentPolicy.policy.holdTtlSeconds,
     maxConcurrentHoldsPerAgent: 10,
     holdRateLimitPerMinute: 2,

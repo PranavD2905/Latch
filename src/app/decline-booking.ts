@@ -1,12 +1,11 @@
 import {
   createAlternativesOfferedEvent,
-  createAuthorizationReleasedEvent,
   createMerchantDeclinedEvent,
   createRefundIssuedEvent,
   createSessionCompleteAuthorizationReleasedEvent,
   createSlotReleasedEvent,
 } from '../domain/event-factory.js'
-import type { AuthorizationHeldEvent, BookingEvent, DepositCapturedEvent } from '../domain/events.js'
+import type { BookingEvent, DepositCapturedEvent } from '../domain/events.js'
 import { subtractPaise } from '../domain/money.js'
 import { findSlots } from './find-slots.js'
 import { executePaymentCall } from './payment-circuit-breaker.js'
@@ -45,8 +44,6 @@ type GateOutcome =
       policyVersion: number | undefined
       lastEventSequence: number
       deposit: DepositCapturedEvent
-      /** `undefined` when this booking's policy had no no-show fee configured — nothing to release. */
-      authorization: AuthorizationHeldEvent | undefined
       /** `undefined` only in the ₹0 edge case (service priced exactly at the deposit) — confirm_with_deposit never authorised anything to release. */
       sessionCompleteAuthorizationId: string | undefined
       sessionCompleteAuthorizationExpiresAt: Date | undefined
@@ -90,10 +87,8 @@ export async function declineBooking(cmd: DeclineBookingCommand, deps: AppDeps):
     if (!deposit) {
       return { kind: 'no_deposit' }
     }
-    // Both optional now: no-show is an optional policy leg, and the
-    // session-complete mandate is only absent in the ₹0 edge case — either
-    // way, "nothing to release" is a legitimate state, not a prior-slice bug.
-    const authorization = history.find((e): e is AuthorizationHeldEvent => e.type === 'AUTHORIZATION_HELD')
+    // The session-complete mandate is only absent in the ₹0 edge case —
+    // "nothing to release" is a legitimate state, not a prior-slice bug.
 
     return {
       kind: 'ok',
@@ -103,7 +98,6 @@ export async function declineBooking(cmd: DeclineBookingCommand, deps: AppDeps):
       policyVersion: snapshot.policyVersion,
       lastEventSequence: snapshot.lastEventSequence,
       deposit,
-      authorization,
       sessionCompleteAuthorizationId: snapshot.sessionCompleteAuthorizationId,
       sessionCompleteAuthorizationExpiresAt: snapshot.sessionCompleteAuthorizationExpiresAt,
     }
@@ -119,7 +113,7 @@ export async function declineBooking(cmd: DeclineBookingCommand, deps: AppDeps):
     throw new NoDepositFoundError(`booking ${cmd.bookingId} is CONFIRMED but has no DEPOSIT_CAPTURED event in its history`)
   }
 
-  const { practitionerId, serviceId, startsAt, deposit, authorization, sessionCompleteAuthorizationId, sessionCompleteAuthorizationExpiresAt } = gateOutcome
+  const { practitionerId, serviceId, startsAt, deposit, sessionCompleteAuthorizationId, sessionCompleteAuthorizationExpiresAt } = gateOutcome
 
   const paymentId = deposit.authority.razorpayPaymentId
   if (!paymentId) {
@@ -185,17 +179,7 @@ export async function declineBooking(cmd: DeclineBookingCommand, deps: AppDeps):
     // No rail call here, deliberately (dev-logs/005: no void endpoint) —
     // "released" means we simply never call captureAuthorization on it.
     // Razorpay auto-refunds the authorisation on its own at `expiresAt`.
-    // Both legs are optional now — no-show may never have been configured,
-    // and the session-complete mandate may be the ₹0 edge case.
-    if (authorization) {
-      events.push(
-        createAuthorizationReleasedEvent(cmd.bookingId, ++sequence, deps.clock, {
-          authorizationId: authorization.authorizationId,
-          rail: authorization.rail,
-          expiresAt: authorization.expiresAt,
-        }),
-      )
-    }
+    // Optional — the session-complete mandate may be the ₹0 edge case.
     if (sessionCompleteAuthorizationId && sessionCompleteAuthorizationExpiresAt) {
       events.push(
         createSessionCompleteAuthorizationReleasedEvent(cmd.bookingId, ++sequence, deps.clock, {
@@ -214,7 +198,6 @@ export async function declineBooking(cmd: DeclineBookingCommand, deps: AppDeps):
     const projection = {
       ...fresh,
       status: 'DECLINED_BY_MERCHANT' as const,
-      authorizationId: undefined,
       sessionCompleteAuthorizationId: undefined,
       lastEventSequence: sequence,
     }

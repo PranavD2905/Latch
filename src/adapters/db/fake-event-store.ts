@@ -53,7 +53,6 @@ export class FakeEventStore implements EventStore {
       // to prove the *lock itself* works belongs against `PostgresEventStore`.
       lockAgent: async () => {},
       claimHeldBookingsWithExpiredHold: (now, limit) => this.claimHeldBookingsWithExpiredHold(now, limit),
-      claimConfirmedBookingsPastStart: (now, limit) => this.claimConfirmedBookingsPastStart(now, limit),
       countBookingsCreatedByAgentSince: (merchantId, agentId, since) => this.countBookingsCreatedByAgentSince(merchantId, agentId, since),
     }
   }
@@ -99,12 +98,6 @@ export class FakeEventStore implements EventStore {
     return [...this.bookings.values()].filter((b) => b.merchantId === merchantId && b.agentId === agentId && b.status === 'HELD').length
   }
 
-  async listConfirmedBookingsWithExpiredAuthorization(now: Date): Promise<readonly BookingSnapshot[]> {
-    return [...this.bookings.values()].filter(
-      (b) => b.status === 'CONFIRMED' && b.authorizationExpiresAt !== undefined && b.authorizationExpiresAt < now && b.authorizationLapsedAt === undefined,
-    )
-  }
-
   async listConfirmedBookingsWithExpiredSessionCompleteAuthorization(now: Date): Promise<readonly BookingSnapshot[]> {
     return [...this.bookings.values()].filter(
       (b) =>
@@ -128,10 +121,6 @@ export class FakeEventStore implements EventStore {
 
   private async claimHeldBookingsWithExpiredHold(now: Date, limit: number): Promise<readonly BookingSnapshot[]> {
     return [...this.bookings.values()].filter((b) => b.status === 'HELD' && b.holdExpiresAt !== undefined && b.holdExpiresAt < now).slice(0, limit)
-  }
-
-  private async claimConfirmedBookingsPastStart(now: Date, limit: number): Promise<readonly BookingSnapshot[]> {
-    return [...this.bookings.values()].filter((b) => b.status === 'CONFIRMED' && b.startsAt < now && b.noShowEligibleMarkedAt === undefined).slice(0, limit)
   }
 
   private async countBookingsCreatedByAgentSince(merchantId: string, agentId: string, since: Date): Promise<number> {

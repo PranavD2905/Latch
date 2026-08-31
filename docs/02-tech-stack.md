@@ -200,8 +200,9 @@ dependency plus conversion noise at every boundary.
 
 ## 9. Background jobs — DB-backed poller, in-process
 
-Two jobs exist: expire holds, and mark bookings no-show-eligible. Both are low-frequency and
-idempotent.
+Jobs exist for expiring holds and sweeping lapsed session-complete authorisations. Both are
+low-frequency and idempotent. (A third, marking bookings no-show-eligible, existed through Slice 5 and
+was removed along with the no-show feature — see the dev log for that removal.)
 
 We run an interval inside the main Node process that queries for due work, claims rows with `FOR UPDATE
 SKIP LOCKED`, and appends the resulting events.

@@ -56,7 +56,7 @@ function freshKey(): string {
 
 const createdBookingIds: string[] = []
 
-async function confirmedBooking(hhmm: string): Promise<{ bookingId: string; authorizationId: string; paymentId: string }> {
+async function confirmedBooking(hhmm: string): Promise<{ bookingId: string; paymentId: string }> {
   const startsAt = slotAt(hhmm)
   clock.set(new Date(startsAt.getTime() - 5 * 24 * 3_600_000))
   const agentId = `agent_${ulid()}`
@@ -69,7 +69,7 @@ async function confirmedBooking(hhmm: string): Promise<{ bookingId: string; auth
       deps,
     ),
   )
-  return { bookingId: held.bookingId, authorizationId: confirmed.authorization!.authorizationId, paymentId: confirmed.deposit!.paymentId }
+  return { bookingId: held.bookingId, paymentId: confirmed.deposit!.paymentId }
 }
 
 beforeAll(async () => {
@@ -114,22 +114,6 @@ describe('reconciliation worker (real Postgres) — dev-logs/014 item 1, externa
     await runReconciliationWorker(deps)
     const trailAfter = await db.select().from(events).where(eq(events.bookingId, bookingId))
     expect(trailAfter.filter((e) => e.type === 'RECONCILIATION_MISMATCH')).toHaveLength(1)
-  })
-
-  it('reports an authorization mismatch when Razorpay shows it captured but the trail (CONFIRMED, not yet charged) still expects it authorized', async () => {
-    const { bookingId, authorizationId } = await confirmedBooking('10:00')
-
-    // Simulate the no-show fee being captured outside charge_no_show's own
-    // gate (e.g. a direct dashboard capture) — status stays CONFIRMED, but
-    // Razorpay's own record has moved past what the trail expects.
-    await deps.paymentRail.captureAuthorization({ authorizationId, amountPaise: toPaise(40000), reference: bookingId })
-
-    const { mismatchedBookingIds } = await runReconciliationWorker(deps)
-    expect(mismatchedBookingIds).toContain(bookingId)
-
-    const trail = await db.select().from(events).where(eq(events.bookingId, bookingId))
-    const mismatch = trail.find((e) => e.type === 'RECONCILIATION_MISMATCH')
-    expect(mismatch?.payload).toMatchObject({ subject: 'authorization', expectedStatus: 'authorized', actualStatus: 'captured' })
   })
 
   it('reconcileObservedPayment (the webhook path) finds nothing to report once the trail already explains the payment', async () => {

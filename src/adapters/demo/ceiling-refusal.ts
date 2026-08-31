@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 /**
  * slice-4.md item 7 — the pitch-video beat (2:00-2:45). Deliberately
- * requests a capture ₹0.01 above the authorised no-show amount and prints
- * the rail's own refusal. Trivially triggerable on demand:
+ * requests a capture ₹0.01 above the authorised amount — the session-complete
+ * mandate (previously the no-show authorisation, removed along with that
+ * feature; see the dev log for that removal) — and prints the rail's own
+ * refusal. Trivially triggerable on demand:
  *
  *   npm run demo:ceiling-refusal                    # fresh booking, FakePaymentRail
  *   npm run demo:ceiling-refusal -- bkg_01J...       # against an existing CONFIRMED booking
  *   PAYMENT_PROVIDER=razorpay npm run demo:ceiling-refusal -- bkg_01J...
  *     # real Razorpay test mode — pass an existing bookingId whose deposit
- *     # AND no-show authorisation were already confirmed via real Checkout
- *     # (dev-logs/006/007: a fresh booking needs a human at Checkout twice,
- *     # which this script cannot drive unattended)
+ *     # AND session-complete mandate were already confirmed via real Checkout
+ *     # (dev-logs/006/007: a fresh booking needs a human at Checkout for each
+ *     # applicable leg, which this script cannot drive unattended)
  */
 import { ulid } from 'ulid'
 import { confirmWithDeposit } from '../../app/confirm-with-deposit.js'

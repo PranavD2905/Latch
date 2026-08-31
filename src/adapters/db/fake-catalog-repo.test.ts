@@ -8,8 +8,6 @@ function draft() {
   return {
     depositAmountPaise: toPaise(30000),
     cancellationLadder: [],
-    noShowFeePaise: undefined,
-    noShowGraceMinutes: undefined,
     holdTtlSeconds: 60,
     maxConcurrentHoldsPerAgent: 3,
     holdRateLimitPerMinute: 10,

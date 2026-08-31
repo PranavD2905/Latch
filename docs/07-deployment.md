@@ -14,8 +14,8 @@ at the deployment layer too, rather than merging them into one process:
 
 | Railway service | Runs | Public? | Why |
 |---|---|---|---|
-| `latch-mcp` | `npm run start:mcp` (`src/adapters/mcp/http.ts`) | Yes | The public HTTPS MCP endpoint a remote agent connects to. Also runs both Slice 5 background jobs (hold-expiry, no-show-eligibility), the Slice 4 authorisation-lapse worker, and (dev-logs/014) the reconciliation worker as in-process `setInterval` loops — none of the four bind a port or hold per-connection state, so folding them in here satisfies "the background worker running in the deployed process" without a fifth service. |
-| `latch-merchant-api` | `npm run start:merchant-api` (`src/adapters/merchant-api/http.ts`) | Yes | The merchant-only decline/mark-no-show routes, exercised during the demo from outside the deployed environment (curl / a script on the presenter's machine, not the agent). Also hosts `GET /slots` (dev-logs/014, item 4 — public, read-only, same posture as MCP's `find_slots`) and `POST /webhooks/razorpay` (dev-logs/014, item 2 — HMAC-signature-gated, not the merchant Bearer token), both mounted on this same already-public Fastify instance rather than provisioning a fourth service. |
+| `latch-mcp` | `npm run start:mcp` (`src/adapters/mcp/http.ts`) | Yes | The public HTTPS MCP endpoint a remote agent connects to. Also runs the Slice 5 hold-expiry background job, the Slice 4 authorisation-lapse worker, and (dev-logs/014) the reconciliation worker as in-process `setInterval` loops — none of the three bind a port or hold per-connection state, so folding them in here satisfies "the background worker running in the deployed process" without a fourth service. (A no-show-eligibility job ran alongside these through Slice 5 — removed along with that feature; see the dev log for that removal.) |
+| `latch-merchant-api` | `npm run start:merchant-api` (`src/adapters/merchant-api/http.ts`) | Yes | The merchant-only decline/mark-complete routes, exercised during the demo from outside the deployed environment (curl / a script on the presenter's machine, not the agent). Also hosts `GET /slots` (dev-logs/014, item 4 — public, read-only, same posture as MCP's `find_slots`) and `POST /webhooks/razorpay` (dev-logs/014, item 2 — HMAC-signature-gated, not the merchant Bearer token), both mounted on this same already-public Fastify instance rather than provisioning a fourth service. |
 | `latch-viewer` | `npm run start:viewer` (`src/adapters/audit-trail/http.ts`) | Yes | The SSE feed **and** the built `web/dist` viewer, served from the same origin — no CORS handling needed, same reasoning `web/vite.config.ts`'s dev-time proxy already used. Also serves `GET /pay/:bookingId` (payment-link feature, dev-logs entry for this slice) — the single page a human actually pays a `confirm_with_deposit` link from, covering every applicable leg. Mounted here, not on `latch-merchant-api`, because this is the one server with Helmet's CSP already off (`registerSecurityHeaders`'s own comment) — Checkout.js is a cross-origin script load a default CSP would block. |
 | Postgres | Railway managed Postgres | No (internal) | Shared `DATABASE_URL` across all three services. |
 
@@ -224,10 +224,10 @@ Evaluated and reaffirmed, not rebuilt — see the doc named for each:
 
 Also built, extending Slice 8's real-concurrency-test discipline rather than a new category of testing:
 `src/app/chaos-payment-outage.integration.test.ts` drives a genuine partial payment-provider outage
-through `confirm_with_deposit` itself (deposit capture succeeds, the concurrent no-show-authorization
-call fails) and proves the actual recovery path — the webhook, not the periodic reconciliation
-pass — closes it. This is the first test to exercise that specific gap-1 shape through the real command
-rather than by calling the reconciliation primitives directly.
+through `confirm_with_deposit` itself (deposit capture succeeds, the concurrent session-complete-
+authorization call fails) and proves the actual recovery path — the webhook, not the periodic
+reconciliation pass — closes it. This is the first test to exercise that specific gap-1 shape through
+the real command rather than by calling the reconciliation primitives directly.
 
 ## Local development needs two Postgres clusters, not one
 

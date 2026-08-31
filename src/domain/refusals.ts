@@ -11,15 +11,10 @@ export const REFUSAL_CODES = [
   'POLICY_VERSION_STALE',
   'CAPTURE_AMOUNT_MISMATCH',
   'LADDER_FORBIDS_MOVE',
-  'NOT_YET_ELIGIBLE',
-  'MERCHANT_ACTION_REQUIRED',
-  'AUTHORIZATION_EXPIRED',
   'IDEMPOTENT_REPLAY',
   'RATE_LIMITED',
   /** The service's current price is less than the merchant's deposit amount — the session-complete mandate (price − deposit) would be negative. Structurally refused, same tier as CAPTURE_AMOUNT_MISMATCH: nothing an agent can do about it. */
   'SERVICE_PRICE_BELOW_DEPOSIT',
-  /** `charge_no_show` attempted against a booking whose policy never configured a no-show fee — there is no authorisation to capture. */
-  'NO_SHOW_FEE_NOT_CONFIGURED',
 ] as const
 
 export type RefusalCode = (typeof REFUSAL_CODES)[number]

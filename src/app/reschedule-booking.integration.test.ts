@@ -64,7 +64,7 @@ async function loadEventLog(bookingId: string): Promise<readonly BookingEvent[]>
   return rows.map((row) => row.payload as BookingEvent)
 }
 
-async function holdAndConfirm(startsAt: Date): Promise<{ bookingId: string; agentId: string; depositAmountPaise: number; authorizationId: string }> {
+async function holdAndConfirm(startsAt: Date): Promise<{ bookingId: string; agentId: string; depositAmountPaise: number; sessionCompleteAuthorizationId: string }> {
   const agentId = `agent_${ulid()}`
   const held = await holdSlot({ agentId, practitionerId: SEED_PRACTITIONER_ID, serviceId: SEED_SERVICE_ID, startsAt, idempotencyKey: freshKey() }, deps)
   createdBookingIds.push(held.bookingId)
@@ -75,7 +75,7 @@ async function holdAndConfirm(startsAt: Date): Promise<{ bookingId: string; agen
       deps,
     ),
   )
-  return { bookingId: held.bookingId, agentId, depositAmountPaise: confirmed.deposit!.amountPaise, authorizationId: confirmed.authorization!.authorizationId }
+  return { bookingId: held.bookingId, agentId, depositAmountPaise: confirmed.deposit!.amountPaise, sessionCompleteAuthorizationId: confirmed.sessionCompleteMandate!.authorizationId }
 }
 
 beforeAll(async () => {
@@ -96,7 +96,7 @@ afterAll(async () => {
 describe('reschedule (real Postgres + FakePaymentProvider + FrozenClock) — a self-transition, not a cancel-and-rebook', () => {
   it('moves a confirmed booking in the free tier: same bookingId, deposit, and authorization; new startsAt', async () => {
     clock.set(new Date(slotAt('09:00').getTime() - 5 * 24 * 3_600_000))
-    const { bookingId, authorizationId } = await holdAndConfirm(slotAt('09:00'))
+    const { bookingId, sessionCompleteAuthorizationId } = await holdAndConfirm(slotAt('09:00'))
 
     clock.set(new Date(slotAt('09:00').getTime() - 72 * 3_600_000)) // well inside the free (0%) tier
     const newStartsAt = slotAt('11:00')
@@ -110,12 +110,12 @@ describe('reschedule (real Postgres + FakePaymentProvider + FrozenClock) — a s
     const snapshot = await deps.eventStore.loadSnapshot(bookingId)
     expect(snapshot?.status).toBe('CONFIRMED')
     expect(snapshot?.startsAt.toISOString()).toBe(newStartsAt.toISOString())
-    expect(snapshot?.authorizationId).toBe(authorizationId) // same authorisation, untouched
+    expect(snapshot?.sessionCompleteAuthorizationId).toBe(sessionCompleteAuthorizationId) // same authorisation, untouched
 
     const allEvents = await loadEventLog(bookingId)
     expect(allEvents.some((e) => e.type === 'DEPOSIT_CAPTURED')).toBe(true)
     expect(allEvents.filter((e) => e.type === 'DEPOSIT_CAPTURED')).toHaveLength(1) // no second deposit — same money
-    expect(allEvents.filter((e) => e.type === 'AUTHORIZATION_HELD')).toHaveLength(1) // no second authorisation
+    expect(allEvents.filter((e) => e.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD')).toHaveLength(1) // no second authorisation
     const rescheduled = allEvents.find((e) => e.type === 'BOOKING_RESCHEDULED')
     expect(rescheduled).toMatchObject({
       previousStartsAt: slotAt('09:00').toISOString(),

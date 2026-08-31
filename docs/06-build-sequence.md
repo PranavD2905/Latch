@@ -163,10 +163,10 @@ third-party agent can reach a merchant without a partnership.
 | 0:00–0:30 | The problem. "Book me a dermatologist Thursday." It can find one, it can't book one |
 | 0:30–1:00 | Why: every protocol assumes a SKU. UCP has Shopping, Lodging, Food. No appointments primitive exists |
 | 1:00–2:00 | Live: a real agent holds a slot, reads the ladder, pays a deposit. Trail streaming beside it |
-| 2:00–2:45 | **The bound.** Attempt an over-ceiling no-show charge. Razorpay refuses it. Show the refusal in the trail. *"This isn't caught. It's impossible."* |
+| 2:00–2:45 | **The bound.** Attempt an over-ceiling capture against the session-complete mandate. Razorpay refuses it. Show the refusal in the trail. *"This isn't caught. It's impossible."* |
 | 2:45–3:45 | **The failure.** Doctor calls in sick. Decline → refund → authorisation released → alternatives offered. Customer cost ₹0, no human |
 | 3:45–4:30 | Architecture: audit trail as source of truth; four mandatory fields; bound outside our trust boundary |
-| 4:30–5:00 | The money. ₹3 lakh/month evaporating per clinic; no-show revenue is 100% incremental to Razorpay |
+| 4:30–5:00 | The money. ₹3 lakh/month evaporating per clinic; deposit forfeiture recovers it automatically, the way Indian merchants actually run this |
 
 **The 2:00–2:45 beat is the differentiator.** Most submissions will *claim* bounds. Showing Razorpay
 refuse a debit our own server requested is the moment the architecture becomes visible.

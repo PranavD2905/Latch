@@ -11,8 +11,6 @@ function validInput(overrides: Partial<PolicyDraft> = {}): PolicyDraft {
       { hoursBefore: 12, retainPct: 50 },
       { hoursBefore: 0, retainPct: 100 },
     ],
-    noShowFeePaise: 40_000,
-    noShowGraceMinutes: 15,
     holdTtlSeconds: 600,
     maxConcurrentHoldsPerAgent: 3,
     holdRateLimitPerMinute: 10,
@@ -55,23 +53,17 @@ describe('validatePolicyInput', () => {
     it('accepts an absent deposit — a merchant running with no upfront deposit at all', () => {
       expect(() => validatePolicyInput(validInput({ depositAmountPaise: undefined }))).not.toThrow()
     })
-    it('accepts an absent deposit alongside an absent no-show fee — leaving only the session-complete leg', () => {
-      expect(() => validatePolicyInput(validInput({ depositAmountPaise: undefined, noShowFeePaise: undefined, noShowGraceMinutes: undefined }))).not.toThrow()
-    })
-    it('rejects a zero no-show fee', () => {
-      expect(codeOf(() => validatePolicyInput(validInput({ noShowFeePaise: 0 })))).toBe('AMOUNT_NOT_POSITIVE_INTEGER')
+    it('accepts an absent deposit — leaving only the session-complete leg', () => {
+      expect(() => validatePolicyInput(validInput({ depositAmountPaise: undefined }))).not.toThrow()
     })
   })
 
-  describe('sane bounds on TTL, grace, and limits', () => {
+  describe('sane bounds on TTL and limits', () => {
     it('rejects a hold TTL below the floor', () => {
       expect(codeOf(() => validatePolicyInput(validInput({ holdTtlSeconds: 10 })))).toBe('HOLD_TTL_OUT_OF_BOUNDS')
     })
     it('rejects a hold TTL above the ceiling (e.g. milliseconds typed as seconds)', () => {
       expect(codeOf(() => validatePolicyInput(validInput({ holdTtlSeconds: 3_600_000 })))).toBe('HOLD_TTL_OUT_OF_BOUNDS')
-    })
-    it('rejects a negative grace period', () => {
-      expect(codeOf(() => validatePolicyInput(validInput({ noShowGraceMinutes: -5 })))).toBe('GRACE_MINUTES_OUT_OF_BOUNDS')
     })
     it('rejects an unbounded max-concurrent-holds', () => {
       expect(codeOf(() => validatePolicyInput(validInput({ maxConcurrentHoldsPerAgent: 0 })))).toBe('MAX_CONCURRENT_HOLDS_OUT_OF_BOUNDS')

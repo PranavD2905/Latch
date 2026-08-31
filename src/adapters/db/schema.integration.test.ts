@@ -114,8 +114,6 @@ describe('policies_immutable (raw DB, not application logic)', () => {
       { hoursBefore: 12, retainPct: 50 },
       { hoursBefore: 0, retainPct: 100 },
     ],
-    noShowFeePaise: 40000,
-    noShowGraceMinutes: 15,
     holdTtlSeconds: 600,
     maxConcurrentHoldsPerAgent: 3,
     holdRateLimitPerMinute: 10,
@@ -129,7 +127,7 @@ describe('policies_immutable (raw DB, not application logic)', () => {
   it('rejects UPDATE of a published policy', async () => {
     await db.insert(policies).values(policyRow(2))
     await expect(
-      db.update(policies).set({ noShowFeePaise: 999999 }).where(eq(policies.merchantId, merchantId)),
+      db.update(policies).set({ depositAmountPaise: 999999 }).where(eq(policies.merchantId, merchantId)),
     ).rejects.toThrow(/append-only/i)
   })
 

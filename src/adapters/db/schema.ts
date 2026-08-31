@@ -37,6 +37,14 @@ export const eventTypeEnum = pgEnum('event_type', [
   'PAYMENT_REQUESTED',
 ])
 
+/**
+ * `no_show_eligible`/`no_show_charged` are historical-only since the no-show
+ * feature's removal (see the dev log for that removal) — no live code path
+ * can produce either again, but a value already used by a pre-removal row
+ * (or cited by an `eventTypeEnum` row's own historical event type above)
+ * can never be dropped from a Postgres enum without recreating the type, and
+ * there is no benefit to that surgery: keeping them costs nothing.
+ */
 export const bookingStatusEnum = pgEnum('booking_status', [
   'held',
   'expired',
@@ -109,43 +117,24 @@ export const bookings = pgTable('bookings', {
   status: bookingStatusEnum('status').notNull(),
   policyVersion: integer('policy_version'),
   /**
-   * Slice 4: the no-show authorisation currently held against this booking,
-   * and when it lapses / whether that lapse has been recorded — needed for
-   * `charge_no_show`'s gate and the authorisation-lapse worker without a
-   * full event replay. Renamed from the Slice 0-1 scaffolding's `mandateId`
-   * (dev-logs/005/006: the mandate design was replaced by card manual
-   * capture before it was ever used for real).
-   */
-  authorizationId: text('authorization_id'),
-  authorizationAmountPaise: integer('authorization_amount_paise'),
-  authorizationExpiresAt: timestamp('authorization_expires_at', { withTimezone: true }),
-  authorizationLapsedAt: timestamp('authorization_lapsed_at', { withTimezone: true }),
-  /**
-   * The session-complete leg — same role as the four columns above, mirrored
-   * for the second, independent mandate (`service.pricePaise -
-   * policy.depositAmountPaise`) authorised alongside the no-show fee at
-   * confirm time and captured when the merchant marks the session complete.
-   * A structurally separate set of columns, not a `purpose` flag on the
-   * columns above — the two authorisations can be live at once and resolve
-   * independently (see `mark-session-complete.ts` / `charge-no-show.ts`,
-   * each of which releases the *other* leg on its own terminal outcome).
+   * The session-complete mandate — `service.pricePaise -
+   * policy.depositAmountPaise`, authorised at confirm time and captured when
+   * the merchant marks the session complete.
+   *
+   * (Used to have a no-show-leg twin — `authorization_id` /
+   * `authorization_amount_paise` / `authorization_expires_at` /
+   * `authorization_lapsed_at`, plus `non_attendance_marked_at` and
+   * `no_show_eligible_marked_at` — dropped in migration 0017 along with the
+   * no-show feature; see the dev log for that removal. This `bookings` table
+   * is a disposable projection, not the source of truth — see `fold.ts`'s
+   * own doc comment — so dropping those columns lost no history: whatever a
+   * pre-removal booking's own no-show authorisation actually was still lives
+   * permanently in that booking's `events.payload` rows.)
    */
   sessionCompleteAuthorizationId: text('session_complete_authorization_id'),
   sessionCompleteAuthorizationAmountPaise: integer('session_complete_authorization_amount_paise'),
   sessionCompleteAuthorizationExpiresAt: timestamp('session_complete_authorization_expires_at', { withTimezone: true }),
   sessionCompleteAuthorizationLapsedAt: timestamp('session_complete_authorization_lapsed_at', { withTimezone: true }),
-  /** Set by the merchant API's mark-no-show route — `charge_no_show`'s second independent fact. */
-  nonAttendanceMarkedAt: timestamp('non_attendance_marked_at', { withTimezone: true }),
-  /**
-   * Slice 5: set once the no-show-eligibility worker has recorded
-   * `NO_SHOW_ELIGIBLE` for this booking — the idempotency marker that stops
-   * it firing twice, same role `authorizationLapsedAt` plays for the
-   * authorisation-lapse worker. Deliberately does NOT gate `charge_no_show`
-   * (dev-logs/009: its gate re-derives eligibility from the clock directly)
-   * and setting it never changes `status` away from `confirmed` — see
-   * `src/app/no-show-eligibility-worker.ts`.
-   */
-  noShowEligibleMarkedAt: timestamp('no_show_eligible_marked_at', { withTimezone: true }),
   /**
    * Slice 1 addition: which agent holds/confirmed this booking, and (while
    * status is 'held') when that hold's TTL expires. Both are needed for
@@ -239,9 +228,6 @@ export const policies = pgTable(
     depositAmountPaise: integer('deposit_amount_paise'),
     /** Ordered array of { hoursBefore, retainPct } — docs/03-domain-model.md §2. */
     cancellationLadder: jsonb('cancellation_ladder').notNull(),
-    /** Optional now — both null together, or both set together (validated in `validatePolicyInput`, not here). A merchant can run with no no-show fee at all. */
-    noShowFeePaise: integer('no_show_fee_paise'),
-    noShowGraceMinutes: integer('no_show_grace_minutes'),
     holdTtlSeconds: integer('hold_ttl_seconds').notNull(),
     maxConcurrentHoldsPerAgent: integer('max_concurrent_holds_per_agent').notNull(),
     /** dev-logs/014, gap 2: the request-rate ceiling — see `src/domain/policy.ts`'s `holdRateLimitPerMinute` doc comment. */

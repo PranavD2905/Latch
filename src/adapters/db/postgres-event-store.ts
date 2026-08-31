@@ -48,16 +48,10 @@ function rowToSnapshot(row: typeof bookings.$inferSelect): BookingSnapshot {
     startsAt: row.startsAt,
     status: fromDbStatus(row.status),
     policyVersion: row.policyVersion ?? undefined,
-    authorizationId: row.authorizationId ?? undefined,
-    authorizationAmountPaise: row.authorizationAmountPaise !== null ? toPaise(row.authorizationAmountPaise) : undefined,
-    authorizationExpiresAt: row.authorizationExpiresAt ?? undefined,
-    authorizationLapsedAt: row.authorizationLapsedAt ?? undefined,
     sessionCompleteAuthorizationId: row.sessionCompleteAuthorizationId ?? undefined,
     sessionCompleteAuthorizationAmountPaise: row.sessionCompleteAuthorizationAmountPaise !== null ? toPaise(row.sessionCompleteAuthorizationAmountPaise) : undefined,
     sessionCompleteAuthorizationExpiresAt: row.sessionCompleteAuthorizationExpiresAt ?? undefined,
     sessionCompleteAuthorizationLapsedAt: row.sessionCompleteAuthorizationLapsedAt ?? undefined,
-    nonAttendanceMarkedAt: row.nonAttendanceMarkedAt ?? undefined,
-    noShowEligibleMarkedAt: row.noShowEligibleMarkedAt ?? undefined,
     agentId: row.agentId ?? undefined,
     holdExpiresAt: row.holdExpiresAt ?? undefined,
     pendingPaymentLegs: (row.pendingPaymentLegs as readonly PaymentRequestedLeg[] | null) ?? undefined,
@@ -108,16 +102,10 @@ async function appendFor(db: Queryable, evts: readonly BookingEvent[], projectio
       startsAt: projection.startsAt,
       status: toDbStatus(projection.status),
       policyVersion: projection.policyVersion ?? null,
-      authorizationId: projection.authorizationId ?? null,
-      authorizationAmountPaise: projection.authorizationAmountPaise ?? null,
-      authorizationExpiresAt: projection.authorizationExpiresAt ?? null,
-      authorizationLapsedAt: projection.authorizationLapsedAt ?? null,
       sessionCompleteAuthorizationId: projection.sessionCompleteAuthorizationId ?? null,
       sessionCompleteAuthorizationAmountPaise: projection.sessionCompleteAuthorizationAmountPaise ?? null,
       sessionCompleteAuthorizationExpiresAt: projection.sessionCompleteAuthorizationExpiresAt ?? null,
       sessionCompleteAuthorizationLapsedAt: projection.sessionCompleteAuthorizationLapsedAt ?? null,
-      nonAttendanceMarkedAt: projection.nonAttendanceMarkedAt ?? null,
-      noShowEligibleMarkedAt: projection.noShowEligibleMarkedAt ?? null,
       agentId: projection.agentId ?? null,
       holdExpiresAt: projection.holdExpiresAt ?? null,
       pendingPaymentLegs: projection.pendingPaymentLegs ?? null,
@@ -135,16 +123,10 @@ async function appendFor(db: Queryable, evts: readonly BookingEvent[], projectio
         startsAt: projection.startsAt,
         status: toDbStatus(projection.status),
         policyVersion: projection.policyVersion ?? null,
-        authorizationId: projection.authorizationId ?? null,
-        authorizationAmountPaise: projection.authorizationAmountPaise ?? null,
-        authorizationExpiresAt: projection.authorizationExpiresAt ?? null,
-        authorizationLapsedAt: projection.authorizationLapsedAt ?? null,
         sessionCompleteAuthorizationId: projection.sessionCompleteAuthorizationId ?? null,
         sessionCompleteAuthorizationAmountPaise: projection.sessionCompleteAuthorizationAmountPaise ?? null,
         sessionCompleteAuthorizationExpiresAt: projection.sessionCompleteAuthorizationExpiresAt ?? null,
         sessionCompleteAuthorizationLapsedAt: projection.sessionCompleteAuthorizationLapsedAt ?? null,
-        nonAttendanceMarkedAt: projection.nonAttendanceMarkedAt ?? null,
-        noShowEligibleMarkedAt: projection.noShowEligibleMarkedAt ?? null,
         agentId: projection.agentId ?? null,
         holdExpiresAt: projection.holdExpiresAt ?? null,
         pendingPaymentLegs: projection.pendingPaymentLegs ?? null,
@@ -171,7 +153,6 @@ export class PostgresEventStore implements EventStore {
         append: (evts, projection, merchantId) => appendFor(trxDb, evts, projection, merchantId),
         countLiveHoldsForAgent: (merchantId, agentId) => countLiveHoldsFor(trxDb, merchantId, agentId),
         claimHeldBookingsWithExpiredHold: (now, limit) => claimHeldBookingsWithExpiredHoldFor(trxDb, now, limit),
-        claimConfirmedBookingsPastStart: (now, limit) => claimConfirmedBookingsPastStartFor(trxDb, now, limit),
         countBookingsCreatedByAgentSince: (merchantId, agentId, since) => countBookingsCreatedByAgentSinceFor(trxDb, merchantId, agentId, since),
         lockAgent: async (merchantId, agentId) => {
           // pg_advisory_xact_lock: held until this transaction commits or
@@ -233,21 +214,6 @@ export class PostgresEventStore implements EventStore {
     return countLiveHoldsFor(this.db, merchantId, agentId)
   }
 
-  async listConfirmedBookingsWithExpiredAuthorization(now: Date): Promise<readonly BookingSnapshot[]> {
-    const rows = await this.db
-      .select()
-      .from(bookings)
-      .where(
-        and(
-          eq(bookings.status, 'confirmed'),
-          isNotNull(bookings.authorizationExpiresAt),
-          lt(bookings.authorizationExpiresAt, now),
-          isNull(bookings.authorizationLapsedAt),
-        ),
-      )
-    return rows.map(rowToSnapshot)
-  }
-
   async listConfirmedBookingsWithExpiredSessionCompleteAuthorization(now: Date): Promise<readonly BookingSnapshot[]> {
     const rows = await this.db
       .select()
@@ -301,22 +267,6 @@ async function claimHeldBookingsWithExpiredHoldFor(db: Queryable, now: Date, lim
     .select()
     .from(bookings)
     .where(and(eq(bookings.status, 'held'), isNotNull(bookings.holdExpiresAt), lt(bookings.holdExpiresAt, now)))
-    .limit(limit)
-    .for('update', { skipLocked: true })
-  return rows.map(rowToSnapshot)
-}
-
-/**
- * A superset of the truly no-show-eligible set — grace minutes vary by the
- * booking's own recorded `policyVersion`, so the caller re-checks
- * `startsAt + graceMinutes` per candidate under this same row lock before
- * deciding to append `NO_SHOW_ELIGIBLE`. See `EventStoreTx.claimConfirmedBookingsPastStart`.
- */
-async function claimConfirmedBookingsPastStartFor(db: Queryable, now: Date, limit: number): Promise<readonly BookingSnapshot[]> {
-  const rows = await db
-    .select()
-    .from(bookings)
-    .where(and(eq(bookings.status, 'confirmed'), lt(bookings.startsAt, now), isNull(bookings.noShowEligibleMarkedAt)))
     .limit(limit)
     .for('update', { skipLocked: true })
   return rows.map(rowToSnapshot)

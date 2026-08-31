@@ -55,12 +55,42 @@ function freshKey(): string {
 
 const createdBookingIds: string[] = []
 
+beforeAll(async () => {
+  const policy = await deps.catalogRepo.getActivePolicy(SEED_MERCHANT_ID)
+  if (!policy) {
+    throw new Error('seed data missing — run `npm run db:seed` before this test suite')
+  }
+
+  // Self-healing setup, not just cleanup. These tests book fixed slots on a
+  // fixed day, so anything this file left behind — an interrupted run, a
+  // failed assertion before `afterAll`, two runs against the same shared
+  // cluster — makes the next run fail with SLOT_TAKEN on a booking that has
+  // nothing to do with what is being tested. Clearing this file's own day up
+  // front means a dirty database cannot masquerade as a broken feature.
+  const stale = await db.select({ bookingId: bookings.bookingId }).from(bookings).where(eq(bookings.practitionerId, SEED_PRACTITIONER_ID))
+  for (const row of stale) {
+    const snapshot = await deps.eventStore.loadSnapshot(row.bookingId)
+    if (snapshot && snapshot.startsAt >= slotAt('00:00') && snapshot.startsAt < slotAt('23:59')) {
+      await db.delete(events).where(eq(events.bookingId, row.bookingId))
+      await db.delete(bookings).where(eq(bookings.bookingId, row.bookingId))
+    }
+  }
+})
+
+afterAll(async () => {
+  for (const bookingId of createdBookingIds) {
+    await db.delete(events).where(eq(events.bookingId, bookingId))
+    await db.delete(bookings).where(eq(bookings.bookingId, bookingId))
+  }
+  await sql.end()
+})
+
 describe('webhook-driven finalization (real Postgres) — dev-logs/031', () => {
   it('finalizes a fully-paid booking from the webhook, so an unpaid conversation cannot strand real money', async () => {
     // dev-logs/031, the production incident this exists to prevent: the
-    // customer paid all three legs, never told the agent, and the hold-expiry
+    // customer paid every leg, never told the agent, and the hold-expiry
     // worker reclaimed the slot five minutes later exactly as designed —
-    // leaving ₹300 captured and ₹900 authorised against an EXPIRED booking.
+    // leaving real money captured/authorised against an EXPIRED booking.
     // Finalization must not depend on the customer remembering to speak.
     const startsAt = slotAt('12:30')
     clock.set(new Date(startsAt.getTime() - 5 * 24 * 3_600_000))
@@ -85,7 +115,6 @@ describe('webhook-driven finalization (real Postgres) — dev-logs/031', () => {
     // by the *original* confirm's idempotencyKey, exactly as the real
     // adapters resolve an order back to the receipt that created it.
     paymentProvider.completeDeposit(confirmKey)
-    paymentRail.completeAuthorization(`${confirmKey}:no_show_auth`)
     paymentRail.completeAuthorization(`${confirmKey}:session_complete_auth`)
 
     // Razorpay tells us. The agent is never involved.

@@ -120,6 +120,13 @@
       "when": 1788091273493,
       "tag": "0016_optional_deposit",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1788177673493,
+      "tag": "0017_remove_no_show",
+      "breakpoints": true
     }
   ]
 }

@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 /**
- * Runs the two Slice 5 background jobs (`src/app/hold-expiry-worker.ts`,
- * `src/app/no-show-eligibility-worker.ts`) on one shared interval — docs/02-
+ * Runs the Slice 5 `hold-expiry-worker.ts` background job — docs/02-
  * tech-stack.md §9: "We run an interval inside the main Node process that
  * queries for due work." Distinct from `worker/authorization-lapse.ts`
  * (Slice 4), which is its own narrower, separately-scoped process. Mirrors
  * that entrypoint's wiring: real Postgres + system clock always,
  * `PAYMENT_PROVIDER=razorpay` opt-in for the real rail (only relevant here
- * because `buildAppDeps` always constructs one, even though neither job in
- * this process calls it).
+ * because `buildAppDeps` always constructs one, even though no job in this
+ * process calls it). (Used to also run a no-show-eligibility worker here on
+ * the same interval — removed along with that feature; see the dev log for
+ * that removal.)
  */
 import { runHoldExpiryWorker } from '../../app/hold-expiry-worker.js'
 import { runIdempotencyCleanupWorker } from '../../app/idempotency-cleanup-worker.js'
-import { runNoShowEligibilityWorker } from '../../app/no-show-eligibility-worker.js'
 import { runReconciliationWorker } from '../../app/reconciliation-worker.js'
 import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
 import { loadEnv } from '../config.js'
@@ -46,15 +46,10 @@ async function tick(): Promise<void> {
       logger.info({ expiredBookingIds, count: expiredBookingIds.length, workerType: 'hold-expiry' }, 'background worker completed')
     }
 
-    const { eligibleBookingIds } = await runNoShowEligibilityWorker(deps)
-    if (eligibleBookingIds.length > 0) {
-      logger.info({ eligibleBookingIds, count: eligibleBookingIds.length, workerType: 'no-show-eligibility' }, 'background worker completed')
-    }
-
     // dev-logs/014, item 1 — folded in here rather than its own interval so
     // this file stays "the one process for periodic, non-authorisation-lapse
     // background work," same reasoning docs/07-deployment.md already gives for
-    // combining hold-expiry and no-show-eligibility.
+    // combining it with hold-expiry.
     const { mismatchedBookingIds, circuitOpen } = await runReconciliationWorker(deps)
     if (mismatchedBookingIds.length > 0) {
       logger.info({ mismatchedBookingIds, count: mismatchedBookingIds.length, workerType: 'reconciliation' }, 'background worker completed')

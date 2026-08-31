@@ -26,6 +26,11 @@ export interface CeilingRefusalDemoResult {
  * `ACTION_REFUSED` event naming `payment_rail` as the enforcer, so the trail
  * shows the bound *working*, not just documents that it exists.
  *
+ * Repointed at the **session-complete** mandate (previously the no-show
+ * authorisation, removed along with that feature — see the dev log for that
+ * removal). Same demonstration either way: a rail-enforced ceiling with zero
+ * headroom that our own server cannot talk its way past.
+ *
  * Trivially triggerable on demand via `npm run demo:ceiling-refusal`
  * (`src/adapters/demo/ceiling-refusal.ts`), against a fresh booking or an
  * existing one.
@@ -35,12 +40,12 @@ export async function demoCeilingRefusal(bookingId: string, deps: AppDeps): Prom
   if (!snapshot) {
     throw new BookingNotFoundError(`unknown booking: ${bookingId}`)
   }
-  if (!snapshot.authorizationId || !snapshot.authorizationAmountPaise) {
-    throw new NoAuthorizationFoundError(`booking ${bookingId} has no live authorization to demonstrate the ceiling against`)
+  if (!snapshot.sessionCompleteAuthorizationId || !snapshot.sessionCompleteAuthorizationAmountPaise) {
+    throw new NoAuthorizationFoundError(`booking ${bookingId} has no live session-complete authorization to demonstrate the ceiling against`)
   }
 
-  const authorizationId = snapshot.authorizationId
-  const authorizedAmountPaise = snapshot.authorizationAmountPaise
+  const authorizationId = snapshot.sessionCompleteAuthorizationId
+  const authorizedAmountPaise = snapshot.sessionCompleteAuthorizationAmountPaise
   const attemptedAmountPaise = addPaise(authorizedAmountPaise, toPaise(1))
 
   try {
@@ -58,7 +63,7 @@ export async function demoCeilingRefusal(bookingId: string, deps: AppDeps): Prom
         clock: deps.clock,
         bookingId,
         sequence,
-        attemptedType: 'charge_no_show',
+        attemptedType: 'mark_complete',
         code: 'CAPTURE_AMOUNT_MISMATCH',
         reason: err.message,
         merchantId: deps.merchantId,

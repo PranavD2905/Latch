@@ -62,7 +62,14 @@ export interface BoundApplied {
 /** B2 — under which policy version / authorisation / payment this action was authorised. */
 export interface AuthorityRef {
   policyVersion: number
-  /** The no-show authorisation this action cites — set by AUTHORIZATION_HELD and carried by NO_SHOW_CHARGED. */
+  /**
+   * The authorisation this action cites. Set by `SESSION_COMPLETE_AUTHORIZATION_HELD`,
+   * carried by `SESSION_COMPLETE_CHARGED` — the only live producer since the
+   * no-show feature's removal. Historically also set by `AUTHORIZATION_HELD`
+   * and carried by `NO_SHOW_CHARGED` (both historical-only now — see their
+   * own doc comments); a pre-removal event citing one still round-trips
+   * through this same field.
+   */
   authorizationId?: string
   razorpayPaymentId?: string
   /**
@@ -121,6 +128,15 @@ export interface PolicyAcknowledgedEvent extends EventBase {
  * "there is no headroom to abuse at all"), so `enforcedBy` is the fixed
  * literal `'payment_rail'` rather than the wider `BoundEnforcer` union —
  * this event can only ever claim the rail as its enforcer.
+ *
+ * **Historical-only as of the no-show feature's removal** (see the dev log
+ * for that removal). No live code path constructs this event any more —
+ * `confirm_with_deposit` never registers a no-show authorisation, so this
+ * type exists purely so `fold()` and the audit-trail viewer can keep
+ * correctly replaying/rendering any pre-removal booking whose history
+ * already contains one. Never delete historical events from the trail, so
+ * this stays in the `BookingEvent` union indefinitely — see
+ * `NoShowChargedEvent`'s own doc comment for the fuller reasoning.
  */
 export interface AuthorizationHeldEvent extends EventBase {
   type: 'AUTHORIZATION_HELD'
@@ -229,6 +245,12 @@ export interface SlotReleasedEvent extends EventBase {
  * capture, and Razorpay auto-refunds the authorisation at `expiresAt` on its
  * own. That makes release *asynchronous*, not an instant revoke — the trail
  * says so via `expiresAt` rather than implying otherwise.
+ *
+ * **Historical-only** since the no-show feature's removal (see the dev log
+ * for that removal) — nothing releases a leg that can never again be
+ * authorised. Kept in the union, same reasoning as `AuthorizationHeldEvent`:
+ * a pre-removal booking's history may already contain one, and `fold()`
+ * must keep replaying it correctly rather than lying about what happened.
  */
 export interface AuthorizationReleasedEvent extends EventBase {
   type: 'AUTHORIZATION_RELEASED'
@@ -248,6 +270,11 @@ export interface AuthorizationReleasedEvent extends EventBase {
  * uncollectable no-show fee) — but from this point `charge_no_show` refuses
  * with `AUTHORIZATION_EXPIRED`, and a merchant reading the trail learns why,
  * instead of finding a silent failure.
+ *
+ * **Historical-only** since the no-show feature's removal — `charge_no_show`
+ * and the authorisation-lapse worker's no-show half are both gone, so
+ * nothing ever re-derives this eligibility again. Kept in the union so a
+ * pre-removal booking's history still replays correctly.
  */
 export interface AuthorizationLapsedEvent extends EventBase {
   type: 'AUTHORIZATION_LAPSED'
@@ -262,6 +289,10 @@ export interface AuthorizationLapsedEvent extends EventBase {
  * the literal `'merchant'`, not a wider union: the same structural trick
  * `MerchantDeclinedEvent.cause` uses to make "an agent forged this" a
  * compile error rather than a runtime check.
+ *
+ * **Historical-only** since the no-show feature's removal — the merchant
+ * API's mark-no-show route no longer exists. Kept in the union so a
+ * pre-removal booking's history still replays correctly.
  */
 export interface NonAttendanceMarkedEvent extends EventBase {
   type: 'NON_ATTENDANCE_MARKED'
@@ -281,6 +312,12 @@ export interface AlternativesOfferedEvent extends EventBase {
   alternatives: readonly { practitionerId: string; serviceId: string; startsAt: Date }[]
 }
 
+/**
+ * **Historical-only** since the no-show feature's removal — the no-show-
+ * eligibility background worker that used to append this is gone. Kept in
+ * the union so a pre-removal booking's history still replays correctly; see
+ * `NoShowChargedEvent`'s doc comment for the fuller reasoning.
+ */
 export interface NoShowEligibleEvent extends EventBase {
   type: 'NO_SHOW_ELIGIBLE'
 }
@@ -352,6 +389,23 @@ export interface RefundIssuedEvent extends EventBase, MoneyFields {
  * regardless of which `PaymentRail` is active, so there is no rail choice
  * for them to name. Narrower than dev-log 005's original "every money event
  * carries rail" — corrected here to where it's actually true.
+ *
+ * **Historical-only as of the no-show feature's removal** (product decision:
+ * a post-hoc debit against a stored card is not how Indian merchants recover
+ * a no-show — deposit forfeiture, the cancellation ladder's `hoursBefore: 0`
+ * tier, already is; see the dev log for that removal). `charge_no_show` no
+ * longer exists, so no live code path can ever construct one of these again
+ * — but this type, and `'NO_SHOW_CHARGED'` in `MONEY_EVENT_TYPES` and
+ * `BookingStatus` (`fold.ts`), stay exactly as they are, forever: the
+ * `events` table is the source of truth and is never rewritten (docs/01-
+ * architecture.md), so any booking that was actually charged for a no-show
+ * before this removal must keep replaying to that same true historical
+ * state — removing this type would make `fold()` unable to even parse that
+ * booking's own recorded history, and remapping it to some other status
+ * would make the trail confidently misreport what really happened, which is
+ * the one thing this system's audit trail is built to never do (see
+ * migration `0010_policies_immutable.sql`'s own framing of that same
+ * principle for policy versions).
  */
 export interface NoShowChargedEvent extends EventBase, MoneyFields {
   type: 'NO_SHOW_CHARGED'

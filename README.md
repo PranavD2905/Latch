@@ -14,7 +14,7 @@ No setup required. These are running services, not screenshots.
 |---|---|
 | **Live audit trail viewer** | **[latch-viewer-production.up.railway.app](https://latch-viewer-production.up.railway.app)** |
 | MCP endpoint (connect any agent to it) | `https://latch-mcp-production.up.railway.app/mcp/mer_clinic` |
-| Merchant API (decline / mark-no-show / policy) | `https://latch-merchant-api-production.up.railway.app` |
+| Merchant API (decline / mark-complete / policy) | `https://latch-merchant-api-production.up.railway.app` |
 
 Point any MCP-capable agent (Claude Desktop + [`mcp-remote`](https://www.npmjs.com/package/mcp-remote), Claude Code, etc.) at the MCP URL above — no API key, no partnership, no integration call needed, which is the entire thesis. Ask it to *"find a dermatology consult slot with Dr. Rao and hold it."* Then open the viewer link and watch the event land, live, in the audit trail — no refresh needed.
 
@@ -34,22 +34,23 @@ someone's time, and time behaves differently:
 | Unsold today → sold tomorrow | Unsold → **gone forever** |
 | One price, paid once | Deposit now, balance at service |
 | Return it, get a refund | *Move* it — same money, new time |
-| Receive nothing → pay nothing | **No-show → you pay for nothing** |
+| Receive nothing → pay nothing | **No-show → the merchant still absorbs the cost** |
 | Seller cannot un-sell it | **Doctor calls in sick, cancels your paid slot** |
 
 UCP has three verticals — Shopping, Lodging, Food. There is no appointments primitive anywhere. Not in
 UCP, not in ACP, not in any AI surface, and not at Razorpay.
 
 Meanwhile Indian outpatient clinics run a **32% no-show rate**. For one eight-doctor clinic that is
-**₹3 lakh/month evaporating**, and today it is entirely uncollectable — a no-show produces no
-transaction at all.
+**₹3 lakh/month evaporating** — and Indian merchants recover it the way the market actually does,
+a deposit forfeited on no-show or late cancellation, not a Western-style post-hoc card debit. Latch's
+job is to make that recovery mechanism agent-executable, not to invent a new one.
 
 ## What Latch is
 
 A **service-transaction layer** on a merchant's Razorpay account, exposed as an **MCP server** with
-eight tools. Any third-party agent — Claude, ChatGPT, a user's own — can hold a slot, read the
-cancellation ladder, pay a deposit, reschedule, and be charged for a no-show. No partnership, no
-integration deal.
+seven tools. Any third-party agent — Claude, ChatGPT, a user's own — can hold a slot, read the
+cancellation ladder, pay a deposit, and reschedule. A no-show forfeits that deposit per the ladder;
+no partnership, no integration deal.
 
 ```
 What exists today:   [Human] ──phone──▶ [Merchant's own AI] ──▶ [calendar]
@@ -62,7 +63,7 @@ What Latch builds:   [Anyone's agent] ──MCP──▶ [Merchant] ──▶ [b
 The novelty is not "an AI that books appointments." That is crowded. The novelty is **the
 money-and-time semantics of a service transaction, in a form an arbitrary agent can execute against.**
 
-## The eight tools
+## The seven tools
 
 | Tool | Money action | Gate | Bound | Bound enforced by |
 |---|---|---|---|---|
@@ -73,11 +74,10 @@ money-and-time semantics of a service transaction, in a form an arbitrary agent 
 | `confirm_with_deposit` | deposit capture | Live hold + policy acknowledged | Deposit amount; authorisation ceiling | Latch + **Razorpay** |
 | `reschedule` | price delta only | Target free + ladder permits | Delta ≤ booking value | Latch |
 | `cancel` | refund / retention | Tier from **server clock** | Ladder tier | Latch |
-| `charge_no_show` | debit | Start elapsed **+** merchant marked non-attendance | The authorised amount | **Razorpay** |
 
 `confirm_with_deposit` returns immediately with a payable link rather than blocking the agent for
 minutes on a human completing Checkout — the agent hands the link over, the human pays in their own
-time, and `get_booking` reports which legs (deposit, no-show authorisation) are still outstanding.
+time, and `get_booking` reports which legs (deposit, session-complete mandate) are still outstanding.
 
 ## Architecture — the four ideas that shape everything
 
@@ -92,10 +92,11 @@ Every money event carries four fields, enforced by the type system: `action` (wh
 no constructor that omits them.
 
 **3. The dangerous bound lives outside our own trust boundary.**
-The no-show charge is a **card authorisation** placed at booking for *exactly* the no-show fee and left
-uncaptured. Razorpay's Capture API refuses any capture that is not equal to the amount authorised — so
-there is no headroom, and a compromised Latch server cannot capture a rupee more than the customer
-consented to in front of a stated policy.
+The session-complete mandate is a **card authorisation** placed at booking for *exactly* the service's
+remaining balance and left uncaptured until the merchant marks the session done. Razorpay's Capture API
+refuses any capture that is not equal to the amount authorised — so there is no headroom, and a
+compromised Latch server cannot capture a rupee more than the customer consented to in front of a
+stated policy.
 
 > The bar asks for bounds that are *"impossible, not merely caught."* A server-side `if` is caught. An
 > authorisation ceiling, a partial unique index, and a server-owned clock are impossible.
@@ -135,7 +136,7 @@ The doctor calls in sick on Wednesday. The merchant declines a confirmed, paid T
 MERCHANT_DECLINED     cause=MERCHANT → cancellation ladder deliberately NOT applied
 SLOT_RELEASED         returned to inventory
 REFUND_ISSUED         ₹300 → original instrument
-AUTHORIZATION_RELEASED  no-show authorisation left to lapse — never captured
+SESSION_COMPLETE_AUTHORIZATION_RELEASED  mandate left to lapse — never captured
 ALTERNATIVES_OFFERED  3 matching slots pushed back to the originating agent
 
 net customer cost ₹0 · orphaned authorisations 0 · stranded holds 0 · manual tickets 0
@@ -164,10 +165,10 @@ Run the pieces you need:
 ```bash
 npm run mcp:dev                # MCP server over stdio — connect Claude Code/Desktop directly
 npm run mcp:http:dev           # MCP over Streamable HTTP, the deployed transport shape
-npm run merchant-api:dev       # decline / mark-no-show / policy — the merchant-only surface
+npm run merchant-api:dev       # decline / mark-complete / policy — the merchant-only surface
 npm run audit-trail:dev        # the SSE feed the viewer reads
 npm run web:dev                # the viewer itself, at localhost:5173
-npm run worker:background:dev  # hold-expiry + no-show-eligibility
+npm run worker:background:dev  # hold-expiry
 npm run worker:dev             # authorisation-lapse
 npm run worker:reconciliation:dev
 ```
@@ -189,7 +190,7 @@ createdb -h localhost -p 5433 -U latch latch_test
 DATABASE_URL=postgres://latch:latch@localhost:5433/latch_test npm run db:migrate
 DATABASE_URL=postgres://latch:latch@localhost:5433/latch_test npm run db:seed
 
-npm test        # tsc --noEmit && vitest run — 281 tests, real Postgres, real Razorpay where the
+npm test        # tsc --noEmit && vitest run — 262 tests, real Postgres, real Razorpay where the
                  # existing convention already does that (never mocked for those paths)
 ```
 

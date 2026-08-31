@@ -78,8 +78,6 @@ async function createMerchant(): Promise<void> {
       { hoursBefore: 12, retainPct: 50 },
       { hoursBefore: 0, retainPct: 100 },
     ],
-    noShowFeePaise: 40000, // ₹400
-    noShowGraceMinutes: 15,
     holdTtlSeconds: 600,
     maxConcurrentHoldsPerAgent: 3,
     holdRateLimitPerMinute: 10,

@@ -111,8 +111,7 @@ describe('get_booking (real Postgres) — the reconciliation tool a timed-out wr
     const policyResult = await getPolicy(deps)
 
     const key = `test_${ulid()}`
-    // Nothing paid yet on either authorisation leg; the deposit lands immediately.
-    paymentRail.setScenario(`${key}:no_show_auth`, 'pending')
+    // Nothing paid yet on the session-complete authorisation; the deposit lands immediately.
     paymentRail.setScenario(`${key}:session_complete_auth`, 'pending')
     const confirmResult = await confirmWithDeposit(
       { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: key },
@@ -125,7 +124,7 @@ describe('get_booking (real Postgres) — the reconciliation tool a timed-out wr
     expect(result.pendingPayment).toBeDefined()
     expect(result.pendingPayment!.payUrl).toMatch(new RegExp(`/pay/${held.bookingId}$`))
     expect(result.pendingPayment!.completed.map((l) => l.leg)).toEqual(['deposit'])
-    expect(result.pendingPayment!.outstanding.map((l) => l.leg)).toEqual(['no_show_authorization', 'session_complete_authorization'])
+    expect(result.pendingPayment!.outstanding.map((l) => l.leg)).toEqual(['session_complete_authorization'])
     // Labels are sentences a model can read out, not identifiers.
     for (const l of [...result.pendingPayment!.outstanding, ...result.pendingPayment!.completed]) {
       expect(l.label).toMatch(/₹/)

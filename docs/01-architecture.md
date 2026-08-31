@@ -88,16 +88,20 @@ worth saying in the pitch video.
 
 Covered in full in `dev-logs/005` (which supersedes the rail choice in `dev-logs/001`). In summary:
 
-A no-show charge is a debit against a customer who received nothing. That is the most abusable action
-in the entire system, so it gets the strongest possible bound.
+A debit against a service the customer may not have fully consumed yet is one of the more abusable
+actions in the system (originally: a no-show charge, debiting a customer who received nothing at all —
+removed as a feature, see the dev log for that removal, since Indian merchants recover a no-show
+through deposit forfeiture, not a post-hoc debit; the session-complete mandate below inherits the same
+bound the no-show leg used to demonstrate).
 
-At booking we place a **card authorisation** (`capture: "manual"`) for **exactly** the no-show fee. It
-sits in `authorized` — the customer is not charged. Later, `charge_no_show` captures it.
+At booking we place a **card authorisation** (`capture: "manual"`) for **exactly** the session-complete
+mandate (`service.price - deposit`). It sits in `authorized` — the customer is not charged. Later,
+`mark_complete` captures it, once the merchant asserts the session happened.
 
 The bound is the authorised amount itself, and Razorpay enforces it: the Capture API rejects any
 capture that is not equal to the amount authorised (*"Capture amount must be equal to the amount
 authorized"*). We cannot capture a rupee more, and because the authorisation is taken at exactly the
-fee, **there is no headroom to abuse at all.**
+mandate, **there is no headroom to abuse at all.**
 
 | Bound | Value | Enforced by | Can a Latch bug defeat it? |
 |---|---|---|---|
@@ -105,7 +109,7 @@ fee, **there is no headroom to abuse at all.**
 | Ladder retention % | From merchant policy record | Latch policy engine | Yes, in principle |
 | Concurrent holds per agent | Configured per agent | Latch + DB constraint | No — DB constraint |
 | Double-booking a slot | One booking per (practitioner, start) | **Postgres partial unique index** | **No** |
-| **No-show debit ceiling** | The authorised amount, taken at exactly the fee | **Razorpay, at the rail** | **No** |
+| **Session-complete debit ceiling** | The authorised amount, taken at exactly the mandate | **Razorpay, at the rail** | **No** |
 
 The bottom three rows are the ones that matter. B3 demands the breach be *"impossible, not merely
 caught."* For those three, it genuinely is.
@@ -126,19 +130,19 @@ production rail was exercised when it was not.
 │  Latch does not know or care which. That is the entire point.        │
 └────────────────────────────┬─────────────────────────────────────────┘
                              │  MCP over Streamable HTTP
-                             │  (8 tools, Zod-validated)
+                             │  (7 tools, Zod-validated)
 ╔════════════════════════════▼═════════════════════════════════════════╗
 ║  INBOUND ADAPTERS                                                    ║
 ║                                                                      ║
 ║  ┌────────────────┐  ┌──────────────────┐  ┌───────────────────┐     ║
 ║  │ MCP Server     │  │ Merchant API     │  │ SSE Stream        │     ║
 ║  │ find_slots     │  │ decline_booking  │  │ live audit trail  │     ║
-║  │ get_policy     │  │ mark_no_show     │  │ → viewer UI       │     ║
+║  │ get_policy     │  │ mark_complete    │  │ → viewer UI       │     ║
 ║  │ hold_slot      │  │ set_policy       │  │                   │     ║
 ║  │ confirm_...    │  │                  │  │                   │     ║
 ║  │ reschedule     │  │ (this is where   │  │                   │     ║
 ║  │ cancel         │  │  the FAILURE is  │  │                   │     ║
-║  │ charge_no_show │  │  triggered)      │  │                   │     ║
+║  │                │  │  triggered)      │  │                   │     ║
 ║  └────────┬───────┘  └────────┬─────────┘  └─────────▲─────────┘     ║
 ╚═══════════╪═══════════════════╪══════════════════════╪═══════════════╝
             │                   │                      │
@@ -221,10 +225,13 @@ results for the same query, because there is only one implementation underneath.
 
 ---
 
-## 3. The eight tools, and where the risk lives
+## 3. The seven tools, and where the risk lives
 
 From brief §6.2, with the enforcement point named for each. `get_booking` is a Slice 7 addition, not
-from the original brief — see below.
+from the original brief — see below. (`charge_no_show`, an eighth tool, existed through Slice 4 and was
+removed as a feature — see the dev log for that removal; the risk it once carried is now the
+merchant-only, non-agent-callable `mark_complete` route's, described in the row below and in
+`docs/03-domain-model.md`.)
 
 | Tool | Money | Gate (B4) | Bound (B3) | Bound enforced by |
 |---|---|---|---|---|
@@ -235,7 +242,6 @@ from the original brief — see below.
 | `confirm_with_deposit` | deposit capture | Live unexpired hold **and** policy acknowledged | Policy deposit amount; authorisation ceiling | Latch + **Razorpay** |
 | `reschedule` | price delta only | Target free; ladder permits move now | Delta ≤ original booking value | Latch |
 | `cancel` | refund / retention | Booking exists; tier from **server clock** | Retention ≤ ladder tier for true timestamp | Latch |
-| `charge_no_show` | debit | Start time elapsed **and** merchant marked non-attendance | The authorised amount | **Razorpay** |
 
 **Why `get_booking` exists.** Originally added because `confirm_with_deposit` used to block for minutes
 in-process waiting on a human to complete Razorpay Checkout, and a long-held HTTP response is exactly the
@@ -257,9 +263,10 @@ money exposure — that is deliberate (brief §6.3: *"All risk is pushed into th
 phase"*). An agent can hammer `hold_slot`, get it wrong, crash, or retry blindly, and the worst
 outcome is a slot that unlocks itself in ten minutes.
 
-`charge_no_show` is the rarest call and the most dangerous, so it carries a gate requiring **two
-independent facts** — elapsed time (which the server owns) *and* an explicit merchant action (which no
-agent can forge) — plus a ceiling enforced by a third party.
+The merchant-only `mark_complete` route (not agent-callable at all) is the most dangerous single call in
+the system now, since it's the one that captures real money against the session-complete ceiling — but
+it needs no elapsed-time gate the way the removed `charge_no_show` once did: the merchant asserting the
+session happened *is* the fact being recorded, not something re-derived from the clock.
 
 ---
 
@@ -361,18 +368,18 @@ something inferred.
 
 ## 8. What runs in the background
 
-Four things happen without anyone calling a tool:
+Three things happen without anyone calling a tool:
 
 | Job | Trigger | Action |
 |---|---|---|
 | Hold expiry | TTL elapsed | Append `HOLD_EXPIRED`, release slot |
-| No-show window | Appointment start elapsed + grace | Append `NO_SHOW_ELIGIBLE` — **does not charge** |
-| Authorisation lapse | 5-day `manual_expiry_period` passed | Append `AUTHORIZATION_LAPSED` — records that authority was lost |
+| Authorisation lapse | 5-day `manual_expiry_period` passed on the session-complete mandate | Append `SESSION_COMPLETE_AUTHORIZATION_LAPSED` — records that authority was lost |
 | Reconciliation | Every tick, over open (CONFIRMED) bookings | Diffs the trail against Razorpay's own record via `PaymentProvider.fetchPaymentStatus`/`PaymentRail.fetchAuthorizationStatus`; appends `RECONCILIATION_MISMATCH` on disagreement |
 
-Note the second carefully. Elapsed time makes a booking *eligible* for a no-show charge. It does not
-execute one. The charge still requires the merchant to affirmatively mark non-attendance. Time alone
-never moves money — that would be a money action firing on inference, which B4 forbids.
+(A fourth job, the no-show-eligibility worker, existed through Slice 5 and was removed along with the
+no-show feature — see the dev log for that removal. It only ever appended `NO_SHOW_ELIGIBLE`, itself
+never a charge — time alone was never allowed to move money, which is exactly why removing the whole
+leg needed no gate to be loosened anywhere.)
 
 **The reconciliation worker exists to close a gap the original design left open** (dev-logs/014, from a
 code review): Idea 1 says the trail *is* the truth, but that was only ever proven internally consistent
@@ -396,8 +403,8 @@ one.
 
 | Actor | Can | Cannot |
 |---|---|---|
-| Third-party agent | Search, read policy, hold, confirm, reschedule, cancel, call `charge_no_show` (gated — see below) | Set policy, decline, mark non-attendance, exceed authorisation ceiling, assert a timestamp |
-| Merchant | Set policy, decline, mark non-attendance | Debit above the registered authorisation ceiling |
+| Third-party agent | Search, read policy, hold, confirm, reschedule, cancel | Set policy, decline, mark a session complete, exceed authorisation ceiling, assert a timestamp |
+| Merchant | Set policy, decline, mark a session complete | Debit above the registered authorisation ceiling |
 | Latch server | Orchestrate all of the above | Debit above the registered authorisation ceiling |
 | Razorpay | Enforce the ceiling | — |
 

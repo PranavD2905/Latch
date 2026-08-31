@@ -3,9 +3,6 @@ import type { Clock } from '../ports/clock.js'
 import type {
   ActionRefusedEvent,
   AlternativesOfferedEvent,
-  AuthorizationHeldEvent,
-  AuthorizationLapsedEvent,
-  AuthorizationReleasedEvent,
   BookingCompletedEvent,
   BookingConfirmedEvent,
   BookingEvent,
@@ -17,9 +14,6 @@ import type {
   HoldExpiredEvent,
   HoldReleasedEvent,
   MerchantDeclinedEvent,
-  NonAttendanceMarkedEvent,
-  NoShowChargedEvent,
-  NoShowEligibleEvent,
   PaymentRequestedEvent,
   PolicyAcknowledgedEvent,
   ReconciliationMismatchEvent,
@@ -53,7 +47,6 @@ export const createHoldCreatedEvent = eventFactory<HoldCreatedEvent>('HOLD_CREAT
 export const createHoldExpiredEvent = eventFactory<HoldExpiredEvent>('HOLD_EXPIRED')
 export const createHoldReleasedEvent = eventFactory<HoldReleasedEvent>('HOLD_RELEASED')
 export const createPolicyAcknowledgedEvent = eventFactory<PolicyAcknowledgedEvent>('POLICY_ACKNOWLEDGED')
-export const createAuthorizationHeldEvent = eventFactory<AuthorizationHeldEvent>('AUTHORIZATION_HELD')
 export const createSessionCompleteAuthorizationHeldEvent = eventFactory<SessionCompleteAuthorizationHeldEvent>('SESSION_COMPLETE_AUTHORIZATION_HELD')
 export const createSessionCompleteAuthorizationReleasedEvent = eventFactory<SessionCompleteAuthorizationReleasedEvent>('SESSION_COMPLETE_AUTHORIZATION_RELEASED')
 export const createSessionCompleteAuthorizationLapsedEvent = eventFactory<SessionCompleteAuthorizationLapsedEvent>('SESSION_COMPLETE_AUTHORIZATION_LAPSED')
@@ -62,19 +55,19 @@ export const createBookingRescheduledEvent = eventFactory<BookingRescheduledEven
 export const createCancelledByCustomerEvent = eventFactory<CancelledByCustomerEvent>('CANCELLED_BY_CUSTOMER')
 export const createMerchantDeclinedEvent = eventFactory<MerchantDeclinedEvent>('MERCHANT_DECLINED')
 export const createSlotReleasedEvent = eventFactory<SlotReleasedEvent>('SLOT_RELEASED')
-export const createAuthorizationReleasedEvent = eventFactory<AuthorizationReleasedEvent>('AUTHORIZATION_RELEASED')
-export const createAuthorizationLapsedEvent = eventFactory<AuthorizationLapsedEvent>('AUTHORIZATION_LAPSED')
 export const createAlternativesOfferedEvent = eventFactory<AlternativesOfferedEvent>('ALTERNATIVES_OFFERED')
-export const createNoShowEligibleEvent = eventFactory<NoShowEligibleEvent>('NO_SHOW_ELIGIBLE')
-export const createNonAttendanceMarkedEvent = eventFactory<NonAttendanceMarkedEvent>('NON_ATTENDANCE_MARKED')
 export const createBookingCompletedEvent = eventFactory<BookingCompletedEvent>('BOOKING_COMPLETED')
 export const createActionRefusedEvent = eventFactory<ActionRefusedEvent>('ACTION_REFUSED')
 export const createReconciliationMismatchEvent = eventFactory<ReconciliationMismatchEvent>('RECONCILIATION_MISMATCH')
 export const createPaymentRequestedEvent = eventFactory<PaymentRequestedEvent>('PAYMENT_REQUESTED')
 
-// The four money-moving events — action/gate/bound/authority are required by `fields`.
+// The money-moving events — action/gate/bound/authority are required by `fields`.
+// No `createNoShowChargedEvent`/`createAuthorizationHeldEvent`/etc — the
+// no-show feature is removed and nothing should ever construct one of those
+// event types again; their type definitions stay in `events.ts` purely so
+// `fold()` can keep replaying pre-removal history. See that file's own doc
+// comments.
 export const createDepositCapturedEvent = eventFactory<DepositCapturedEvent>('DEPOSIT_CAPTURED')
 export const createRetentionAppliedEvent = eventFactory<RetentionAppliedEvent>('RETENTION_APPLIED')
 export const createRefundIssuedEvent = eventFactory<RefundIssuedEvent>('REFUND_ISSUED')
-export const createNoShowChargedEvent = eventFactory<NoShowChargedEvent>('NO_SHOW_CHARGED')
 export const createSessionCompleteChargedEvent = eventFactory<SessionCompleteChargedEvent>('SESSION_COMPLETE_CHARGED')

@@ -5,19 +5,19 @@
  * Postgres + system clock always, FakePaymentProvider unless
  * PAYMENT_PROVIDER=razorpay is explicit (see that file's comment for why).
  *
- * Also runs both Slice 5 background jobs (hold-expiry, no-show-eligibility)
- * on the same process — prompts/slice-7.md: "The background worker running
- * in the deployed process." Neither binds a port or holds connection-
- * specific state, so folding their tick loops in here (same as
- * src/adapters/worker/background.ts does standalone, for local dev) costs
- * nothing and avoids a fourth Railway service just to run a `setInterval`.
- * The Slice 4 authorisation-lapse worker (src/adapters/worker/
- * authorization-lapse.ts) is the same story, folded in below it.
+ * Also runs the Slice 5 hold-expiry background job on the same process —
+ * prompts/slice-7.md: "The background worker running in the deployed
+ * process." Doesn't bind a port or hold connection-specific state, so
+ * folding its tick loop in here (same as src/adapters/worker/background.ts
+ * does standalone, for local dev) costs nothing and avoids a fourth Railway
+ * service just to run a `setInterval`. The Slice 4 authorisation-lapse
+ * worker (src/adapters/worker/authorization-lapse.ts) is the same story,
+ * folded in below it. (Used to also run the no-show-eligibility worker here
+ * — removed along with that feature; see the dev log for that removal.)
  */
 import { runAuthorizationLapseWorker } from '../../app/authorization-lapse-worker.js'
 import { runHoldExpiryWorker } from '../../app/hold-expiry-worker.js'
 import { runIdempotencyCleanupWorker } from '../../app/idempotency-cleanup-worker.js'
-import { runNoShowEligibilityWorker } from '../../app/no-show-eligibility-worker.js'
 import { runReconciliationWorker } from '../../app/reconciliation-worker.js'
 import { buildAppDeps, requireDatabaseUrl } from '../build-deps.js'
 import { loadEnv } from '../config.js'
@@ -63,11 +63,6 @@ async function backgroundTick(): Promise<void> {
     const { expiredBookingIds } = await runHoldExpiryWorker(deps)
     if (expiredBookingIds.length > 0) {
       logger.info({ expiredBookingIds, count: expiredBookingIds.length, workerType: 'hold-expiry' }, 'background worker completed')
-    }
-
-    const { eligibleBookingIds } = await runNoShowEligibilityWorker(deps)
-    if (eligibleBookingIds.length > 0) {
-      logger.info({ eligibleBookingIds, count: eligibleBookingIds.length, workerType: 'no-show-eligibility' }, 'background worker completed')
     }
 
     // dev-logs/014, item 1 — see docs/07-deployment.md: folded into this same

@@ -17,7 +17,7 @@
  * deliberately unauthenticated (`streamable-http-server.ts`), so none of these
  * merchants needs a credential to be browsed, held, or booked against — which
  * is the whole thesis. Credentials only gate the *merchant's own* surfaces
- * (decline/mark-no-show/set_policy, and the audit-trail viewer). Minting 40
+ * (decline/mark-complete/set_policy, and the audit-trail viewer). Minting 40
  * secrets nobody asked for and printing them to a terminal would be worse than
  * useless; worse, `issueToken` revokes the previous active credential, so
  * re-running with `--tokens` silently rotates every merchant's keys. Pass the
@@ -25,11 +25,13 @@
  *
  * **The policy shapes are deliberately varied**, not copy-pasted. Since the
  * payment-link work, how many payment legs a booking has is a policy
- * consequence: deposit and no-show fee are each independently optional, and
- * the session-complete mandate is `price - (deposit ?? 0)`. So this directory
- * intentionally contains one-leg, two-leg, and three-leg merchants — the
- * fastest way to see that behaviour is to book against different ones. The
- * `legs` column in the summary this prints says which is which.
+ * consequence: the deposit is optional, and the session-complete mandate is
+ * `price - (deposit ?? 0)`. So this directory intentionally contains
+ * one-leg and two-leg merchants — the fastest way to see that behaviour is
+ * to book against different ones. The `legs` column in the summary this
+ * prints says which is which. (Used to also vary a no-show fee, giving some
+ * merchants a third leg — removed along with that feature; see the dev log
+ * for that removal.)
  */
 import { requireDatabaseUrl } from '../build-deps.js'
 import { loadEnvFile } from '../load-env.js'
@@ -96,8 +98,6 @@ interface MerchantSpec {
   services: { name: string; minutes: number; pricePaise: number }[]
   /** `undefined` = this merchant takes no upfront deposit at all. */
   depositPaise: number | undefined
-  /** `undefined` = no no-show fee; grace is paired with it automatically. */
-  noShowPaise: number | undefined
   ladder: { hoursBefore: number; retainPct: number }[]
   holdTtlSeconds: number
 }
@@ -112,139 +112,138 @@ const SPECS: MerchantSpec[] = [
     slug: 'kanika_skin', name: 'Kanika Skin & Hair Clinic', city: 'Bengaluru',
     practitioners: [{ name: 'Dr. Kanika Menon', hours: STANDARD }, { name: 'Dr. Arjun Pillai', hours: PART_TIME }],
     services: [{ name: 'Dermatology consult', minutes: 30, pricePaise: 90000 }, { name: 'Acne follow-up', minutes: 15, pricePaise: 45000 }],
-    depositPaise: 30000, noShowPaise: 40000, ladder: LADDER_STANDARD, holdTtlSeconds: 600,
+    depositPaise: 30000, ladder: LADDER_STANDARD, holdTtlSeconds: 600,
   },
   {
     slug: 'meridian_dental', name: 'Meridian Dental Care', city: 'Mumbai',
     practitioners: [{ name: 'Dr. Farhan Qureshi', hours: EVENING }, { name: 'Dr. Sneha Kulkarni', hours: SIX_DAY }],
     services: [{ name: 'Scaling & polishing', minutes: 45, pricePaise: 150000 }, { name: 'Root canal, single sitting', minutes: 90, pricePaise: 650000 }],
-    depositPaise: 100000, noShowPaise: 50000, ladder: LADDER_STRICT, holdTtlSeconds: 900,
+    depositPaise: 100000, ladder: LADDER_STRICT, holdTtlSeconds: 900,
   },
   {
     slug: 'sunrise_physio', name: 'Sunrise Physiotherapy', city: 'Pune',
     practitioners: [{ name: 'Dr. Rhea Deshmukh', hours: SIX_DAY }],
     services: [{ name: 'Physiotherapy session', minutes: 45, pricePaise: 80000 }, { name: 'Post-op rehab review', minutes: 30, pricePaise: 60000 }],
-    depositPaise: 20000, noShowPaise: 30000, ladder: LADDER_STANDARD, holdTtlSeconds: 600,
+    depositPaise: 20000, ladder: LADDER_STANDARD, holdTtlSeconds: 600,
   },
   {
     slug: 'aster_eye', name: 'Aster Eye Centre', city: 'Chennai',
     practitioners: [{ name: 'Dr. Lakshmi Narayanan', hours: STANDARD }],
     services: [{ name: 'Comprehensive eye exam', minutes: 40, pricePaise: 120000 }],
-    depositPaise: 40000, noShowPaise: undefined, ladder: LADDER_STANDARD, holdTtlSeconds: 600,
+    depositPaise: 40000, ladder: LADDER_STANDARD, holdTtlSeconds: 600,
   },
   {
     slug: 'bloom_womens', name: "Bloom Women's Wellness", city: 'Hyderabad',
     practitioners: [{ name: 'Dr. Ayesha Siddiqui', hours: STANDARD }, { name: 'Dr. Priya Reddy', hours: SIX_DAY }],
     services: [{ name: 'Gynaecology consult', minutes: 30, pricePaise: 110000 }, { name: 'Antenatal check', minutes: 25, pricePaise: 85000 }],
-    depositPaise: 35000, noShowPaise: 45000, ladder: LADDER_STANDARD, holdTtlSeconds: 720,
+    depositPaise: 35000, ladder: LADDER_STANDARD, holdTtlSeconds: 720,
   },
   {
     slug: 'northstar_ortho', name: 'NorthStar Orthopaedics', city: 'New Delhi',
     practitioners: [{ name: 'Dr. Vikram Sethi', hours: STANDARD }],
     services: [{ name: 'Orthopaedic consult', minutes: 30, pricePaise: 130000 }, { name: 'Fracture review', minutes: 20, pricePaise: 70000 }],
-    depositPaise: 50000, noShowPaise: 60000, ladder: LADDER_STRICT, holdTtlSeconds: 600,
+    depositPaise: 50000, ladder: LADDER_STRICT, holdTtlSeconds: 600,
   },
   {
-    // No deposit: talk therapy is commonly billed after the session, and the
-    // no-show fee is what actually protects the slot.
+    // No deposit: talk therapy is commonly billed after the session — the
+    // full price becomes the session-complete mandate instead.
     slug: 'calm_waters', name: 'Calm Waters Counselling', city: 'Kolkata',
     practitioners: [{ name: 'Ananya Bose, RCI-licensed', hours: EVENING }],
     services: [{ name: 'Individual therapy, 50 min', minutes: 50, pricePaise: 200000 }],
-    depositPaise: undefined, noShowPaise: 100000, ladder: LADDER_LENIENT, holdTtlSeconds: 900,
+    depositPaise: undefined, ladder: LADDER_LENIENT, holdTtlSeconds: 900,
   },
   {
     slug: 'vitalis_cardio', name: 'Vitalis Cardiology', city: 'Ahmedabad',
     practitioners: [{ name: 'Dr. Nilesh Trivedi', hours: STANDARD }],
     services: [{ name: 'Cardiology consult', minutes: 30, pricePaise: 160000 }, { name: 'Echocardiogram', minutes: 45, pricePaise: 250000 }],
-    depositPaise: 60000, noShowPaise: 70000, ladder: LADDER_STRICT, holdTtlSeconds: 600,
+    depositPaise: 60000, ladder: LADDER_STRICT, holdTtlSeconds: 600,
   },
   {
     slug: 'littlesteps_paeds', name: 'LittleSteps Paediatrics', city: 'Jaipur',
     practitioners: [{ name: 'Dr. Meera Agarwal', hours: SIX_DAY }],
     services: [{ name: 'Paediatric consult', minutes: 20, pricePaise: 70000 }, { name: 'Vaccination visit', minutes: 15, pricePaise: 40000 }],
-    depositPaise: undefined, noShowPaise: 25000, ladder: LADDER_LENIENT, holdTtlSeconds: 600,
+    depositPaise: undefined, ladder: LADDER_LENIENT, holdTtlSeconds: 600,
   },
   {
     slug: 'radiance_cosmetic', name: 'Radiance Cosmetic Dermatology', city: 'Gurugram',
     practitioners: [{ name: 'Dr. Simran Ahuja', hours: EVENING }],
     services: [{ name: 'Laser hair reduction, session', minutes: 60, pricePaise: 450000 }, { name: 'Chemical peel', minutes: 40, pricePaise: 300000 }],
-    depositPaise: 150000, noShowPaise: 200000, ladder: LADDER_STRICT, holdTtlSeconds: 1200,
+    depositPaise: 150000, ladder: LADDER_STRICT, holdTtlSeconds: 1200,
   },
   {
     slug: 'clearvoice_ent', name: 'ClearVoice ENT', city: 'Lucknow',
     practitioners: [{ name: 'Dr. Imran Khan', hours: STANDARD }],
     services: [{ name: 'ENT consult', minutes: 25, pricePaise: 85000 }],
-    depositPaise: 25000, noShowPaise: 35000, ladder: LADDER_STANDARD, holdTtlSeconds: 600,
+    depositPaise: 25000, ladder: LADDER_STANDARD, holdTtlSeconds: 600,
   },
   {
     slug: 'anchor_sportsmed', name: 'Anchor Sports Medicine', city: 'Chandigarh',
     practitioners: [{ name: 'Dr. Gurpreet Sandhu', hours: SIX_DAY }, { name: 'Dr. Kabir Malhotra', hours: PART_TIME }],
     services: [{ name: 'Sports injury assessment', minutes: 45, pricePaise: 140000 }, { name: 'Return-to-play review', minutes: 30, pricePaise: 95000 }],
-    depositPaise: 45000, noShowPaise: 55000, ladder: LADDER_STANDARD, holdTtlSeconds: 600,
+    depositPaise: 45000, ladder: LADDER_STANDARD, holdTtlSeconds: 600,
   },
   {
     slug: 'prana_ayurveda', name: 'Prana Ayurveda', city: 'Kochi',
     practitioners: [{ name: 'Dr. Rajeev Nair', hours: SIX_DAY }],
     services: [{ name: 'Ayurvedic consultation', minutes: 45, pricePaise: 90000 }, { name: 'Panchakarma planning', minutes: 60, pricePaise: 180000 }],
-    depositPaise: 30000, noShowPaise: undefined, ladder: LADDER_LENIENT, holdTtlSeconds: 900,
+    depositPaise: 30000, ladder: LADDER_LENIENT, holdTtlSeconds: 900,
   },
   {
     slug: 'nova_diagnostics', name: 'Nova Diagnostics', city: 'Nagpur',
     practitioners: [{ name: 'Dr. Shalini Wankhede', hours: EVENING }],
     services: [{ name: 'Ultrasound, abdomen', minutes: 30, pricePaise: 190000 }, { name: 'X-ray, chest', minutes: 15, pricePaise: 55000 }],
-    depositPaise: 50000, noShowPaise: undefined, ladder: LADDER_STANDARD, holdTtlSeconds: 600,
+    depositPaise: 50000, ladder: LADDER_STANDARD, holdTtlSeconds: 600,
   },
   {
     slug: 'serene_derm', name: 'Serene Dermatology', city: 'Coimbatore',
     practitioners: [{ name: 'Dr. Divya Raman', hours: STANDARD }],
     services: [{ name: 'Skin consult', minutes: 30, pricePaise: 75000 }],
-    depositPaise: 25000, noShowPaise: 30000, ladder: LADDER_STANDARD, holdTtlSeconds: 600,
+    depositPaise: 25000, ladder: LADDER_STANDARD, holdTtlSeconds: 600,
   },
   {
     slug: 'apex_dental', name: 'Apex Dental Studio', city: 'Bhopal',
     practitioners: [{ name: 'Dr. Rohit Saxena', hours: SIX_DAY }],
     services: [{ name: 'Dental check-up', minutes: 30, pricePaise: 60000 }, { name: 'Tooth extraction', minutes: 45, pricePaise: 200000 }],
-    depositPaise: 20000, noShowPaise: 40000, ladder: LADDER_STANDARD, holdTtlSeconds: 600,
+    depositPaise: 20000, ladder: LADDER_STANDARD, holdTtlSeconds: 600,
   },
   {
-    // The minimal case: no deposit, no no-show fee — exactly one payment leg
-    // (the session-complete mandate for the full price).
+    // The minimal case: no deposit — exactly one payment leg (the
+    // session-complete mandate for the full price).
     slug: 'mindful_path', name: 'Mindful Path Psychiatry', city: 'Indore',
     practitioners: [{ name: 'Dr. Sameer Joshi', hours: PART_TIME }],
     services: [{ name: 'Psychiatric evaluation', minutes: 60, pricePaise: 250000 }],
-    depositPaise: undefined, noShowPaise: undefined, ladder: LADDER_LENIENT, holdTtlSeconds: 1200,
+    depositPaise: undefined, ladder: LADDER_LENIENT, holdTtlSeconds: 1200,
   },
   {
     slug: 'harmony_chiro', name: 'Harmony Chiropractic', city: 'Visakhapatnam',
     practitioners: [{ name: 'Dr. Anil Varma', hours: SIX_DAY }],
     services: [{ name: 'Chiropractic adjustment', minutes: 30, pricePaise: 100000 }],
-    depositPaise: 30000, noShowPaise: 35000, ladder: LADDER_STANDARD, holdTtlSeconds: 600,
+    depositPaise: 30000, ladder: LADDER_STANDARD, holdTtlSeconds: 600,
   },
   {
     slug: 'lotus_fertility', name: 'Lotus Fertility', city: 'Surat',
     practitioners: [{ name: 'Dr. Hetal Shah', hours: STANDARD }, { name: 'Dr. Manav Desai', hours: PART_TIME }],
     services: [{ name: 'Fertility consultation', minutes: 45, pricePaise: 280000 }, { name: 'Follow-up scan', minutes: 20, pricePaise: 120000 }],
-    depositPaise: 100000, noShowPaise: 150000, ladder: LADDER_STRICT, holdTtlSeconds: 1800,
+    depositPaise: 100000, ladder: LADDER_STRICT, holdTtlSeconds: 1800,
   },
   {
-    // No deposit, but a real no-show fee — the two-leg shape from the other side.
     slug: 'cedar_family', name: 'Cedar Family Medicine', city: 'Bhubaneswar',
     practitioners: [{ name: 'Dr. Priyanka Mohanty', hours: SIX_DAY }],
     services: [{ name: 'General consult', minutes: 20, pricePaise: 50000 }, { name: 'Health check review', minutes: 30, pricePaise: 90000 }],
-    depositPaise: undefined, noShowPaise: 20000, ladder: LADDER_LENIENT, holdTtlSeconds: 600,
+    depositPaise: undefined, ladder: LADDER_LENIENT, holdTtlSeconds: 600,
   },
 ]
 
 /** How many payment legs a booking against this merchant will actually have — see the file header. */
 function legCount(spec: MerchantSpec): number {
   const cheapest = Math.min(...spec.services.map((s) => s.pricePaise))
-  return (spec.depositPaise !== undefined ? 1 : 0) + (spec.noShowPaise !== undefined ? 1 : 0) + (cheapest - (spec.depositPaise ?? 0) > 0 ? 1 : 0)
+  return (spec.depositPaise !== undefined ? 1 : 0) + (cheapest - (spec.depositPaise ?? 0) > 0 ? 1 : 0)
 }
 
 async function seedMerchants(): Promise<void> {
   const { sql, db } = createDbClient(databaseUrl)
   const now = new Date()
-  const summary: { id: string; name: string; city: string; legs: number; deposit: string; noShow: string }[] = []
+  const summary: { id: string; name: string; city: string; legs: number; deposit: string }[] = []
 
   for (const spec of SPECS) {
     const merchantId = `mer_${spec.slug}`
@@ -287,10 +286,6 @@ async function seedMerchants(): Promise<void> {
         depositType: 'fixed',
         depositAmountPaise: spec.depositPaise ?? null,
         cancellationLadder: spec.ladder,
-        noShowFeePaise: spec.noShowPaise ?? null,
-        // Paired with the fee, never independently set — the same rule
-        // `validatePolicyInput` enforces on the write path.
-        noShowGraceMinutes: spec.noShowPaise === undefined ? null : 15,
         holdTtlSeconds: spec.holdTtlSeconds,
         maxConcurrentHoldsPerAgent: 3,
         holdRateLimitPerMinute: 10,
@@ -304,7 +299,6 @@ async function seedMerchants(): Promise<void> {
       city: spec.city,
       legs: legCount(spec),
       deposit: spec.depositPaise === undefined ? '—' : `₹${spec.depositPaise / 100}`,
-      noShow: spec.noShowPaise === undefined ? '—' : `₹${spec.noShowPaise / 100}`,
     })
   }
 
@@ -323,10 +317,10 @@ async function seedMerchants(): Promise<void> {
 
   const pad = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s.padEnd(n))
   console.log(`\nseeded ${summary.length} merchants (idempotent — re-running changes nothing)\n`)
-  console.log(`${pad('merchantId', 24)} ${pad('clinic', 34)} ${pad('city', 14)} legs  deposit  no-show`)
-  console.log('-'.repeat(96))
+  console.log(`${pad('merchantId', 24)} ${pad('clinic', 34)} ${pad('city', 14)} legs  deposit`)
+  console.log('-'.repeat(87))
   for (const r of summary) {
-    console.log(`${pad(r.id, 24)} ${pad(r.name, 34)} ${pad(r.city, 14)}  ${r.legs}    ${pad(r.deposit, 8)} ${r.noShow}`)
+    console.log(`${pad(r.id, 24)} ${pad(r.name, 34)} ${pad(r.city, 14)}  ${r.legs}    ${r.deposit}`)
   }
 
   const byLegs = summary.reduce<Record<number, number>>((acc, r) => ({ ...acc, [r.legs]: (acc[r.legs] ?? 0) + 1 }), {})

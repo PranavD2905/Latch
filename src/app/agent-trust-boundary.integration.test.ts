@@ -111,8 +111,6 @@ describe('agent trust boundary (docs/01-architecture.md §9)', () => {
         { hoursBefore: 48, retainPct: 0 },
         { hoursBefore: 0, retainPct: 100 },
       ],
-      noShowFeePaise: 40_000,
-      noShowGraceMinutes: 15,
       holdTtlSeconds: 600,
       maxConcurrentHoldsPerAgent: 3,
       holdRateLimitPerMinute: 10,
@@ -163,7 +161,7 @@ describe('agent trust boundary (docs/01-architecture.md §9)', () => {
     expect(result.refund.amountPaise).toBeGreaterThan(0)
   })
 
-  it('the no-show authorisation ceiling is enforced by the rail itself, not an `if` an agent could route around', async () => {
+  it('the session-complete authorisation ceiling is enforced by the rail itself, not an `if` an agent could route around', async () => {
     clock.set(new Date(slotAt('10:00').getTime() - 5 * 24 * 3_600_000))
     const agentId = `agent_${ulid()}`
     const held = await holdSlot({ agentId, practitionerId: SEED_PRACTITIONER_ID, serviceId: SEED_SERVICE_ID, startsAt: slotAt('10:00'), idempotencyKey: freshKey() }, deps)
@@ -176,18 +174,20 @@ describe('agent trust boundary (docs/01-architecture.md §9)', () => {
       ),
     )
 
-    // ChargeNoShowCommand (src/app/charge-no-show.ts) has no amountPaise
-    // field at all — the amount charged is always re-derived from the
-    // booking's own recorded authorization, never a caller input. The only
-    // way to even *attempt* an over-ceiling capture is to drive the
+    // MarkSessionCompleteCommand (src/app/mark-session-complete.ts) has no
+    // amountPaise field at all — the amount charged is always re-derived from
+    // the booking's own recorded authorization, never a caller input. The
+    // only way to even *attempt* an over-ceiling capture is to drive the
     // PaymentRail port directly, exactly what an agent would have to do if
-    // it tried to bypass charge_no_show's own command shape — and the rail
+    // it tried to bypass mark_complete's own command shape — and the rail
     // itself refuses it, the same enforcement point real Razorpay uses
-    // (dev-logs/005 constraint 1).
+    // (dev-logs/005 constraint 1). (This used to demonstrate the same thing
+    // against the no-show authorisation — removed along with that feature;
+    // see the dev log for that removal.)
     await expect(
       deps.paymentRail.captureAuthorization({
-        authorizationId: confirmed.authorization!.authorizationId,
-        amountPaise: toPaise(confirmed.authorization!.amountPaise + 1),
+        authorizationId: confirmed.sessionCompleteMandate!.authorizationId,
+        amountPaise: toPaise(confirmed.sessionCompleteMandate!.amountPaise + 1),
         reference: held.bookingId,
       }),
     ).rejects.toBeInstanceOf(CaptureAmountMismatchError)
@@ -195,10 +195,10 @@ describe('agent trust boundary (docs/01-architecture.md §9)', () => {
     // No headroom was consumed by the refused attempt — the authorisation is untouched.
     await expect(
       deps.paymentRail.captureAuthorization({
-        authorizationId: confirmed.authorization!.authorizationId,
-        amountPaise: toPaise(confirmed.authorization!.amountPaise),
+        authorizationId: confirmed.sessionCompleteMandate!.authorizationId,
+        amountPaise: toPaise(confirmed.sessionCompleteMandate!.amountPaise),
         reference: held.bookingId,
       }),
-    ).resolves.toMatchObject({ amountPaise: confirmed.authorization!.amountPaise })
+    ).resolves.toMatchObject({ amountPaise: confirmed.sessionCompleteMandate!.amountPaise })
   })
 })

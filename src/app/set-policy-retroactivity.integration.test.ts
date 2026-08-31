@@ -121,8 +121,6 @@ describe('retroactivity: a booking cancels under the policy version it was confi
     const newLadder: SetPolicyCommand = {
       depositAmountPaise: originalPolicy.depositAmountPaise,
       cancellationLadder: [{ hoursBefore: 0, retainPct: 100 }],
-      noShowFeePaise: originalPolicy.noShowFeePaise,
-      noShowGraceMinutes: originalPolicy.noShowGraceMinutes,
       holdTtlSeconds: originalPolicy.holdTtlSeconds,
       maxConcurrentHoldsPerAgent: originalPolicy.maxConcurrentHoldsPerAgent,
       holdRateLimitPerMinute: originalPolicy.holdRateLimitPerMinute,

@@ -12,30 +12,25 @@ export interface LadderTier {
 }
 
 /**
- * The versioned policy — deposit rule, cancellation ladder, no-show terms.
- * docs/03-domain-model.md §2. This is the authority every money action cites.
+ * The versioned policy — deposit rule and cancellation ladder. docs/03-
+ * domain-model.md §2. This is the authority every money action cites.
+ *
+ * No no-show fee field (removed — see the dev log for that removal): a
+ * post-hoc debit against a stored card is not how Indian merchants recover a
+ * no-show. The cancellation ladder's own `hoursBefore: 0` floor tier — full
+ * deposit forfeiture — already is that recovery mechanism, and needed no new
+ * field to express it.
  */
 export interface Policy {
   policyVersion: number
   /**
-   * Fully optional, same discipline as `noShowFeePaise` below — a merchant
-   * may run with no upfront deposit at all (payment-link feature follow-up:
-   * "if no deposit is set, it should not show the deposit link"). Unlike
-   * the no-show fee, there is no paired field to keep in sync — `undefined`
-   * simply means `confirm_with_deposit` never creates a deposit order or
-   * captures anything for that leg.
+   * Fully optional — a merchant may run with no upfront deposit at all
+   * (payment-link feature follow-up: "if no deposit is set, it should not
+   * show the deposit link"). `undefined` simply means `confirm_with_deposit`
+   * never creates a deposit order or captures anything for that leg.
    */
   depositAmountPaise: Paise | undefined
   cancellationLadder: readonly LadderTier[]
-  /**
-   * The no-show fee leg is now fully optional — a merchant may run without
-   * one at all. Paired, not independently optional: either both are set or
-   * neither is, so "a fee with no grace period" or vice versa can't exist.
-   * When unset, `confirm_with_deposit` never registers a no-show
-   * authorisation and `charge_no_show` refuses with `NO_SHOW_FEE_NOT_CONFIGURED`.
-   */
-  noShowFeePaise: Paise | undefined
-  noShowGraceMinutes: number | undefined
   holdTtlSeconds: number
   maxConcurrentHoldsPerAgent: number
   /**
@@ -64,9 +59,6 @@ export interface Policy {
 export interface PolicyDraft {
   depositAmountPaise: number | undefined
   cancellationLadder: readonly LadderTier[]
-  /** Both present or both absent — see `Policy.noShowFeePaise`'s doc comment. */
-  noShowFeePaise: number | undefined
-  noShowGraceMinutes: number | undefined
   holdTtlSeconds: number
   maxConcurrentHoldsPerAgent: number
   holdRateLimitPerMinute: number
@@ -78,7 +70,6 @@ export interface PolicyDraft {
  * `docs/03-domain-model.md` §2: publishing is an INSERT of a new version,
  * never an UPDATE of an existing one.
  */
-export type PolicyInput = Omit<PolicyDraft, 'depositAmountPaise' | 'noShowFeePaise'> & {
+export type PolicyInput = Omit<PolicyDraft, 'depositAmountPaise'> & {
   depositAmountPaise: Paise | undefined
-  noShowFeePaise: Paise | undefined
 }

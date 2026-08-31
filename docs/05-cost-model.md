@@ -99,13 +99,21 @@ cost ₹35 per shopping session in pure waste.
 
 ### Per-booking unit economics
 
-Reference merchant: dermatology clinic. ₹800 consultation, ₹300 deposit, ₹400 no-show fee.
+Reference merchant: dermatology clinic. ₹800 consultation, ₹300 deposit.
+
+**No separate no-show fee.** Latch originally modelled a no-show as its own authorisation-and-charge
+leg (`₹400`, captured on top of the retained deposit) — removed as a feature (see the dev log for that
+removal): a post-hoc debit against a stored card is not how Indian merchants actually recover a
+no-show. The deposit, already captured at confirm time, is the recovery — the cancellation ladder's own
+`hours_before: 0` floor tier retains it in full, and because nobody ever calls `cancel` on a booking
+nobody ever intends to attend, that ₹300 is simply never refunded. No separate charge action, no second
+Razorpay fee.
 
 | Scenario | Merchant receives | Razorpay fee | Merchant net |
 |---|---|---|---|
-| **Booking → attended** (deposit ₹300 + balance ₹500) | ₹800 | ₹18.88 | ₹781.12 |
-| **No-show authorisation held, never captured** | — | **₹0** | ₹0 |
-| **No-show charged** (deposit ₹300 retained + ₹400 charge) | ₹700 | ₹16.52 | ₹683.48 |
+| **Booking → attended** (deposit ₹300 + session-complete ₹500) | ₹800 | ₹18.88 | ₹781.12 |
+| **Session-complete mandate held, never captured** | — | **₹0** | ₹0 |
+| **No-show — deposit retained, never refunded** | ₹300 | ₹7.08 (already sunk at original capture) | ₹292.92 |
 | **Customer cancels >48h** (free tier, full refund) | ₹0 | ₹7.08 sunk | **−₹7.08** |
 | **Customer cancels 12–48h** (50% retained) | ₹150 | ₹7.08 | ₹142.92 |
 | **Merchant declines** (failure path) | ₹0 | ₹7.08 sunk | **−₹7.08** |
@@ -196,26 +204,27 @@ first, beats a schema change with no real load to prove it against.
 
 ### For the merchant (reference clinic, from brief §2.2)
 
-1,200 appointments/month, 32% no-show rate, ₹800 consultation, ₹400 no-show fee.
+1,200 appointments/month, 32% no-show rate, ₹800 consultation, ₹300 deposit.
 
 | Line | Calculation | Monthly |
 |---|---|---|
 | No-shows today | 1,200 × 32% | 384 slots |
 | Revenue lost today | 384 × ₹800 | **₹307,200 evaporating** |
-| **Recovery A — no-show charges** | assume 50% of no-shows are chargeable and collect | 192 × ₹400 = **₹76,800** |
-| less Razorpay fees | ₹76,800 × 2.36% | −₹1,813 |
+| **Recovery A — deposit retained on no-show** | every no-show that reached CONFIRMED already had its ₹300 deposit captured, and is never refunded (no merchant action needed — the ladder's floor tier already covers it) | 384 × ₹300 = **₹115,200** |
 | **Recovery B — deposit deterrence** | deposits are documented to reduce no-shows; assume a conservative 5pp drop (32% → 27%) | 60 slots × ₹800 = **₹48,000** |
 | **Recovery C — agent-originated bookings** | slots filled that were never going to be booked at all | not modelled — upside |
-| **Net monthly recovery (A + B)** | | **≈ ₹122,987** |
+| **Net monthly recovery (A + B)** | | **≈ ₹163,200** |
 | less Latch infrastructure | | −₹5,500 |
-| **Net to merchant** | | **≈ ₹117,000/month** |
+| **Net to merchant** | | **≈ ₹157,700/month** |
 
-Against Tier 1 infrastructure of ₹5,500/month, that is a **~21× return** before counting Recovery C,
+Against Tier 1 infrastructure of ₹5,500/month, that is a **~29× return** before counting Recovery C,
 which is the half the track actually asks about ("grow the merchant's revenue").
 
 ⚠️ Recovery B's 5pp assumption is **not sourced** — deposits are widely reported to reduce no-shows but
-I have no India-specific figure. It is flagged rather than dressed up. Recovery A alone (₹75,000/month)
-carries the case.
+I have no India-specific figure. It is flagged rather than dressed up. Recovery A alone (₹115,200/month)
+carries the case, and it rests on nothing but the deposit-capture behaviour `confirm_with_deposit`
+already has — no new mechanism, no merchant judgment call, no dispute risk from debiting a card the
+customer didn't expect to be charged.
 
 ### For Razorpay — the strategic number
 
@@ -224,16 +233,24 @@ creates payment volume **that does not currently exist**:
 
 | New volume type | Monthly, one clinic | Razorpay revenue @ 2% |
 |---|---|---|
-| No-show charges (today: ₹0, uncollectable) | ₹76,800 | **₹1,536** |
-| Deposits on agent-originated bookings | ₹360,000 (1,200 × ₹300) | ₹7,200 (partly cannibalised) |
-| **Genuinely incremental** | | **≈ ₹1,500–3,000/clinic/month** |
+| Deposits on all Latch bookings | ₹360,000 (1,200 × ₹300) | ₹7,200 (partly cannibalised — a clinic taking deposits by some other means already generates *some* payment volume today) |
+| Deposits on agent-originated bookings (Recovery C) | not modelled | upside, not modelled |
 
-The no-show line is the honest one: that revenue is **100% incremental**, because today a no-show
-produces no transaction at all. There is nothing to cannibalise.
+**Removing the no-show fee removes what was the cleanest "100% incremental" line** — a debit against a
+customer who received nothing, which today produces no transaction at all, was the single easiest
+number to defend as pure upside. It is gone because the underlying feature is gone (see the dev log for
+that removal): the recovery mechanism is deposit forfeiture, and the deposit's own capture was already
+counted in the payment-volume row above whether or not the booking later becomes a no-show — a no-show
+does not create a *second* transaction, it just changes whether the first one gets refunded. The honest
+remaining incremental case is **Recovery C**: bookings an agent originates that this clinic's phone-in,
+inbound-only booking flow would never have captured at all. Not modelled here (see Part 4) because it
+depends on how many third-party agents actually route bookings here — but it is the only line in this
+table that is unambiguously **new** volume, not existing volume moved onto Razorpay's rails.
 
-Extrapolating even to a few thousand Razorpay service merchants puts this in the ₹5–10 crore/year
-range of new annual payment volume, on a primitive Razorpay does not currently have (brief §3,
-Layer 4). That is the commercial argument for the whole project.
+Extrapolating deposit volume alone to a few thousand Razorpay service merchants still puts this in a
+real crore/year range of payment volume on a primitive Razorpay does not currently have (brief §3,
+Layer 4) — the commercial argument for the project rests on that primitive existing at all, not on the
+no-show fee specifically.
 
 ---
 
@@ -243,7 +260,7 @@ Named explicitly so nobody quotes a number that has not been verified.
 
 | Unknown | Why it matters | How to resolve |
 |---|---|---|
-| **card manual capture / authorisation pricing** | Razorpay lists subscriptions pricing as "on request". There may be a per-authorisation or per-debit fee on top of 2%, which would change no-show economics | Contact Razorpay sales, or find it in a merchant agreement |
+| **card manual capture / authorisation pricing** | Razorpay lists subscriptions pricing as "on request". There may be a per-authorisation or per-debit fee on top of 2%, which would change session-complete-mandate economics | Contact Razorpay sales, or find it in a merchant agreement |
 | **Authorisation hold auth amount** | Whether the RBI auth transaction must be ₹1 or can be the deposit itself decides whether booking is one payment or two, and therefore one fee or two | Hands-on test-mode verification (carried over from dev-log 001) |
 | **Instant settlement cost** | Service merchants may want faster than T+1; Razorpay charges extra, amount unpublished | Razorpay sales |
 | **Deposit → no-show reduction, India** | Recovery B above rests on an unsourced 5pp assumption | Pilot data, or find an Indian study |
@@ -265,8 +282,8 @@ afterwards.
 | Cost per booking at 50 merchants | **≈ ₹0.40** |
 | AI inference cost | **₹0 — the agent's owner pays it** |
 | Cost of one graceful failure | **₹7.08 sunk MDR, borne by the merchant** |
-| Value recovered per merchant | **≈ ₹117,000/month** |
-| New payment volume for Razorpay per merchant | **≈ ₹1,500–3,000/month, fully incremental** |
+| Value recovered per merchant | **≈ ₹157,700/month** |
+| New payment volume for Razorpay per merchant | **≈ ₹7,200/month directly, partly cannibalised — the larger upside (Recovery C) is unmodelled** |
 
 ---
 

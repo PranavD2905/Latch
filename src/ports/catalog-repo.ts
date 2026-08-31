@@ -48,8 +48,8 @@ export interface CatalogRepo {
    * since published v5" (docs/03-domain-model.md §2) — `cancel` and
    * `reschedule` must evaluate the ladder the booking was actually confirmed
    * under, never the merchant's current policy, exactly the discipline
-   * `BookingSnapshot.authorizationAmountPaise` already applies to the
-   * no-show fee (dev-logs/009).
+   * `BookingSnapshot.sessionCompleteAuthorizationAmountPaise` already applies
+   * to the session-complete mandate (dev-logs/009).
    */
   getPolicyVersion(merchantId: string, version: number): Promise<Policy | undefined>
   /**

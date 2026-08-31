@@ -64,7 +64,7 @@ function railThatFailsAuthorizeFor(real: PaymentRail, failingKey: string): Payme
     name: real.name,
     ensureAuthorizationOrder: async (params: AuthorizeParams): Promise<AuthorizationOrder> => {
       if (params.idempotencyKey === failingKey) {
-        throw new PaymentRailError(params.reference, new Error('simulated no-show-authorization outage'))
+        throw new PaymentRailError(params.reference, new Error('simulated authorization outage'))
       }
       return real.ensureAuthorizationOrder(params)
     },
@@ -104,8 +104,8 @@ afterAll(async () => {
  * ordinary single-leg network blip, not a process crash) and it was closed
  * at the source: `confirm-with-deposit.ts` now uses `Promise.allSettled` and
  * always proceeds to confirm once the mandatory deposit leg succeeds,
- * recording whichever optional legs (no-show auth, session-complete auth)
- * actually landed. This test now proves the fix — the exact same simulated
+ * recording whichever optional leg (the session-complete mandate) actually
+ * landed. This test now proves the fix — the exact same simulated
  * outage that used to strand a captured deposit with zero trail now
  * confirms cleanly, deposit recorded, only the failed leg absent. The
  * webhook/reconciliation path this test used to exercise remains the real
@@ -115,11 +115,11 @@ afterAll(async () => {
  * see dev-logs/014 and `reconciliation.ts`.
  */
 describe('chaos: a payment-provider outage mid confirm_with_deposit', () => {
-  it('deposit captured, no-show authorization outage: confirm still succeeds, the deposit is recorded, only the failed leg is absent', async () => {
+  it('deposit captured, session-complete authorization outage: confirm still succeeds, the deposit is recorded, only the failed leg is absent', async () => {
     const paymentProvider = new FakePaymentProvider()
     const realRail = new FakePaymentRail()
     const failingIdempotencyKey = freshKey()
-    const flakyRail = railThatFailsAuthorizeFor(realRail, `${failingIdempotencyKey}:no_show_auth`)
+    const flakyRail = railThatFailsAuthorizeFor(realRail, `${failingIdempotencyKey}:session_complete_auth`)
 
     const deps: AppDeps = {
       clock,
@@ -142,8 +142,8 @@ describe('chaos: a payment-provider outage mid confirm_with_deposit', () => {
     createdBookingIds.push(held.bookingId)
     const policyResult = await getPolicy(deps)
 
-    // No longer rejects: the no-show leg's outage no longer takes the
-    // already-captured deposit down with it.
+    // No longer rejects: the session-complete leg's outage no longer takes
+    // the already-captured deposit down with it.
     const result = requireConfirmed(
       await confirmWithDeposit(
         { bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: failingIdempotencyKey },
@@ -151,13 +151,12 @@ describe('chaos: a payment-provider outage mid confirm_with_deposit', () => {
       ),
     )
     expect(result.status).toBe('CONFIRMED')
-    expect(result.authorization).toBeUndefined() // the failed leg — absent, not silently retried or faked
-    expect(result.sessionCompleteMandate).toBeDefined() // the other, unrelated optional leg — unaffected by the outage
+    expect(result.deposit).toBeDefined() // the mandatory leg — unaffected by the outage
+    expect(result.sessionCompleteMandate).toBeUndefined() // the failed leg — absent, not silently retried or faked
 
     const snapshot = await deps.eventStore.loadSnapshot(held.bookingId)
     expect(snapshot?.status).toBe('CONFIRMED')
-    expect(snapshot?.authorizationId).toBeUndefined()
-    expect(snapshot?.sessionCompleteAuthorizationId).toBeDefined()
+    expect(snapshot?.sessionCompleteAuthorizationId).toBeUndefined()
 
     // The actual fix, pinned directly: the deposit that really captured (in
     // FakePaymentRail/FakePaymentProvider's own bookkeeping) is genuinely
@@ -165,8 +164,7 @@ describe('chaos: a payment-provider outage mid confirm_with_deposit', () => {
     // rejection.
     const trail = await db.select().from(events).where(eq(events.bookingId, held.bookingId))
     expect(trail.some((e) => e.type === 'DEPOSIT_CAPTURED')).toBe(true)
-    expect(trail.some((e) => e.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD')).toBe(true)
-    expect(trail.some((e) => e.type === 'AUTHORIZATION_HELD')).toBe(false) // the leg that failed — never fabricated
+    expect(trail.some((e) => e.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD')).toBe(false) // the leg that failed — never fabricated
     expect(trail.some((e) => e.type === 'BOOKING_CONFIRMED')).toBe(true)
   })
 

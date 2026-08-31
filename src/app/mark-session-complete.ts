@@ -1,4 +1,4 @@
-import { createAuthorizationReleasedEvent, createBookingCompletedEvent, createSessionCompleteChargedEvent } from '../domain/event-factory.js'
+import { createBookingCompletedEvent, createSessionCompleteChargedEvent } from '../domain/event-factory.js'
 import type { BookingEvent, MoneyAction } from '../domain/events.js'
 import { subtractPaise, type Paise } from '../domain/money.js'
 import { Refusal } from '../domain/refusals.js'
@@ -34,26 +34,19 @@ interface CaptureOutcome {
 }
 
 /**
- * `mark_complete` — merchant-only, same trust boundary as `decline_booking`/
- * `mark_no_show` (never registered as an MCP tool: self-reported attendance
- * from an agent is exactly the kind of fact this system already refuses to
- * take on an agent's say-so, the same reasoning `NON_ATTENDANCE_MARKED`
- * already applies to the no-show side).
+ * `mark_complete` — merchant-only, same trust boundary as `decline_booking`
+ * (never registered as an MCP tool: self-reported attendance from an agent
+ * is exactly the kind of fact this system already refuses to take on an
+ * agent's say-so).
  *
- * Unlike no-show's mark-then-charge split (which exists only because
- * `charge_no_show` needed to stay agent-callable, gated on the server's own
- * elapsed-time fact — docs/03-domain-model.md §3 Rule 3), there is no
- * analogous reason to split this into two calls. One merchant action both
- * marks and charges, atomically — the same shape `decline_booking` already
- * uses for its own one-shot merchant action. No time gate either: the
- * merchant asserting the session happened is itself the fact being
- * recorded, not something re-derived from the clock.
+ * One merchant action both marks and charges, atomically — the same shape
+ * `decline_booking` already uses for its own one-shot merchant action. No
+ * time gate either: the merchant asserting the session happened is itself
+ * the fact being recorded, not something re-derived from the clock.
  *
  * Captures the session-complete mandate authorised at `confirm_with_deposit`
  * time (`service.pricePaise - policy.depositAmountPaise`, frozen then, never
- * re-derived from the service's current price) and releases the no-show
- * authorisation, if one exists — the patient showing up makes it moot, the
- * same way charging a no-show releases *this* leg in the other direction.
+ * re-derived from the service's current price).
  */
 export async function markSessionComplete(cmd: MarkSessionCompleteCommand, deps: AppDeps): Promise<MarkSessionCompleteResult> {
   const cached = await deps.idempotencyStore.get<MarkSessionCompleteResult>('mark_complete', cmd.idempotencyKey)
@@ -130,23 +123,10 @@ export async function markSessionComplete(cmd: MarkSessionCompleteCommand, deps:
       )
     }
 
-    // The no-show authorisation, if one exists, is now moot — the patient
-    // showed up. Same "release means we simply never capture" discipline as
-    // decline_booking/cancel_booking (dev-logs/005: no void endpoint).
-    if (base.authorizationId && base.authorizationExpiresAt && !base.authorizationLapsedAt) {
-      events.push(
-        createAuthorizationReleasedEvent(cmd.bookingId, ++sequence, deps.clock, {
-          authorizationId: base.authorizationId,
-          rail: deps.paymentRail.name,
-          expiresAt: base.authorizationExpiresAt,
-        }),
-      )
-    }
-
-    // Nothing to append (no mandate captured, no no-show authorisation to
-    // release) — still a real transition, so it needs a real event. Reuses
-    // the dead-until-now BOOKING_COMPLETED type for exactly the shape it was
-    // always meant for: no money, just the fact.
+    // Nothing to append (no mandate captured) — still a real transition, so
+    // it needs a real event. Reuses the dead-until-now BOOKING_COMPLETED
+    // type for exactly the shape it was always meant for: no money, just the
+    // fact.
     if (events.length === 0) {
       events.push(createBookingCompletedEvent(cmd.bookingId, ++sequence, deps.clock, {}))
     }
@@ -154,7 +134,6 @@ export async function markSessionComplete(cmd: MarkSessionCompleteCommand, deps:
     const projection: BookingSnapshot = {
       ...base,
       status: 'COMPLETED',
-      authorizationId: undefined,
       sessionCompleteAuthorizationId: undefined,
       lastEventSequence: sequence,
     }
