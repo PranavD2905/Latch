@@ -60,6 +60,9 @@ class DelayedPaymentProvider implements PaymentProvider {
   async refundDeposit(params: RefundDepositParams): Promise<RefundDepositResult> {
     return this.inner.refundDeposit(params)
   }
+  async payDepositViaUpiCollect(order: DepositOrder, vpa: string, reference: string, options?: { timeoutMs?: number }): Promise<CaptureDepositResult | undefined> {
+    return this.inner.payDepositViaUpiCollect(order, vpa, reference, options)
+  }
   async fetchPaymentStatus(paymentId: string) {
     return this.inner.fetchPaymentStatus(paymentId)
   }

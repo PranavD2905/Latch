@@ -153,6 +153,31 @@ export interface PaymentProvider {
   pollDepositCapture(order: DepositOrder, reference: string, options?: { timeoutMs?: number }): Promise<CaptureDepositResult | undefined>
   refundDeposit(params: RefundDepositParams): Promise<RefundDepositResult>
   /**
+   * S2S UPI collect — a payer's VPA goes straight from our own pay page to
+   * Razorpay's server, no Checkout.js redirect. Only exists because this
+   * account had TPV enabled for UPI collect (`/payments/create/upi`) after
+   * dev-logs/006/029 were written; dev-logs/006 verified this same endpoint
+   * 404ing, and dev-logs/029 carried forward "a human must complete
+   * Checkout.js, and that can't be automated" as a standing limitation. Card
+   * S2S (`/payments/create/json`) is still 404 on this account — re-verified
+   * live before building this — so this exists for the deposit leg's UPI
+   * path only; the authorisation legs stay on Checkout.js/card manual
+   * capture (dev-logs/005's rail choice for those is untouched).
+   *
+   * Submits the collect request, then polls the same `order` this method was
+   * given — reusing `pollDepositCapture`'s exact convergence loop rather than
+   * a second one, for the same reason `pollDepositCapture` itself takes an
+   * already-created `order` instead of re-deriving it (dev-logs/029's
+   * duplicate-order bug). Returns `undefined` (not a throw) if the collect
+   * request is still unresolved when the bounded poll gives up — Razorpay's
+   * webhook will finalize it later exactly as it does for a Checkout.js
+   * completion; "not resolved yet" is the ordinary case here, same as
+   * `pollDepositCapture`. Throws `PaymentDeclinedError` for a definite
+   * decline and `PaymentProviderError` for a rail fault (including a
+   * malformed/rejected VPA at submission time).
+   */
+  payDepositViaUpiCollect(order: DepositOrder, vpa: string, reference: string, options?: { timeoutMs?: number }): Promise<CaptureDepositResult | undefined>
+  /**
    * dev-logs/014: read-only, no side effect — asks Razorpay directly what a
    * previously-captured payment's status actually is *right now*, rather
    * than trusting that the trail's `DEPOSIT_CAPTURED` still matches reality.

@@ -19,6 +19,10 @@ export interface RazorpayPaymentProviderOptions {
   keySecret: string
 }
 
+/** Required by Razorpay's UPI collect endpoint but not meaningful for a VPA-only test payer — see `payDepositViaUpiCollect`. */
+const S2S_PLACEHOLDER_EMAIL = 'payer@latch.test'
+const S2S_PLACEHOLDER_CONTACT = '9999999999'
+
 /**
  * Real Razorpay test-mode adapter for the `PaymentProvider` port
  * (docs/02-tech-stack.md §13). See dev-logs/006 for the constraints that
@@ -96,6 +100,36 @@ export class RazorpayPaymentProvider implements PaymentProvider {
       }
       await sleep(DEFAULT_POLL_INTERVAL_MS)
     }
+  }
+
+  /**
+   * See the port's own doc comment for why this exists and what it doesn't
+   * cover. `email`/`contact` are fixed placeholder values, not collected on
+   * the pay page — Razorpay's collect endpoint requires both, but neither is
+   * meaningful for a test-mode payer identified only by a VPA.
+   */
+  async payDepositViaUpiCollect(order: DepositOrder, vpa: string, reference: string, options?: { timeoutMs?: number }): Promise<CaptureDepositResult | undefined> {
+    try {
+      // The SDK's own declared type for this call (`RazorpayPaymentUpiCreateRequestBody`)
+      // expects a nested `upi: { vpa }` shape and requires `ip`/`referer`/`user_agent` —
+      // verified live against this account that `/payments/create/upi` actually accepts
+      // (and needs) a flat top-level `vpa`, and rejects nothing else this adapter omits.
+      // `createUpi` forwards its argument straight through to the HTTP call (no
+      // transformation in the SDK itself), so the cast below is to the type the SDK
+      // declares, not to what the wire actually wants.
+      await this.client.payments.createUpi({
+        amount: order.amountPaise,
+        currency: 'INR',
+        order_id: order.orderId,
+        email: S2S_PLACEHOLDER_EMAIL,
+        contact: S2S_PLACEHOLDER_CONTACT,
+        method: 'upi',
+        vpa,
+      } as unknown as Parameters<Razorpay['payments']['createUpi']>[0])
+    } catch (err) {
+      throw new PaymentProviderError(reference, err, parseRazorpaySdkError(err))
+    }
+    return this.pollDepositCapture(order, reference, options)
   }
 
   async refundDeposit(params: RefundDepositParams): Promise<RefundDepositResult> {

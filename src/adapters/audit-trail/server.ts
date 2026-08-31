@@ -1,8 +1,11 @@
+import formBody from '@fastify/formbody'
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { AppDeps } from '../../app/types.js'
 import type { EventWithGlobalSequence } from '../../ports/event-store.js'
 import type { MerchantAuthStore } from '../../ports/merchant-auth.js'
+import { executePaymentCall } from '../../app/payment-circuit-breaker.js'
 import { checkAllPendingLegs } from '../../app/pending-payment-status.js'
+import { PaymentDeclinedError } from '../../ports/payment-provider.js'
 import { loadEnv } from '../config.js'
 import { echoTraceIdHeader, loggingFastifyOptions, registerErrorHandler } from '../observability/fastify-logging.js'
 import { registerMetricsRoute } from '../observability/metrics.js'
@@ -65,6 +68,9 @@ export function createAuditTrailServer(deps: AppDeps, options: AuditTrailServerO
   // dev-logs/015) whose origin this backend process has no correct way to
   // know at runtime.
   registerSecurityHeaders(app, { contentSecurityPolicy: false })
+  // Only the deposit leg's UPI-collect form (below) POSTs to this server, as a
+  // plain `application/x-www-form-urlencoded` submit — no client JS needed.
+  void app.register(formBody)
 
   const feeds = new Map<string, MerchantFeed>()
 
@@ -117,7 +123,7 @@ export function createAuditTrailServer(deps: AppDeps, options: AuditTrailServerO
   // above) — Checkout.js is a cross-origin script load a default CSP would
   // block, and merchant-api's contract (JSON only, Bearer-token gated) isn't
   // worth reshaping for one HTML route.
-  app.get<{ Params: { bookingId: string } }>('/pay/:bookingId', async (request, reply) => {
+  app.get<{ Params: { bookingId: string }; Querystring: { error?: string } }>('/pay/:bookingId', async (request, reply) => {
     // Razorpay Checkout's netbanking/UPI flows hand off to the bank in a
     // popup and then post the result back through `window.opener`. Helmet's
     // default `Cross-Origin-Opener-Policy: same-origin` severs exactly that
@@ -155,7 +161,57 @@ export function createAuditTrailServer(deps: AppDeps, options: AuditTrailServerO
       done: statuses?.find((s) => s.leg === leg.leg)?.done ?? false,
     }))
 
-    await reply.type('text/html').send(renderPayPage({ bookingId, legs: payPageLegs, keyId: loadEnv().RAZORPAY_KEY_ID }))
+    await reply.type('text/html').send(renderPayPage({ bookingId, legs: payPageLegs, keyId: loadEnv().RAZORPAY_KEY_ID, ...(request.query.error ? { notice: request.query.error } : {}) }))
+  })
+
+  // The deposit leg's UPI-collect submit (`pay-page.ts`'s form, `leg.leg ===
+  // 'deposit'` branch). S2S — the VPA goes to Razorpay from *this* server,
+  // not the browser, using the same secret-key-holding `paymentProvider`
+  // every other money route already goes through. Never trusts the amount
+  // from the client (same reasoning as the GET route's own comment): the
+  // order this posts against is re-resolved from `pendingPaymentLegs`, not
+  // from anything the form itself carries beyond the VPA.
+  app.post<{ Params: { bookingId: string; leg: string }; Body: { vpa?: string } }>('/pay/:bookingId/:leg', async (request, reply) => {
+    const { bookingId, leg: legName } = request.params
+    const vpa = (request.body?.vpa ?? '').trim()
+
+    const back = async (error: string): Promise<void> => {
+      await reply.redirect(`/pay/${encodeURIComponent(bookingId)}?error=${encodeURIComponent(error)}`, 303)
+    }
+
+    if (legName !== 'deposit') {
+      await reply.code(400).send({ error: 'only the deposit leg supports direct UPI payment' })
+      return
+    }
+    if (!/^[\w.-]+@[\w.-]+$/.test(vpa)) {
+      await back('That UPI ID does not look valid — try again.')
+      return
+    }
+
+    const snapshot = await deps.eventStore.loadSnapshot(bookingId)
+    const depositLeg = snapshot?.pendingPaymentLegs?.find((l) => l.leg === 'deposit')
+    if (!depositLeg) {
+      await reply.code(404).type('text/html').send(renderPayNotFoundPage())
+      return
+    }
+
+    const order = { orderId: depositLeg.orderId, amountPaise: depositLeg.amountPaise }
+    try {
+      const result = await executePaymentCall(deps.paymentCircuitBreaker, () => deps.paymentProvider.payDepositViaUpiCollect(order, vpa, bookingId))
+      if (!result) {
+        await back('Still confirming with your bank — reload in a few seconds to check.')
+        return
+      }
+    } catch (err) {
+      if (err instanceof PaymentDeclinedError) {
+        await back('That payment was declined. Try again with a different UPI ID.')
+        return
+      }
+      await back('Something went wrong reaching the payment provider. Try again.')
+      return
+    }
+
+    await reply.redirect(`/pay/${encodeURIComponent(bookingId)}`, 303)
   })
 
   app.get<{ Querystring: { token?: string } }>('/events', async (request, reply) => {

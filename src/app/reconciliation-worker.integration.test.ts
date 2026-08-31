@@ -177,6 +177,7 @@ describe('reconciliation worker (real Postgres) — dev-logs/014 item 1, externa
         ensureDepositOrder: (p) => paymentProvider.ensureDepositOrder(p),
         pollDepositCapture: (order, reference) => paymentProvider.pollDepositCapture(order, reference),
         refundDeposit: (p) => paymentProvider.refundDeposit(p),
+        payDepositViaUpiCollect: (order, vpa, reference, options) => paymentProvider.payDepositViaUpiCollect(order, vpa, reference, options),
         fetchPaymentStatus: async (paymentId) => {
           calls++
           throw new Error(`simulated Razorpay outage for ${paymentId}`)
@@ -229,6 +230,7 @@ describe('reconciliation worker (real Postgres) — dev-logs/014 item 1, externa
         ensureDepositOrder: (p) => paymentProvider.ensureDepositOrder(p),
         pollDepositCapture: (order, reference) => paymentProvider.pollDepositCapture(order, reference),
         refundDeposit: (p) => paymentProvider.refundDeposit(p),
+        payDepositViaUpiCollect: (order, vpa, reference, options) => paymentProvider.payDepositViaUpiCollect(order, vpa, reference, options),
         fetchPaymentStatus: async (id) => {
           if (id === paymentId) throw new Error('simulated one-off failure for the healthy booking only')
           return realStatus(id)

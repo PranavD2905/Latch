@@ -34,9 +34,14 @@ export interface PayPageLeg {
  * `keyId` is Razorpay's *publishable* key — safe to embed in a page; the
  * secret key never leaves the server (`RazorpayPaymentProvider`/
  * `ManualCaptureRail`, both adapters, both server-side only).
+ *
+ * The deposit leg does not use `keyId` for its own form (see below) — it's
+ * still the correct "is a real provider actually wired up" signal, since a
+ * `FakePaymentProvider` setup has no `keyId` either and the S2S submit route
+ * needs a real adapter exactly as much as Checkout.js does.
  */
-export function renderPayPage(args: { bookingId: string; legs: readonly PayPageLeg[]; keyId: string | undefined }): string {
-  const { bookingId, legs, keyId } = args
+export function renderPayPage(args: { bookingId: string; legs: readonly PayPageLeg[]; keyId: string | undefined; notice?: string }): string {
+  const { bookingId, legs, keyId, notice } = args
   const allDone = legs.length > 0 && legs.every((l) => l.done)
 
   const rows = legs
@@ -61,6 +66,26 @@ export function renderPayPage(args: { bookingId: string; legs: readonly PayPageL
         </div>
         <span class="muted">test provider — no real Checkout</span>
       </div>`
+      }
+      if (leg.leg === 'deposit') {
+        // UPI S2S collect (see `PaymentProvider.payDepositViaUpiCollect`'s
+        // own doc comment) — a plain server-rendered form, not Checkout.js.
+        // The VPA goes to our own backend, which submits it to Razorpay
+        // server-to-server; no publishable key or client script needed for
+        // this leg at all. Prefilled with Razorpay's own test-mode magic VPA
+        // so a human only has to click Pay — typing `failure@razorpay`
+        // instead demos the decline path deliberately.
+        return `
+      <div class="leg">
+        <div class="leg-text">
+          <p class="label">${escapeHtml(leg.label)}</p>
+          <p class="amount">₹${escapeHtml(amount)}</p>
+        </div>
+      </div>
+      <form method="POST" action="/pay/${encodeURIComponent(bookingId)}/deposit" class="upi-form">
+        <input type="text" name="vpa" value="success@razorpay" aria-label="UPI ID" required>
+        <button type="submit">Pay</button>
+      </form>`
       }
       const buttonId = `pay-${leg.leg}`
       const statusId = `status-${leg.leg}`
@@ -93,7 +118,12 @@ export function renderPayPage(args: { bookingId: string; legs: readonly PayPageL
     })
     .join('\n')
 
-  const checkoutScript = legs.some((l) => !l.done) && keyId ? '<script src="https://checkout.razorpay.com/v1/checkout.js"></script>' : ''
+  // Only the two authorisation legs still use Checkout.js — the deposit leg's
+  // form above never loads it, so a booking with only a deposit outstanding
+  // makes no cross-origin script load at all.
+  const checkoutScript = legs.some((l) => !l.done && l.leg !== 'deposit') && keyId ? '<script src="https://checkout.razorpay.com/v1/checkout.js"></script>' : ''
+
+  const noticeHtml = notice ? `<p class="notice">${escapeHtml(notice)}</p>` : ''
 
   const footer = allDone
     ? `<p class="muted">Everything here is done. Let the assistant know you've paid.</p>`
@@ -119,12 +149,16 @@ export function renderPayPage(args: { bookingId: string; legs: readonly PayPageL
   .status { margin-top: -0.5rem; margin-bottom: 0.5rem; }
   button { font-size: 0.95rem; padding: 0.5rem 1.25rem; border-radius: 6px; border: none; background: #1a1a1a; color: white; cursor: pointer; }
   button:hover { background: #333; }
+  .upi-form { display: flex; gap: 0.5rem; padding-bottom: 1rem; border-top: none; margin-top: -0.5rem; }
+  .upi-form input { flex: 1; font-size: 0.9rem; padding: 0.5rem 0.6rem; border-radius: 6px; border: 1px solid #ddd; }
+  .notice { background: #fff3f3; border: 1px solid #f3c9c9; color: #a33; padding: 0.6rem 0.85rem; border-radius: 6px; font-size: 0.85rem; }
 </style>
 ${checkoutScript}
 </head>
 <body>
   <h1>Latch</h1>
   <p class="booking">Booking ${escapeHtml(bookingId)}</p>
+  ${noticeHtml}
   ${rows}
   ${footer}
 </body>

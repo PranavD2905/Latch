@@ -27,7 +27,11 @@ describe('renderPayPage', () => {
       ],
       keyId: KEY_ID,
     })
-    expect(html).toContain('order_dep')
+    // The deposit leg's orderId is deliberately never sent to the browser —
+    // its S2S form only carries a VPA; the server re-resolves the order from
+    // `pendingPaymentLegs` itself (server.ts's POST route). Only the two
+    // Checkout.js legs still need their orderId client-side.
+    expect(html).not.toContain('order_dep')
     expect(html).toContain('order_ns')
     expect(html).toContain('order_sc')
     expect(html.match(/<button /g)).toHaveLength(3)
@@ -72,6 +76,31 @@ describe('renderPayPage', () => {
     const html = renderPayPage({ bookingId: 'bkg_5', legs: [leg()], keyId: undefined })
     expect(html).not.toContain('<button ')
     expect(html).toContain('test provider')
+  })
+
+  it('the deposit leg gets a plain VPA form, not a Checkout.js button — no publishable key needed for it', () => {
+    const html = renderPayPage({ bookingId: 'bkg_6', legs: [leg()], keyId: 'rzp_test_fake' })
+    expect(html).toContain('<form method="POST" action="/pay/bkg_6/deposit"')
+    expect(html).toContain('name="vpa"')
+    expect(html).toContain('value="success@razorpay"')
+    expect(html).not.toContain('checkout.razorpay.com')
+    expect(html).not.toMatch(/new Razorpay\(/)
+  })
+
+  it('a booking with only authorisation legs outstanding still loads Checkout.js', () => {
+    const html = renderPayPage({ bookingId: 'bkg_7', legs: [leg({ leg: 'no_show_authorization', orderId: 'order_ns' })], keyId: 'rzp_test_fake' })
+    expect(html).toContain('checkout.razorpay.com')
+  })
+
+  it('shows a notice banner when one is passed (e.g. after a declined UPI attempt)', () => {
+    const html = renderPayPage({ bookingId: 'bkg_8', legs: [leg()], keyId: 'rzp_test_fake', notice: 'That payment was declined.' })
+    expect(html).toContain('That payment was declined.')
+  })
+
+  it('escapes a notice rather than interpolating it raw', () => {
+    const html = renderPayPage({ bookingId: 'bkg_9', legs: [leg()], keyId: 'rzp_test_fake', notice: '<script>x</script>' })
+    expect(html).not.toContain('<script>x</script>')
+    expect(html).toContain('&lt;script&gt;')
   })
 })
 

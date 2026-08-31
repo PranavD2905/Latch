@@ -91,6 +91,23 @@ export class FakePaymentProvider implements PaymentProvider {
     }
   }
 
+  /**
+   * Mirrors real Razorpay test mode's own convention for the magic VPAs
+   * (verified live before this fake was written) rather than a separate
+   * scenario setter — `success@razorpay` captures, `failure@razorpay`
+   * declines, anything else also captures (this account's test-mode
+   * simulator resolved a plain, non-magic VPA to `captured` too, verified
+   * live). Reuses `pollDepositCapture` for the actual convergence, same as
+   * the real adapter, so both implementations share one notion of "already
+   * captured for this order".
+   */
+  async payDepositViaUpiCollect(order: DepositOrder, vpa: string, reference: string, options?: { timeoutMs?: number }): Promise<CaptureDepositResult | undefined> {
+    const idempotencyKey = this.idempotencyKeyByOrderId.get(order.orderId)
+    if (!idempotencyKey) throw new Error(`payDepositViaUpiCollect called with an order this fake never created: ${order.orderId}`)
+    this.scenarios.set(idempotencyKey, vpa === 'failure@razorpay' ? 'decline' : 'success')
+    return this.pollDepositCapture(order, reference, options)
+  }
+
   async refundDeposit(params: RefundDepositParams): Promise<RefundDepositResult> {
     const existing = this.refunded.get(params.idempotencyKey)
     if (existing) {

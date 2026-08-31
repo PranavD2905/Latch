@@ -109,4 +109,43 @@ describe('RazorpayPaymentProvider — real Razorpay test mode', () => {
     })
     expect(second.refundId).toBe(first.refundId)
   })
+
+  /**
+   * `payDepositViaUpiCollect` — this account had TPV enabled for UPI collect
+   * (`/payments/create/upi`) after dev-logs/006/029 were written; both
+   * verified this exact endpoint 404ing at the time. Re-verified live before
+   * writing the adapter method: a full round trip against
+   * `POST /v1/payments/create/upi` with `success@razorpay` returns
+   * `HTTP 200`, and the resulting payment reads back `captured` within a
+   * couple of seconds — no Checkout.js, no browser, no human. Card S2S
+   * (`/payments/create/json`) is still 404 on this account, checked the same
+   * way — not covered by this method or this test.
+   */
+  describe('payDepositViaUpiCollect — real UPI collect S2S', () => {
+    it('captures for the magic success VPA, no Checkout involved', async () => {
+      const provider = new RazorpayPaymentProvider({ keyId: keyId!, keySecret: keySecret! })
+      const order = await provider.ensureDepositOrder({
+        amountPaise: DEPOSIT_AMOUNT_PAISE,
+        idempotencyKey: `live-test-upi-success-${Date.now()}`,
+        reference: 'live-test-upi-success',
+      })
+
+      const result = await provider.payDepositViaUpiCollect(order, 'success@razorpay', 'live-test-upi-success', { timeoutMs: 8000 })
+
+      expect(result?.paymentId).toMatch(/^pay_/)
+      expect(result?.amountPaise).toBe(30000)
+      expect(result?.instrument).toBe('upi')
+    }, 15_000)
+
+    it('declines for the magic failure VPA', async () => {
+      const provider = new RazorpayPaymentProvider({ keyId: keyId!, keySecret: keySecret! })
+      const order = await provider.ensureDepositOrder({
+        amountPaise: DEPOSIT_AMOUNT_PAISE,
+        idempotencyKey: `live-test-upi-failure-${Date.now()}`,
+        reference: 'live-test-upi-failure',
+      })
+
+      await expect(provider.payDepositViaUpiCollect(order, 'failure@razorpay', 'live-test-upi-failure', { timeoutMs: 8000 })).rejects.toThrow('Payment declined')
+    }, 15_000)
+  })
 })

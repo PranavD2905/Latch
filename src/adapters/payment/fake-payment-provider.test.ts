@@ -58,6 +58,22 @@ describe('FakePaymentProvider', () => {
     expect(second?.paymentId).toBe(first?.paymentId)
   })
 
+  it('payDepositViaUpiCollect captures for any VPA except the magic failure one, mirroring real Razorpay test mode', async () => {
+    const provider = new FakePaymentProvider()
+    const params = { amountPaise: toPaise(30000), idempotencyKey: 'k8', reference: 'bkg_8' }
+    const order = await provider.ensureDepositOrder(params)
+    const result = await provider.payDepositViaUpiCollect(order, 'someone@okhdfcbank', params.reference)
+    expect(result?.amountPaise).toBe(30000)
+    expect(result?.instrument).toBe('upi')
+  })
+
+  it('payDepositViaUpiCollect declines for the magic failure VPA', async () => {
+    const provider = new FakePaymentProvider()
+    const params = { amountPaise: toPaise(30000), idempotencyKey: 'k9', reference: 'bkg_9' }
+    const order = await provider.ensureDepositOrder(params)
+    await expect(provider.payDepositViaUpiCollect(order, 'failure@razorpay', params.reference)).rejects.toThrow(PaymentDeclinedError)
+  })
+
   it('refunds, and replays the stored refund result for a repeated idempotency key', async () => {
     const provider = new FakePaymentProvider()
     const first = await provider.refundDeposit({ paymentId: 'pay_x', amountPaise: toPaise(30000), idempotencyKey: 'k7', reference: 'bkg_7' })
