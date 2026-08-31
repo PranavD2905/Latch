@@ -37,7 +37,20 @@ export async function runHoldExpiryWorker(deps: AppDeps): Promise<HoldExpiryWork
       // The partial unique index (`status IN ('held','confirmed')`) is what
       // actually frees the slot — flipping status to EXPIRED here is that
       // release, not a second mechanism alongside it.
-      const projection: BookingSnapshot = { ...snapshot, status: 'EXPIRED', lastEventSequence: sequence }
+      //
+      // `pendingPaymentLegs: undefined` matters just as much as the status
+      // flip: this is the one path that can move a booking out of HELD while
+      // that field is still populated (confirm/cancel/decline all only run
+      // against a CONFIRMED booking, by which point it's already cleared —
+      // see confirm-with-deposit.ts's own finalize). Left set, an expired
+      // booking's pay page kept rendering a live Pay control and get_booking
+      // kept telling the agent money was still owed, on a slot that had
+      // already gone back to inventory. `server.ts`'s pay routes also check
+      // `holdExpiresAt` directly (the same `status === 'HELD' && now <
+      // holdExpiresAt` test confirm-with-deposit's own gate uses) for the
+      // narrower window between real expiry and this worker's next tick —
+      // this clears the field once that tick actually runs.
+      const projection: BookingSnapshot = { ...snapshot, status: 'EXPIRED', pendingPaymentLegs: undefined, lastEventSequence: sequence }
       await tx.append([event], projection, snapshot.merchantId)
       expiredBookingIds.push(snapshot.bookingId)
     }

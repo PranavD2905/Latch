@@ -1,7 +1,7 @@
 import formBody from '@fastify/formbody'
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { AppDeps } from '../../app/types.js'
-import type { EventWithGlobalSequence } from '../../ports/event-store.js'
+import type { BookingSnapshot, EventWithGlobalSequence } from '../../ports/event-store.js'
 import type { MerchantAuthStore } from '../../ports/merchant-auth.js'
 import { executePaymentCall } from '../../app/payment-circuit-breaker.js'
 import { checkAllPendingLegs } from '../../app/pending-payment-status.js'
@@ -21,6 +21,24 @@ export interface AuditTrailServerOptions {
    * option for this route (unchanged from the original design).
    */
   merchantAuthStore: MerchantAuthStore
+}
+
+/**
+ * Same test `confirm-with-deposit.ts`'s own gate transaction uses to decide
+ * whether a hold is still live (`status === 'HELD' && holdExpiresAt > now`)
+ * — reused here because `pendingPaymentLegs` alone isn't a tight enough
+ * check for the pay routes. `hold-expiry-worker.ts` clears that field when
+ * it reclaims an expired booking, but only on its next tick; between the
+ * moment a hold actually lapses (by the server clock) and that tick, the
+ * booking's `status` is still `HELD` in the DB even though the reservation
+ * is no longer live. Comparing `holdExpiresAt` directly against `now`,
+ * instead of trusting the worker to have already run, closes that window —
+ * this route takes no row lock (unlike the gate transaction), so it can't
+ * make the check atomic, only narrow it to the same instant a real customer
+ * would actually be looking at the page.
+ */
+function holdIsLive(snapshot: BookingSnapshot, now: Date): boolean {
+  return snapshot.status === 'HELD' && snapshot.holdExpiresAt !== undefined && snapshot.holdExpiresAt.getTime() > now.getTime()
 }
 
 const POLL_INTERVAL_MS = 500
@@ -142,7 +160,7 @@ export function createAuditTrailServer(deps: AppDeps, options: AuditTrailServerO
     const { bookingId } = request.params
     const snapshot = await deps.eventStore.loadSnapshot(bookingId)
     const legs = snapshot?.pendingPaymentLegs
-    if (!snapshot || !legs || legs.length === 0) {
+    if (!snapshot || !legs || legs.length === 0 || !holdIsLive(snapshot, deps.clock.now())) {
       await reply.code(404).type('text/html').send(renderPayNotFoundPage())
       return
     }
@@ -191,7 +209,11 @@ export function createAuditTrailServer(deps: AppDeps, options: AuditTrailServerO
 
     const snapshot = await deps.eventStore.loadSnapshot(bookingId)
     const leg = snapshot?.pendingPaymentLegs?.find((l) => l.leg === legName)
-    if (!leg) {
+    // Not just "does this leg exist" — a lapsed hold's slot has already gone
+    // back to inventory (hold-expiry-worker.ts), so paying now would take
+    // real money for a booking that no longer holds anything. `renderPayNotFoundPage`
+    // rather than a `back()` notice deliberately: there is nothing to retry.
+    if (!snapshot || !leg || !holdIsLive(snapshot, deps.clock.now())) {
       await reply.code(404).type('text/html').send(renderPayNotFoundPage())
       return
     }

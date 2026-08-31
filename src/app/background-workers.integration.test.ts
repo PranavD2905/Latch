@@ -187,6 +187,29 @@ describe('hold-expiry-worker (real Postgres + FrozenClock) — docs/01-architect
     expect(snapshot?.status).toBe('HELD')
   })
 
+  it('clears pendingPaymentLegs on expiry — an expired booking must stop looking payable, to the pay page and to get_booking alike', async () => {
+    clock.set(new Date(slotAt('11:30').getTime() - 5 * 24 * 3_600_000))
+    const agentId = `agent_${ulid()}`
+    const held = await holdSlot({ agentId, practitionerId: SEED_PRACTITIONER_ID, serviceId: SEED_SERVICE_ID, startsAt: slotAt('11:30'), idempotencyKey: freshKey() }, deps)
+    createdBookingIds.push(held.bookingId)
+
+    const key = freshKey()
+    paymentProvider.setScenario(key, 'pending')
+    const policyResult = await getPolicy(deps)
+    const confirmResult = await confirmWithDeposit({ bookingId: held.bookingId, agentId, acknowledgedPolicyVersion: policyResult.policy.policyVersion, idempotencyKey: key }, deps)
+    expect(confirmResult.status).toBe('PENDING')
+    expect((await deps.eventStore.loadSnapshot(held.bookingId))?.pendingPaymentLegs).toBeTruthy()
+
+    // Past confirm_with_deposit's own 5-minute claim-window bump, not just the original hold TTL.
+    clock.advance(6 * 60_000)
+    const { expiredBookingIds } = await runHoldExpiryWorker(deps)
+    expect(expiredBookingIds).toContain(held.bookingId)
+
+    const snapshot = await deps.eventStore.loadSnapshot(held.bookingId)
+    expect(snapshot?.status).toBe('EXPIRED')
+    expect(snapshot?.pendingPaymentLegs).toBeUndefined()
+  })
+
   it('is idempotent: running twice in a row appends HOLD_EXPIRED only once', async () => {
     clock.set(new Date(slotAt('11:00').getTime() - 5 * 24 * 3_600_000))
     const agentId = `agent_${ulid()}`
