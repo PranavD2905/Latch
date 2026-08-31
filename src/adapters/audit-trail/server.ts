@@ -4,7 +4,7 @@ import type { AppDeps } from '../../app/types.js'
 import type { BookingSnapshot, EventWithGlobalSequence } from '../../ports/event-store.js'
 import type { MerchantAuthStore } from '../../ports/merchant-auth.js'
 import { executePaymentCall } from '../../app/payment-circuit-breaker.js'
-import { checkAllPendingLegs } from '../../app/pending-payment-status.js'
+import { checkAllPendingLegs, checkPendingLegStatus } from '../../app/pending-payment-status.js'
 import { PaymentDeclinedError } from '../../ports/payment-provider.js'
 import { loadEnv } from '../config.js'
 import { echoTraceIdHeader, loggingFastifyOptions, registerErrorHandler } from '../observability/fastify-logging.js'
@@ -215,6 +215,24 @@ export function createAuditTrailServer(deps: AppDeps, options: AuditTrailServerO
     // rather than a `back()` notice deliberately: there is nothing to retry.
     if (!snapshot || !leg || !holdIsLive(snapshot, deps.clock.now())) {
       await reply.code(404).type('text/html').send(renderPayNotFoundPage())
+      return
+    }
+
+    // Real, observed race: the pay page's Pay button had no disable-on-click
+    // guard, so a double-click could fire two POSTs for the same leg a
+    // couple of seconds apart. Money was never actually at risk — Razorpay's
+    // own order stayed at one payment attempt either way — but the losing
+    // request surfaced a scary generic error to the user even though the
+    // other one had already captured it. Checking here, read-only, whether
+    // Razorpay already shows this leg done turns a losing duplicate into a
+    // harmless redirect instead of a second S2S submission racing the first.
+    // Narrows the window rather than closing it outright (both requests can
+    // still land inside this same check before either has submitted), which
+    // is why the client-side button disable in pay-page.ts is the first line
+    // of defence, not this.
+    const alreadyDone = await checkPendingLegStatus(deps, leg, bookingId, deps.clock.now())
+    if (alreadyDone.done) {
+      await reply.redirect(`/pay/${encodeURIComponent(bookingId)}`, 303)
       return
     }
 

@@ -28,6 +28,16 @@ import { createAuditTrailServer } from './server.js'
  * (`server.ts`) closes it by comparing `holdExpiresAt` directly against
  * `now`, the same test `confirm-with-deposit.ts`'s own gate transaction
  * uses, rather than trusting the worker to have already run.
+ *
+ * The last `it` below covers a second, separately observed issue: the pay
+ * page's Pay button had no disable-on-click guard, so a double-click could
+ * fire two POSTs for the same leg. Money was never actually double-charged
+ * — verified live against real Razorpay, which stayed at exactly one
+ * payment attempt per order either way — but the losing request surfaced a
+ * scary generic error even though the other one had already captured it.
+ * `checkPendingLegStatus` (`pending-payment-status.ts`) now runs before the
+ * S2S submit; a leg Razorpay already shows done short-circuits to a plain
+ * redirect instead of racing a second submission.
  */
 
 const NOW = new Date('2026-08-20T00:00:00+05:30')
@@ -124,6 +134,24 @@ describe('audit-trail server — /pay routes, hold-liveness guard', () => {
     const response = await app.inject({ method: 'POST', url: `/pay/${bookingId}/deposit`, payload: 'vpa=success@razorpay', headers: { 'content-type': 'application/x-www-form-urlencoded' } })
 
     expect(response.statusCode).toBe(404)
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('a duplicate POST for an already-captured leg redirects harmlessly instead of submitting a second S2S payment — real observed race, not hypothetical', async () => {
+    const clock = new FrozenClock(NOW)
+    const { deps, paymentProvider } = buildDeps(clock)
+    const bookingId = await pendingBooking(deps, paymentProvider)
+    const app = createAuditTrailServer(deps, { merchantAuthStore: stubMerchantAuthStore })
+
+    const first = await app.inject({ method: 'POST', url: `/pay/${bookingId}/deposit`, payload: 'vpa=success@razorpay', headers: { 'content-type': 'application/x-www-form-urlencoded' } })
+    expect(first.statusCode).toBe(303)
+    expect(first.headers.location).not.toContain('error=')
+
+    const spy = vi.spyOn(paymentProvider, 'payDepositViaUpiCollect')
+    const second = await app.inject({ method: 'POST', url: `/pay/${bookingId}/deposit`, payload: 'vpa=success@razorpay', headers: { 'content-type': 'application/x-www-form-urlencoded' } })
+
+    expect(second.statusCode).toBe(303)
+    expect(second.headers.location).not.toContain('error=')
     expect(spy).not.toHaveBeenCalled()
   })
 })

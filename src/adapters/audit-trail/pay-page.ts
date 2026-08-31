@@ -88,7 +88,7 @@ export function renderPayPage(args: { bookingId: string; legs: readonly PayPageL
           <p class="amount">₹${escapeHtml(amount)}</p>
         </div>
       </div>
-      <form method="POST" action="/pay/${encodeURIComponent(bookingId)}/${leg.leg}" class="upi-form">
+      <form method="POST" action="/pay/${encodeURIComponent(bookingId)}/${leg.leg}" class="upi-form" onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Paying…'">
         <input type="text" name="vpa" value="success@razorpay" aria-label="UPI ID" required>
         <button type="submit">Pay</button>
       </form>`
