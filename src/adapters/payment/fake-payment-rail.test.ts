@@ -97,4 +97,31 @@ describe('FakePaymentRail', () => {
       AuthorizationNotFoundError,
     )
   })
+
+  it('authorizeViaUpiCollect authorises for any VPA except the magic failure one, and the captured instrument reflects it', async () => {
+    const rail = new FakePaymentRail()
+    const params = { amountPaise: toPaise(40000), idempotencyKey: 'k11', reference: 'bkg_11', now: NOW }
+    const order = await rail.ensureAuthorizationOrder(params)
+    const authorized = await rail.authorizeViaUpiCollect(order, 'someone@okhdfcbank', params.reference, NOW)
+    expect(authorized?.amountPaise).toBe(40000)
+    const captured = await rail.captureAuthorization({ authorizationId: authorized!.authorizationId, amountPaise: toPaise(40000), reference: 'bkg_11' })
+    expect(captured.instrument).toBe('upi')
+  })
+
+  it('authorizeViaUpiCollect declines for the magic failure VPA', async () => {
+    const rail = new FakePaymentRail()
+    const params = { amountPaise: toPaise(40000), idempotencyKey: 'k12', reference: 'bkg_12', now: NOW }
+    const order = await rail.ensureAuthorizationOrder(params)
+    await expect(rail.authorizeViaUpiCollect(order, 'failure@razorpay', params.reference, NOW)).rejects.toThrow(PaymentRailError)
+  })
+
+  it('the ceiling refusal holds identically for a UPI-authorised payment', async () => {
+    const rail = new FakePaymentRail()
+    const params = { amountPaise: toPaise(40000), idempotencyKey: 'k13', reference: 'bkg_13', now: NOW }
+    const order = await rail.ensureAuthorizationOrder(params)
+    const authorized = await rail.authorizeViaUpiCollect(order, 'success@razorpay', params.reference, NOW)
+    await expect(
+      rail.captureAuthorization({ authorizationId: authorized!.authorizationId, amountPaise: toPaise(40001), reference: 'bkg_13' }),
+    ).rejects.toThrow(CaptureAmountMismatchError)
+  })
 })

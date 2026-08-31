@@ -70,6 +70,8 @@ function railThatFailsAuthorizeFor(real: PaymentRail, failingKey: string): Payme
     },
     pollAuthorization: (order: AuthorizationOrder, reference: string, now: Date, options?: { timeoutMs?: number }): Promise<AuthorizeResult | undefined> =>
       real.pollAuthorization(order, reference, now, options),
+    authorizeViaUpiCollect: (order: AuthorizationOrder, vpa: string, reference: string, now: Date, options?: { timeoutMs?: number }): Promise<AuthorizeResult | undefined> =>
+      real.authorizeViaUpiCollect(order, vpa, reference, now, options),
     captureAuthorization: (params: CaptureAuthorizationParams): Promise<CaptureAuthorizationResult> => real.captureAuthorization(params),
     fetchAuthorizationStatus: (authorizationId: string) => real.fetchAuthorizationStatus(authorizationId),
   }

@@ -83,6 +83,9 @@ class DelayedPaymentRail implements PaymentRailPort {
     await sleep(this.delayMs)
     return this.inner.pollAuthorization(order, reference, now, options)
   }
+  async authorizeViaUpiCollect(order: AuthorizationOrder, vpa: string, reference: string, now: Date, options?: { timeoutMs?: number }): Promise<AuthorizeResult | undefined> {
+    return this.inner.authorizeViaUpiCollect(order, vpa, reference, now, options)
+  }
   async captureAuthorization(params: CaptureAuthorizationParams): Promise<CaptureAuthorizationResult> {
     return this.inner.captureAuthorization(params)
   }

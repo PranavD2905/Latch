@@ -1,4 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
+import type Razorpay from 'razorpay'
 import type { Instrument } from '../../domain/events.js'
 import type { PaymentStatusValue } from '../../ports/payment-provider.js'
 
@@ -129,6 +130,47 @@ export function verifyRazorpayWebhookSignature(rawBody: Buffer, signatureHeader:
  * error in its own port's error type (`PaymentProviderError` vs.
  * `PaymentRailError`).
  */
+/** Required by Razorpay's UPI collect endpoint but not meaningful for a VPA-only test payer — see `submitUpiCollect`. */
+const S2S_PLACEHOLDER_EMAIL = 'payer@latch.test'
+const S2S_PLACEHOLDER_CONTACT = '9999999999'
+
+/**
+ * Shared by `RazorpayPaymentProvider.payDepositViaUpiCollect` and
+ * `ManualCaptureRail.authorizeViaUpiCollect` — the S2S call itself is
+ * identical either way; what differs is only which order it's submitted
+ * against (auto-capture for the deposit, `capture: 'manual'` for the
+ * session-complete authorisation, set at order-creation time by each
+ * caller) and which poll method the caller converges with afterward.
+ * Verified live before either caller was built: a manual-capture order paid
+ * this way lands as a genuine Razorpay `authorized` hold, not an immediate
+ * transfer — a same-amount capture later succeeds, a mismatched-amount
+ * capture is refused with the identical "Capture amount must be equal to
+ * the amount authorized" error card manual capture already produces
+ * (dev-logs/005's ceiling claim, unchanged), and a refund attempt on the
+ * still-uncaptured authorization is itself refused ("payment status should
+ * be captured for action to be taken") — the same property that makes
+ * "release by lapse" cost the customer ₹0 for cards holds for UPI too.
+ *
+ * The SDK's own declared type for `createUpi` (`RazorpayPaymentUpiCreateRequestBody`)
+ * expects a nested `upi: { vpa }` shape and requires `ip`/`referer`/`user_agent` —
+ * verified live against this account that `/payments/create/upi` actually accepts
+ * (and needs) a flat top-level `vpa`, and rejects nothing else this call omits.
+ * `createUpi` forwards its argument straight through to the HTTP call (no
+ * transformation in the SDK itself), so the cast below is to the type the SDK
+ * declares, not to what the wire actually wants.
+ */
+export async function submitUpiCollect(client: Razorpay, orderId: string, amountPaise: number, vpa: string): Promise<void> {
+  await client.payments.createUpi({
+    amount: amountPaise,
+    currency: 'INR',
+    order_id: orderId,
+    email: S2S_PLACEHOLDER_EMAIL,
+    contact: S2S_PLACEHOLDER_CONTACT,
+    method: 'upi',
+    vpa,
+  } as unknown as Parameters<Razorpay['payments']['createUpi']>[0])
+}
+
 export function toInstrument(method: string, onUnrecognised: (message: string) => never): Instrument {
   switch (method) {
     case 'card':

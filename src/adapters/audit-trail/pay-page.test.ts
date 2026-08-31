@@ -17,7 +17,7 @@ function leg(overrides: Partial<PayPageLeg> = {}): PayPageLeg {
 }
 
 describe('renderPayPage', () => {
-  it('renders all three legs on one page, each with its own Pay button', () => {
+  it('renders all three legs on one page, each with its own Pay control', () => {
     const html = renderPayPage({
       bookingId: 'bkg_1',
       legs: [
@@ -27,19 +27,20 @@ describe('renderPayPage', () => {
       ],
       keyId: KEY_ID,
     })
-    // The deposit leg's orderId is deliberately never sent to the browser —
-    // its S2S form only carries a VPA; the server re-resolves the order from
-    // `pendingPaymentLegs` itself (server.ts's POST route). Only the two
-    // Checkout.js legs still need their orderId client-side.
+    // Neither UPI-S2S leg's orderId is ever sent to the browser — their forms
+    // only carry a VPA; the server re-resolves the order from
+    // `pendingPaymentLegs` itself (server.ts's POST route). Only the legacy
+    // no_show_authorization leg still uses Checkout.js and needs its orderId
+    // client-side.
     expect(html).not.toContain('order_dep')
+    expect(html).not.toContain('order_sc')
     expect(html).toContain('order_ns')
-    expect(html).toContain('order_sc')
     expect(html.match(/<button /g)).toHaveLength(3)
     expect(html).toContain('checkout.razorpay.com')
   })
 
   it('renders a single-leg page for a merchant whose policy asks for only one leg', () => {
-    const html = renderPayPage({ bookingId: 'bkg_2', legs: [leg({ leg: 'session_complete_authorization', label: '₹800 balance hold', orderId: 'order_only' })], keyId: KEY_ID })
+    const html = renderPayPage({ bookingId: 'bkg_2', legs: [leg({ leg: 'no_show_authorization', label: '₹800 balance hold', orderId: 'order_only' })], keyId: KEY_ID })
     expect(html.match(/<button /g)).toHaveLength(1)
     expect(html).toContain('order_only')
     expect(html).not.toContain('order_dep')
@@ -87,7 +88,15 @@ describe('renderPayPage', () => {
     expect(html).not.toMatch(/new Razorpay\(/)
   })
 
-  it('a booking with only authorisation legs outstanding still loads Checkout.js', () => {
+  it('the session-complete authorisation leg also gets the VPA form, posting to its own leg name', () => {
+    const html = renderPayPage({ bookingId: 'bkg_6b', legs: [leg({ leg: 'session_complete_authorization', label: '₹500 remaining-balance hold', orderId: 'order_sc' })], keyId: 'rzp_test_fake' })
+    expect(html).toContain('<form method="POST" action="/pay/bkg_6b/session_complete_authorization"')
+    expect(html).toContain('value="success@razorpay"')
+    expect(html).not.toContain('checkout.razorpay.com')
+    expect(html).not.toContain('order_sc')
+  })
+
+  it('a booking with only the legacy no_show_authorization leg outstanding still loads Checkout.js', () => {
     const html = renderPayPage({ bookingId: 'bkg_7', legs: [leg({ leg: 'no_show_authorization', orderId: 'order_ns' })], keyId: 'rzp_test_fake' })
     expect(html).toContain('checkout.razorpay.com')
   })

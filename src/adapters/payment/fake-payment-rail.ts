@@ -1,4 +1,5 @@
 import { ulid } from 'ulid'
+import type { Instrument } from '../../domain/events.js'
 import { toPaise, type Paise } from '../../domain/money.js'
 import {
   AuthorizationNotFoundError,
@@ -19,6 +20,8 @@ export type AuthorizeScenario = 'success' | 'decline' | 'pending'
 interface HeldAuthorization {
   amountPaise: Paise
   captured: boolean
+  /** Mirrors real `ManualCaptureRail`'s `toInstrument(payment.method, ...)` — dev-logs/006 fixed the exact same staleness bug for the deposit leg's fake. */
+  instrument: Instrument
 }
 
 /**
@@ -85,7 +88,24 @@ export class FakePaymentRail implements PaymentRail {
       expiresAt: new Date(now.getTime() + MAX_MANUAL_EXPIRY_MINUTES * 60_000),
     }
     this.authorized.set(idempotencyKey, result)
-    this.held.set(authorizationId, { amountPaise: order.amountPaise, captured: false })
+    // 'card' — this path models a human completing Checkout, same as `ManualCaptureRail`'s own default.
+    this.held.set(authorizationId, { amountPaise: order.amountPaise, captured: false, instrument: 'card' })
+    return result
+  }
+
+  /**
+   * Mirrors `FakePaymentProvider.payDepositViaUpiCollect`'s own convention —
+   * `failure@razorpay` declines, anything else authorizes as `'upi'`.
+   */
+  async authorizeViaUpiCollect(order: AuthorizationOrder, vpa: string, reference: string, now: Date, options?: { timeoutMs?: number }): Promise<AuthorizeResult | undefined> {
+    const idempotencyKey = this.idempotencyKeyByOrderId.get(order.orderId)
+    if (!idempotencyKey) throw new Error(`authorizeViaUpiCollect called with an order this fake never created: ${order.orderId}`)
+    this.scenarios.set(idempotencyKey, vpa === 'failure@razorpay' ? 'decline' : 'success')
+    const result = await this.pollAuthorization(order, reference, now, options)
+    if (result) {
+      const heldAuth = this.held.get(result.authorizationId)
+      if (heldAuth) heldAuth.instrument = 'upi'
+    }
     return result
   }
 
@@ -95,13 +115,13 @@ export class FakePaymentRail implements PaymentRail {
       throw new AuthorizationNotFoundError(params.authorizationId)
     }
     if (heldAuth.captured) {
-      return { paymentId: params.authorizationId, amountPaise: heldAuth.amountPaise, instrument: 'card' }
+      return { paymentId: params.authorizationId, amountPaise: heldAuth.amountPaise, instrument: heldAuth.instrument }
     }
     if (toPaise(params.amountPaise) !== heldAuth.amountPaise) {
       throw new CaptureAmountMismatchError(params.reference, params.amountPaise)
     }
     heldAuth.captured = true
-    return { paymentId: params.authorizationId, amountPaise: heldAuth.amountPaise, instrument: 'card' }
+    return { paymentId: params.authorizationId, amountPaise: heldAuth.amountPaise, instrument: heldAuth.instrument }
   }
 
   async fetchAuthorizationStatus(authorizationId: string): Promise<AuthorizationStatus> {

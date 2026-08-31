@@ -160,6 +160,21 @@ export interface PaymentRail {
    * than throwing when nothing has landed yet.
    */
   pollAuthorization(order: AuthorizationOrder, reference: string, now: Date, options?: { timeoutMs?: number }): Promise<AuthorizeResult | undefined>
+  /**
+   * S2S UPI collect for the session-complete authorisation leg — the same
+   * mechanism `PaymentProvider.payDepositViaUpiCollect` added for the
+   * deposit leg (see that port's own doc comment for the dev-logs/006/029
+   * history), submitted against an `ensureAuthorizationOrder` result instead
+   * of an auto-capture order. Verified live before adding this: a
+   * manual-capture order paid via UPI collect lands as a genuine `authorized`
+   * hold, not an immediate transfer — same exact-match capture ceiling,
+   * same refusal to refund an uncaptured authorization — so this preserves
+   * both of dev-logs/005's load-bearing properties (the rail-enforced
+   * ceiling, and "release by lapse costs the customer ₹0"), not just the
+   * mechanism's convenience. `captureAuthorization` needed no changes at
+   * all — it was already payment-method-agnostic.
+   */
+  authorizeViaUpiCollect(order: AuthorizationOrder, vpa: string, reference: string, now: Date, options?: { timeoutMs?: number }): Promise<AuthorizeResult | undefined>
   captureAuthorization(params: CaptureAuthorizationParams): Promise<CaptureAuthorizationResult>
   /** dev-logs/014 — the rail-side twin of `PaymentProvider.fetchPaymentStatus`, for the reconciliation worker. */
   fetchAuthorizationStatus(authorizationId: string): Promise<AuthorizationStatus>

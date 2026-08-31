@@ -10,16 +10,17 @@ import { ManualCaptureRail } from './manual-capture-rail.js'
  * real order creation, against the real API, with a real (short) poll that
  * returns `undefined` rather than throwing when nobody completes Checkout.
  *
- * What this file does *not* cover: an authorised payment actually landing
- * in `authorized` state, `captureAuthorization()` succeeding, and the real
- * "Capture amount must be equal to the amount authorized" refusal. Those
- * need a human to complete Checkout at least once (dev-logs/006/007) — no
- * such fixture exists yet for this authorisation leg (unlike the deposit
- * leg's three fixture payments), since it would need a person driving a
- * real browser to create one. `fake-payment-rail.test.ts` proves the same
- * logic (including the item-7 ceiling refusal) fast and deterministically
- * in the meantime; `confirm-with-deposit.fast.test.ts` proves the full
- * app-layer flow against that fake.
+ * `authorizeViaUpiCollect` (below) closes a gap this file's comment used to
+ * name here: an authorised payment actually landing in `authorized` state,
+ * `captureAuthorization()` succeeding, and the real "Capture amount must be
+ * equal to the amount authorized" refusal all used to need a human
+ * completing Checkout at least once, with no such fixture existing for this
+ * leg. UPI collect S2S makes all three provable directly, live, no human —
+ * verified before writing the adapter method that a manual-capture order
+ * paid this way really does land as `authorized`/`captured: false`, that a
+ * same-amount capture succeeds, and that refunding it *before* capture is
+ * refused ("payment status should be captured for action to be taken") —
+ * the same property that makes release-by-lapse cost the customer ₹0.
  */
 
 process.loadEnvFile?.('.env')
@@ -61,4 +62,42 @@ describe('ManualCaptureRail — real Razorpay test mode', () => {
     const result = await rail.pollAuthorization(order, 'live-test-unpaid-authorization', now, { timeoutMs: 4000 })
     expect(result).toBeUndefined()
   }, 10_000)
+
+  describe('authorizeViaUpiCollect — real UPI collect S2S', () => {
+    it('authorises for the magic success VPA, then a same-amount capture succeeds and a mismatched one is refused — the item-7 ceiling, live', async () => {
+      const rail = new ManualCaptureRail({ keyId: keyId!, keySecret: keySecret! })
+      const now = new Date()
+      const order = await rail.ensureAuthorizationOrder({
+        amountPaise: AUTHORIZATION_AMOUNT_PAISE,
+        idempotencyKey: `live-test-upi-auth-success-${Date.now()}`,
+        reference: 'live-test-upi-auth-success',
+        now,
+      })
+
+      const authorized = await rail.authorizeViaUpiCollect(order, 'success@razorpay', 'live-test-upi-auth-success', now, { timeoutMs: 8000 })
+      expect(authorized?.authorizationId).toMatch(/^pay_/)
+      expect(authorized?.amountPaise).toBe(40000)
+
+      await expect(
+        rail.captureAuthorization({ authorizationId: authorized!.authorizationId, amountPaise: toPaise(40001), reference: 'live-test-upi-auth-success' }),
+      ).rejects.toThrow('does not equal the amount authorized')
+
+      const captured = await rail.captureAuthorization({ authorizationId: authorized!.authorizationId, amountPaise: AUTHORIZATION_AMOUNT_PAISE, reference: 'live-test-upi-auth-success' })
+      expect(captured.amountPaise).toBe(40000)
+      expect(captured.instrument).toBe('upi')
+    }, 20_000)
+
+    it('declines for the magic failure VPA', async () => {
+      const rail = new ManualCaptureRail({ keyId: keyId!, keySecret: keySecret! })
+      const now = new Date()
+      const order = await rail.ensureAuthorizationOrder({
+        amountPaise: AUTHORIZATION_AMOUNT_PAISE,
+        idempotencyKey: `live-test-upi-auth-failure-${Date.now()}`,
+        reference: 'live-test-upi-auth-failure',
+        now,
+      })
+
+      await expect(rail.authorizeViaUpiCollect(order, 'failure@razorpay', 'live-test-upi-auth-failure', now, { timeoutMs: 8000 })).rejects.toThrow()
+    }, 15_000)
+  })
 })

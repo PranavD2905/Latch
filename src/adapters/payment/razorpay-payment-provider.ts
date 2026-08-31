@@ -12,16 +12,23 @@ import {
   type RefundDepositResult,
 } from '../../ports/payment-provider.js'
 import { instrumentRazorpayClient } from '../observability/metrics.js'
-import { DEFAULT_POLL_INTERVAL_MS, DEFAULT_QUICK_POLL_TIMEOUT_MS, isNotFound, parseRazorpaySdkError, receiptFor, sleep, toInstrument, toPaymentStatusValue, type RazorpayPaymentLike } from './razorpay-shared.js'
+import {
+  DEFAULT_POLL_INTERVAL_MS,
+  DEFAULT_QUICK_POLL_TIMEOUT_MS,
+  isNotFound,
+  parseRazorpaySdkError,
+  receiptFor,
+  sleep,
+  submitUpiCollect,
+  toInstrument,
+  toPaymentStatusValue,
+  type RazorpayPaymentLike,
+} from './razorpay-shared.js'
 
 export interface RazorpayPaymentProviderOptions {
   keyId: string
   keySecret: string
 }
-
-/** Required by Razorpay's UPI collect endpoint but not meaningful for a VPA-only test payer — see `payDepositViaUpiCollect`. */
-const S2S_PLACEHOLDER_EMAIL = 'payer@latch.test'
-const S2S_PLACEHOLDER_CONTACT = '9999999999'
 
 /**
  * Real Razorpay test-mode adapter for the `PaymentProvider` port
@@ -102,30 +109,10 @@ export class RazorpayPaymentProvider implements PaymentProvider {
     }
   }
 
-  /**
-   * See the port's own doc comment for why this exists and what it doesn't
-   * cover. `email`/`contact` are fixed placeholder values, not collected on
-   * the pay page — Razorpay's collect endpoint requires both, but neither is
-   * meaningful for a test-mode payer identified only by a VPA.
-   */
+  /** See the port's own doc comment and `submitUpiCollect`'s (razorpay-shared.ts) for why this exists and what it doesn't cover. */
   async payDepositViaUpiCollect(order: DepositOrder, vpa: string, reference: string, options?: { timeoutMs?: number }): Promise<CaptureDepositResult | undefined> {
     try {
-      // The SDK's own declared type for this call (`RazorpayPaymentUpiCreateRequestBody`)
-      // expects a nested `upi: { vpa }` shape and requires `ip`/`referer`/`user_agent` —
-      // verified live against this account that `/payments/create/upi` actually accepts
-      // (and needs) a flat top-level `vpa`, and rejects nothing else this adapter omits.
-      // `createUpi` forwards its argument straight through to the HTTP call (no
-      // transformation in the SDK itself), so the cast below is to the type the SDK
-      // declares, not to what the wire actually wants.
-      await this.client.payments.createUpi({
-        amount: order.amountPaise,
-        currency: 'INR',
-        order_id: order.orderId,
-        email: S2S_PLACEHOLDER_EMAIL,
-        contact: S2S_PLACEHOLDER_CONTACT,
-        method: 'upi',
-        vpa,
-      } as unknown as Parameters<Razorpay['payments']['createUpi']>[0])
+      await submitUpiCollect(this.client, order.orderId, order.amountPaise, vpa)
     } catch (err) {
       throw new PaymentProviderError(reference, err, parseRazorpaySdkError(err))
     }

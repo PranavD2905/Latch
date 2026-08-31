@@ -13,7 +13,18 @@ import {
   type PaymentRail,
 } from '../../ports/payment-rail.js'
 import { instrumentRazorpayClient } from '../observability/metrics.js'
-import { DEFAULT_POLL_INTERVAL_MS, DEFAULT_QUICK_POLL_TIMEOUT_MS, isNotFound, parseRazorpaySdkError, receiptFor, sleep, toInstrument, toPaymentStatusValue, type RazorpayPaymentLike } from './razorpay-shared.js'
+import {
+  DEFAULT_POLL_INTERVAL_MS,
+  DEFAULT_QUICK_POLL_TIMEOUT_MS,
+  isNotFound,
+  parseRazorpaySdkError,
+  receiptFor,
+  sleep,
+  submitUpiCollect,
+  toInstrument,
+  toPaymentStatusValue,
+  type RazorpayPaymentLike,
+} from './razorpay-shared.js'
 
 export interface ManualCaptureRailOptions {
   keyId: string
@@ -111,6 +122,16 @@ export class ManualCaptureRail implements PaymentRail {
       }
       await sleep(DEFAULT_POLL_INTERVAL_MS)
     }
+  }
+
+  /** See the port's own doc comment and `submitUpiCollect`'s (razorpay-shared.ts) for what this does and doesn't cover. */
+  async authorizeViaUpiCollect(order: AuthorizationOrder, vpa: string, reference: string, now: Date, options?: { timeoutMs?: number }): Promise<AuthorizeResult | undefined> {
+    try {
+      await submitUpiCollect(this.client, order.orderId, order.amountPaise, vpa)
+    } catch (err) {
+      throw new PaymentRailError(reference, err, parseRazorpaySdkError(err))
+    }
+    return this.pollAuthorization(order, reference, now, options)
   }
 
   async captureAuthorization(params: CaptureAuthorizationParams): Promise<CaptureAuthorizationResult> {

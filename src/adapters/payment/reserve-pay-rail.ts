@@ -32,6 +32,10 @@ export class ReservePayRail implements PaymentRail {
     throw new Error('ReservePayRail is not built — see ensureAuthorizationOrder() for why.')
   }
 
+  async authorizeViaUpiCollect(_order: AuthorizationOrder, _vpa: string, _reference: string, _now: Date): Promise<AuthorizeResult | undefined> {
+    throw new Error('ReservePayRail is not built — see ensureAuthorizationOrder() for why.')
+  }
+
   async captureAuthorization(_params: CaptureAuthorizationParams): Promise<CaptureAuthorizationResult> {
     throw new Error('ReservePayRail is not built — see authorize() for why.')
   }

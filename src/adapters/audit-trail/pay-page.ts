@@ -35,11 +35,16 @@ export interface PayPageLeg {
  * secret key never leaves the server (`RazorpayPaymentProvider`/
  * `ManualCaptureRail`, both adapters, both server-side only).
  *
- * The deposit leg does not use `keyId` for its own form (see below) — it's
- * still the correct "is a real provider actually wired up" signal, since a
- * `FakePaymentProvider` setup has no `keyId` either and the S2S submit route
- * needs a real adapter exactly as much as Checkout.js does.
+ * `deposit` and `session_complete_authorization` don't use `keyId` for their
+ * own forms (see `UPI_S2S_LEGS` below) — it's still the correct "is a real
+ * provider actually wired up" signal, since a fake-provider setup has no
+ * `keyId` either and the S2S submit route needs a real adapter exactly as
+ * much as Checkout.js does. `no_show_authorization` is the one leg name that
+ * still falls through to Checkout.js — dead going forward (the feature it
+ * belonged to was removed; new bookings never carry it) but a booking that
+ * was already `PENDING` on it before the removal could still exist.
  */
+const UPI_S2S_LEGS: ReadonlySet<PaymentRequestedLeg['leg']> = new Set(['deposit', 'session_complete_authorization'])
 export function renderPayPage(args: { bookingId: string; legs: readonly PayPageLeg[]; keyId: string | undefined; notice?: string }): string {
   const { bookingId, legs, keyId, notice } = args
   const allDone = legs.length > 0 && legs.every((l) => l.done)
@@ -67,14 +72,15 @@ export function renderPayPage(args: { bookingId: string; legs: readonly PayPageL
         <span class="muted">test provider — no real Checkout</span>
       </div>`
       }
-      if (leg.leg === 'deposit') {
-        // UPI S2S collect (see `PaymentProvider.payDepositViaUpiCollect`'s
-        // own doc comment) — a plain server-rendered form, not Checkout.js.
-        // The VPA goes to our own backend, which submits it to Razorpay
-        // server-to-server; no publishable key or client script needed for
-        // this leg at all. Prefilled with Razorpay's own test-mode magic VPA
-        // so a human only has to click Pay — typing `failure@razorpay`
-        // instead demos the decline path deliberately.
+      if (UPI_S2S_LEGS.has(leg.leg)) {
+        // UPI S2S collect (see `PaymentProvider.payDepositViaUpiCollect`/
+        // `PaymentRail.authorizeViaUpiCollect`'s own doc comments) — a plain
+        // server-rendered form, not Checkout.js. The VPA goes to our own
+        // backend, which submits it to Razorpay server-to-server; no
+        // publishable key or client script needed for either leg. Prefilled
+        // with Razorpay's own test-mode magic VPA so a human only has to
+        // click Pay — typing `failure@razorpay` instead demos the decline
+        // path deliberately.
         return `
       <div class="leg">
         <div class="leg-text">
@@ -82,7 +88,7 @@ export function renderPayPage(args: { bookingId: string; legs: readonly PayPageL
           <p class="amount">₹${escapeHtml(amount)}</p>
         </div>
       </div>
-      <form method="POST" action="/pay/${encodeURIComponent(bookingId)}/deposit" class="upi-form">
+      <form method="POST" action="/pay/${encodeURIComponent(bookingId)}/${leg.leg}" class="upi-form">
         <input type="text" name="vpa" value="success@razorpay" aria-label="UPI ID" required>
         <button type="submit">Pay</button>
       </form>`
@@ -118,10 +124,11 @@ export function renderPayPage(args: { bookingId: string; legs: readonly PayPageL
     })
     .join('\n')
 
-  // Only the two authorisation legs still use Checkout.js — the deposit leg's
-  // form above never loads it, so a booking with only a deposit outstanding
-  // makes no cross-origin script load at all.
-  const checkoutScript = legs.some((l) => !l.done && l.leg !== 'deposit') && keyId ? '<script src="https://checkout.razorpay.com/v1/checkout.js"></script>' : ''
+  // Checkout.js only remains for the legacy no_show_authorization leg — every
+  // leg new bookings can actually carry (deposit, session_complete_authorization)
+  // uses the UPI S2S form above, so a normal booking's pay page makes no
+  // cross-origin script load at all.
+  const checkoutScript = legs.some((l) => !l.done && !UPI_S2S_LEGS.has(l.leg)) && keyId ? '<script src="https://checkout.razorpay.com/v1/checkout.js"></script>' : ''
 
   const noticeHtml = notice ? `<p class="notice">${escapeHtml(notice)}</p>` : ''
 

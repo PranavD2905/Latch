@@ -164,13 +164,14 @@ export function createAuditTrailServer(deps: AppDeps, options: AuditTrailServerO
     await reply.type('text/html').send(renderPayPage({ bookingId, legs: payPageLegs, keyId: loadEnv().RAZORPAY_KEY_ID, ...(request.query.error ? { notice: request.query.error } : {}) }))
   })
 
-  // The deposit leg's UPI-collect submit (`pay-page.ts`'s form, `leg.leg ===
-  // 'deposit'` branch). S2S — the VPA goes to Razorpay from *this* server,
-  // not the browser, using the same secret-key-holding `paymentProvider`
-  // every other money route already goes through. Never trusts the amount
-  // from the client (same reasoning as the GET route's own comment): the
-  // order this posts against is re-resolved from `pendingPaymentLegs`, not
-  // from anything the form itself carries beyond the VPA.
+  // The UPI-collect submit for either S2S-capable leg (`pay-page.ts`'s form,
+  // `UPI_S2S_LEGS` branch) — deposit via `paymentProvider`, session-complete
+  // authorisation via `paymentRail`, same route either way since both are
+  // "submit a VPA against this leg's already-created order." S2S — the VPA
+  // goes to Razorpay from *this* server, not the browser. Never trusts the
+  // amount from the client (same reasoning as the GET route's own comment):
+  // the order this posts against is re-resolved from `pendingPaymentLegs`,
+  // not from anything the form itself carries beyond the VPA.
   app.post<{ Params: { bookingId: string; leg: string }; Body: { vpa?: string } }>('/pay/:bookingId/:leg', async (request, reply) => {
     const { bookingId, leg: legName } = request.params
     const vpa = (request.body?.vpa ?? '').trim()
@@ -179,8 +180,8 @@ export function createAuditTrailServer(deps: AppDeps, options: AuditTrailServerO
       await reply.redirect(`/pay/${encodeURIComponent(bookingId)}?error=${encodeURIComponent(error)}`, 303)
     }
 
-    if (legName !== 'deposit') {
-      await reply.code(400).send({ error: 'only the deposit leg supports direct UPI payment' })
+    if (legName !== 'deposit' && legName !== 'session_complete_authorization') {
+      await reply.code(400).send({ error: 'this leg does not support direct UPI payment' })
       return
     }
     if (!/^[\w.-]+@[\w.-]+$/.test(vpa)) {
@@ -189,15 +190,18 @@ export function createAuditTrailServer(deps: AppDeps, options: AuditTrailServerO
     }
 
     const snapshot = await deps.eventStore.loadSnapshot(bookingId)
-    const depositLeg = snapshot?.pendingPaymentLegs?.find((l) => l.leg === 'deposit')
-    if (!depositLeg) {
+    const leg = snapshot?.pendingPaymentLegs?.find((l) => l.leg === legName)
+    if (!leg) {
       await reply.code(404).type('text/html').send(renderPayNotFoundPage())
       return
     }
 
-    const order = { orderId: depositLeg.orderId, amountPaise: depositLeg.amountPaise }
+    const order = { orderId: leg.orderId, amountPaise: leg.amountPaise }
     try {
-      const result = await executePaymentCall(deps.paymentCircuitBreaker, () => deps.paymentProvider.payDepositViaUpiCollect(order, vpa, bookingId))
+      const result =
+        legName === 'deposit'
+          ? await executePaymentCall(deps.paymentCircuitBreaker, () => deps.paymentProvider.payDepositViaUpiCollect(order, vpa, bookingId))
+          : await executePaymentCall(deps.paymentCircuitBreaker, () => deps.paymentRail.authorizeViaUpiCollect(order, vpa, bookingId, deps.clock.now()))
       if (!result) {
         await back('Still confirming with your bank — reload in a few seconds to check.')
         return
