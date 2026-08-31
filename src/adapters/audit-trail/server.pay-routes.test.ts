@@ -29,15 +29,20 @@ import { createAuditTrailServer } from './server.js'
  * `now`, the same test `confirm-with-deposit.ts`'s own gate transaction
  * uses, rather than trusting the worker to have already run.
  *
- * The last `it` below covers a second, separately observed issue: the pay
+ * The next two `it`s cover a second, separately observed issue: the pay
  * page's Pay button had no disable-on-click guard, so a double-click could
- * fire two POSTs for the same leg. Money was never actually double-charged
- * — verified live against real Razorpay, which stayed at exactly one
- * payment attempt per order either way — but the losing request surfaced a
- * scary generic error even though the other one had already captured it.
- * `checkPendingLegStatus` (`pending-payment-status.ts`) now runs before the
- * S2S submit; a leg Razorpay already shows done short-circuits to a plain
- * redirect instead of racing a second submission.
+ * fire two POSTs for the same leg. The real-world report this traces back to
+ * produced no double charge (Razorpay's own order stayed at one payment
+ * attempt), but reproducing it live under genuinely simultaneous requests
+ * did: two true-concurrent POSTs against the same deposit order produced two
+ * separate Razorpay payments — one captured, one an orphaned `authorized`
+ * duplicate sitting on an order that was already fully paid. `checkPendingLegStatus`
+ * (`pending-payment-status.ts`) alone only narrows that window (both
+ * requests can pass the check before either has submitted); `withPayLock`
+ * (`server.ts`) closes it by serialising every POST for the same
+ * `${bookingId}:${leg}` in-process — sufficient because this service runs as
+ * a single instance (`docs/07-deployment.md`), not a fix that would survive
+ * horizontal scaling.
  */
 
 const NOW = new Date('2026-08-20T00:00:00+05:30')
@@ -153,5 +158,28 @@ describe('audit-trail server — /pay routes, hold-liveness guard', () => {
     expect(second.statusCode).toBe(303)
     expect(second.headers.location).not.toContain('error=')
     expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('two genuinely simultaneous POSTs for the same leg submit exactly once, not twice — the in-process lock, not just the read-before-write check', async () => {
+    const clock = new FrozenClock(NOW)
+    const { deps, paymentProvider } = buildDeps(clock)
+    const bookingId = await pendingBooking(deps, paymentProvider)
+    const app = createAuditTrailServer(deps, { merchantAuthStore: stubMerchantAuthStore })
+
+    const spy = vi.spyOn(paymentProvider, 'payDepositViaUpiCollect')
+    // Fired without awaiting in between, then joined — both requests enter
+    // the route handler before either has resolved, the same shape as the
+    // two truly concurrent POSTs that produced a real duplicate Razorpay
+    // payment before withPayLock existed.
+    const [first, second] = await Promise.all([
+      app.inject({ method: 'POST', url: `/pay/${bookingId}/deposit`, payload: 'vpa=success@razorpay', headers: { 'content-type': 'application/x-www-form-urlencoded' } }),
+      app.inject({ method: 'POST', url: `/pay/${bookingId}/deposit`, payload: 'vpa=success@razorpay', headers: { 'content-type': 'application/x-www-form-urlencoded' } }),
+    ])
+
+    expect(first.statusCode).toBe(303)
+    expect(second.statusCode).toBe(303)
+    expect(first.headers.location).not.toContain('error=')
+    expect(second.headers.location).not.toContain('error=')
+    expect(spy).toHaveBeenCalledTimes(1)
   })
 })

@@ -41,6 +41,37 @@ function holdIsLive(snapshot: BookingSnapshot, now: Date): boolean {
   return snapshot.status === 'HELD' && snapshot.holdExpiresAt !== undefined && snapshot.holdExpiresAt.getTime() > now.getTime()
 }
 
+/**
+ * Per-process, per-key mutex for the pay routes' POST handler. The
+ * read-before-write check there (`checkPendingLegStatus`) narrows the
+ * double-submission race but doesn't close it — two genuinely simultaneous
+ * requests can both pass that check before either has actually submitted.
+ * Verified live: two truly concurrent POSTs against the same deposit order
+ * produced two separate Razorpay payments, one captured, one an orphaned
+ * `authorized` duplicate sitting on an order that was already fully paid.
+ * Serialising every request for the same `${bookingId}:${leg}` here means
+ * the second request's own read-before-write check runs *after* the first
+ * request's submission has actually landed, not concurrently with it —
+ * closing the gap the check alone left open.
+ *
+ * In-process is sufficient, not a compromise: docs/07-deployment.md's
+ * topology is a single `latch-viewer` instance (`numReplicas: 1`), so there
+ * is no second process this lock would need to coordinate with. It would
+ * stop being sufficient the moment that changes — the honest fix at that
+ * point is a Postgres advisory lock keyed the same way, not a bigger
+ * in-process map.
+ */
+const payLocks = new Map<string, Promise<unknown>>()
+function withPayLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prior = payLocks.get(key) ?? Promise.resolve()
+  const next = prior.then(fn, fn)
+  payLocks.set(
+    key,
+    next.catch(() => undefined),
+  )
+  return next
+}
+
 const POLL_INTERVAL_MS = 500
 
 /**
@@ -207,55 +238,53 @@ export function createAuditTrailServer(deps: AppDeps, options: AuditTrailServerO
       return
     }
 
-    const snapshot = await deps.eventStore.loadSnapshot(bookingId)
-    const leg = snapshot?.pendingPaymentLegs?.find((l) => l.leg === legName)
-    // Not just "does this leg exist" — a lapsed hold's slot has already gone
-    // back to inventory (hold-expiry-worker.ts), so paying now would take
-    // real money for a booking that no longer holds anything. `renderPayNotFoundPage`
-    // rather than a `back()` notice deliberately: there is nothing to retry.
-    if (!snapshot || !leg || !holdIsLive(snapshot, deps.clock.now())) {
-      await reply.code(404).type('text/html').send(renderPayNotFoundPage())
-      return
-    }
+    // Serialises every POST for this exact (bookingId, leg) within this
+    // process — see `withPayLock`'s own doc comment for why a double-click
+    // (no disable-on-click guard existed before this) needs more than the
+    // read-before-write check below to be race-free.
+    await withPayLock(`${bookingId}:${legName}`, async () => {
+      const snapshot = await deps.eventStore.loadSnapshot(bookingId)
+      const leg = snapshot?.pendingPaymentLegs?.find((l) => l.leg === legName)
+      // Not just "does this leg exist" — a lapsed hold's slot has already gone
+      // back to inventory (hold-expiry-worker.ts), so paying now would take
+      // real money for a booking that no longer holds anything. `renderPayNotFoundPage`
+      // rather than a `back()` notice deliberately: there is nothing to retry.
+      if (!snapshot || !leg || !holdIsLive(snapshot, deps.clock.now())) {
+        await reply.code(404).type('text/html').send(renderPayNotFoundPage())
+        return
+      }
 
-    // Real, observed race: the pay page's Pay button had no disable-on-click
-    // guard, so a double-click could fire two POSTs for the same leg a
-    // couple of seconds apart. Money was never actually at risk — Razorpay's
-    // own order stayed at one payment attempt either way — but the losing
-    // request surfaced a scary generic error to the user even though the
-    // other one had already captured it. Checking here, read-only, whether
-    // Razorpay already shows this leg done turns a losing duplicate into a
-    // harmless redirect instead of a second S2S submission racing the first.
-    // Narrows the window rather than closing it outright (both requests can
-    // still land inside this same check before either has submitted), which
-    // is why the client-side button disable in pay-page.ts is the first line
-    // of defence, not this.
-    const alreadyDone = await checkPendingLegStatus(deps, leg, bookingId, deps.clock.now())
-    if (alreadyDone.done) {
+      // A queued duplicate (the second half of a double-click, now waiting on
+      // the lock) reaches this read *after* the first request's submission
+      // below has actually resolved — so this reliably observes "already
+      // done" instead of racing it. Read-only, no side effect.
+      const alreadyDone = await checkPendingLegStatus(deps, leg, bookingId, deps.clock.now())
+      if (alreadyDone.done) {
+        await reply.redirect(`/pay/${encodeURIComponent(bookingId)}`, 303)
+        return
+      }
+
+      const order = { orderId: leg.orderId, amountPaise: leg.amountPaise }
+      try {
+        const result =
+          legName === 'deposit'
+            ? await executePaymentCall(deps.paymentCircuitBreaker, () => deps.paymentProvider.payDepositViaUpiCollect(order, vpa, bookingId))
+            : await executePaymentCall(deps.paymentCircuitBreaker, () => deps.paymentRail.authorizeViaUpiCollect(order, vpa, bookingId, deps.clock.now()))
+        if (!result) {
+          await back('Still confirming with your bank — reload in a few seconds to check.')
+          return
+        }
+      } catch (err) {
+        if (err instanceof PaymentDeclinedError) {
+          await back('That payment was declined. Try again with a different UPI ID.')
+          return
+        }
+        await back('Something went wrong reaching the payment provider. Try again.')
+        return
+      }
+
       await reply.redirect(`/pay/${encodeURIComponent(bookingId)}`, 303)
-      return
-    }
-
-    const order = { orderId: leg.orderId, amountPaise: leg.amountPaise }
-    try {
-      const result =
-        legName === 'deposit'
-          ? await executePaymentCall(deps.paymentCircuitBreaker, () => deps.paymentProvider.payDepositViaUpiCollect(order, vpa, bookingId))
-          : await executePaymentCall(deps.paymentCircuitBreaker, () => deps.paymentRail.authorizeViaUpiCollect(order, vpa, bookingId, deps.clock.now()))
-      if (!result) {
-        await back('Still confirming with your bank — reload in a few seconds to check.')
-        return
-      }
-    } catch (err) {
-      if (err instanceof PaymentDeclinedError) {
-        await back('That payment was declined. Try again with a different UPI ID.')
-        return
-      }
-      await back('Something went wrong reaching the payment provider. Try again.')
-      return
-    }
-
-    await reply.redirect(`/pay/${encodeURIComponent(bookingId)}`, 303)
+    })
   })
 
   app.get<{ Querystring: { token?: string } }>('/events', async (request, reply) => {
