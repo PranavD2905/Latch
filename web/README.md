@@ -1,6 +1,6 @@
 # Latch — live audit trail viewer
 
-React + Vite + Tailwind, Slice 6 of the build sequence (`../prompts/slice-6.md`,
+React + Vite + Tailwind, Slice 6 of the build sequence (`../docs/06-build-sequence.md`,
 `../docs/03-domain-model.md` §4/§6). Renders the SSE feed served by
 `../src/adapters/audit-trail/` as a live, dense, rupee-traceable list.
 

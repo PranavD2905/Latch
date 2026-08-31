@@ -22,8 +22,9 @@ The risk profile matters too: the slices are ordered so the *most uncertain* wor
 registration, which dev-log 001 flagged as unverified) happens early enough that discovering a problem
 still leaves time to respond.
 
-Each slice has a **self-contained session prompt** in [`../prompts/`](../prompts/), so it can be run
-in a fresh Claude session without losing context. `prompts/README.md` explains the workflow.
+Each slice had a **self-contained session prompt**, so it could be run in a fresh Claude session without
+losing context — the prompts themselves aren't part of this repo (kept local, not published), but the
+slice structure below is what they drove.
 
 ---
 

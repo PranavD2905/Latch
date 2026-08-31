@@ -216,8 +216,7 @@ Full rationale, with rejected alternatives, in [`docs/02-tech-stack.md`](docs/02
 | [`docs/05-cost-model.md`](docs/05-cost-model.md) | Production costs, unit economics, what this earns |
 | [`docs/06-build-sequence.md`](docs/06-build-sequence.md) | 10 days, sliced vertically, with the video script |
 | [`docs/07-deployment.md`](docs/07-deployment.md) | The real Railway topology, env vars, and what only showed up once deployed |
-| [`prompts/`](prompts/) | One self-contained session prompt per slice |
-| [`dev-logs/`](dev-logs/) | The decision log, kept as we went — 30 entries, every judgment call and every bug this project actually hit, dated and in order. Start at `001` if you want the origin story; the most recent few are where the scalability and observability work lives. |
+| [`dev-logs/`](dev-logs/) | The decision log, kept as we went — 32 entries, every judgment call and every bug this project actually hit, dated and in order. Start at `001` if you want the origin story; the most recent few are where the scalability and observability work lives. |
 | [`agentic-services-transactability-brief.md`](agentic-services-transactability-brief.md) | The original market research |
 
 ## Not to be confused with
