@@ -18,6 +18,22 @@ No setup required. These are running services, not screenshots.
 
 Point any MCP-capable agent (Claude Desktop + [`mcp-remote`](https://www.npmjs.com/package/mcp-remote), Claude Code, etc.) at the MCP URL above — no API key, no partnership, no integration call needed, which is the entire thesis. Ask it to *"find a dermatology consult slot with Dr. Rao and hold it."* Then open the viewer link and watch the event land, live, in the audit trail — no refresh needed.
 
+> **What the viewer link actually is.** One demo merchant — `mer_clinic`, a fictional dermatology
+> clinic seeded by `npm run db:seed` — not a public, multi-tenant dashboard. The page is
+> pre-authenticated with that one merchant's own SSE token, baked into this build at compile time
+> (`web/.env`'s `VITE_AUDIT_TRAIL_TOKEN`), purely so a judge can watch it without a login step. A real
+> deployment issues each merchant a separate build with its own token (migration 0011 — real
+> per-merchant credentials, not a shared demo key); this is not how a production merchant's trail
+> would be exposed.
+>
+> **How to check the trail is actually live, not staged.** Don't take the "LIVE" badge's word for it —
+> run the flow above (or the sequence in [§ A confirmed booking, as it actually appears in the
+> trail](#a-confirmed-booking-as-it-actually-appears-in-the-trail) below) yourself and watch
+> the event **count in the top-right corner increase and the new row append in real time**, within
+> about a second of the agent's tool call returning — no page refresh, because it's a server-sent-events
+> stream, not a polled page. Every row is a real Postgres read (`listAllEvents`), not a canned fixture:
+> reload the page and the same history replays from the same table.
+
 ## The problem
 
 Tell your AI assistant *"book me a dermatologist for Thursday afternoon."*
@@ -109,12 +125,119 @@ replaced mid-build (mandates → card manual-capture, `dev-logs/005`) without to
 file, and what let a second inbound surface (a plain REST `GET /slots`, reusing `find_slots`'s app-layer
 handler unchanged) get built to prove that reuse claim rather than just assert it.
 
+### System diagram
+
+Three inbound adapters, one pure domain core, four outbound ports — the domain never imports HTTP,
+Postgres, or the Razorpay SDK directly; it only ever calls an interface, and every arrow crossing that
+boundary is a plain typed command or event, never a framework type.
+
+```mermaid
+flowchart TB
+    Agent(["Any third-party agent<br/>Claude · ChatGPT · anyone's own"])
+
+    subgraph Inbound["Inbound adapters"]
+        direction LR
+        MCPServer["MCP Server<br/>find_slots · get_policy · hold_slot<br/>confirm_with_deposit · reschedule · cancel · get_booking"]
+        MerchantAPI["Merchant API<br/>decline · mark_complete · set_policy<br/>+ GET /slots (REST)"]
+        Webhook["POST /webhooks/razorpay<br/>signature-verified"]
+    end
+
+    subgraph Core["Domain core — pure functions, zero I/O"]
+        direction LR
+        StateMachine["Booking state machine<br/>Cancellation ladder evaluator<br/>Policy engine — every gate (B4) and bound (B3)<br/>Money — integer paise, never a float"]
+    end
+
+    subgraph Outbound["Outbound adapters (ports)"]
+        direction LR
+        PaymentPort["PaymentProvider /<br/>PaymentRail"]
+        EventStorePort["EventStore"]
+        CatalogPort["CatalogRepo"]
+        ClockPort["Clock"]
+    end
+
+    PG[("Postgres<br/>append-only events table")]
+    RP[("Razorpay test mode<br/>Orders · Payments · Refunds · manual capture")]
+    Viewer(["Live audit trail viewer<br/>(SSE, no refresh needed)"])
+
+    Agent -->|MCP over Streamable HTTP<br/>Zod-validated| MCPServer
+    MCPServer -->|typed commands only| StateMachine
+    MerchantAPI -->|typed commands only| StateMachine
+    RP -.->|webhook| Webhook
+    Webhook -->|typed commands only| StateMachine
+
+    StateMachine -->|events / reads| PaymentPort
+    StateMachine -->|events / reads| EventStorePort
+    StateMachine -->|reads| CatalogPort
+    StateMachine -->|reads| ClockPort
+
+    PaymentPort --> RP
+    EventStorePort --> PG
+    EventStorePort -.->|SSE stream| Viewer
 ```
-AI Agent ──MCP──▶ MCP Server ──command──▶ Domain Core (decides, touches nothing else)
-                                                │
-                                    only through an interface ("port")
-                                                ▼
-                              Postgres · Razorpay · System Clock
+
+### Deployment topology
+
+Three Railway services, one Postgres — matches Fastify's own plugin boundaries (`docs/02-tech-stack.md`
+§4) at the deployment layer, not a single combined process.
+
+```mermaid
+flowchart LR
+    subgraph Railway["Railway · production"]
+        direction TB
+        MCP["latch-mcp<br/>public MCP endpoint +<br/>hold-expiry / authorisation-lapse /<br/>reconciliation workers (in-process)"]
+        API["latch-merchant-api<br/>decline · mark_complete · set_policy<br/>GET /slots · POST /webhooks/razorpay"]
+        Viewer["latch-viewer<br/>SSE audit feed + built viewer UI<br/>GET /pay/:bookingId"]
+        PG[("Postgres<br/>internal only")]
+    end
+    RP[("Razorpay test mode")]
+    Agent(["third-party agent"])
+    Human(["human paying via UPI"])
+    Judge(["you, right now"])
+
+    Agent -->|MCP| MCP
+    Human -->|pays via UPI S2S| Viewer
+    Judge -->|watches the trail| Viewer
+    MCP <--> PG
+    API <--> PG
+    Viewer <--> PG
+    MCP <--> RP
+    API <--> RP
+    Viewer <--> RP
+    RP -.->|webhook| API
+```
+
+### A confirmed booking, as it actually appears in the trail
+
+This is the exact sequence a real run through the flow above produces — match it against what the live
+viewer shows while you try it, rather than trusting the description.
+
+```mermaid
+sequenceDiagram
+    participant Agent as AI Agent
+    participant MCP as Latch MCP Server
+    participant DB as Postgres (event log)
+    participant Human as Human (payer)
+    participant Pay as Pay page (latch-viewer)
+    participant RP as Razorpay
+
+    Agent->>MCP: find_slots / get_policy
+    MCP-->>Agent: open slots, deposit + ladder
+
+    Agent->>MCP: hold_slot
+    MCP->>DB: append HOLD_CREATED
+    DB-->>Agent: bookingId, holdExpiresAt
+
+    Agent->>MCP: confirm_with_deposit
+    MCP->>DB: append POLICY_ACKNOWLEDGED, PAYMENT_REQUESTED
+    MCP-->>Agent: PENDING + one pay link
+
+    Agent-->>Human: relays the pay link
+    Human->>Pay: submits UPI VPA (S2S, no Checkout.js)
+    Pay->>RP: collect request
+    RP-->>DB: webhook — payment.captured / .authorized
+
+    DB->>MCP: re-enter confirm_with_deposit
+    MCP->>DB: append DEPOSIT_CAPTURED,<br/>SESSION_COMPLETE_AUTHORIZATION_HELD,<br/>BOOKING_CONFIRMED
 ```
 
 ### Also real, not just documented
@@ -130,7 +253,17 @@ just because an external review suggested it), is in `docs/01-architecture.md` a
 
 ## The failure, handled
 
-The doctor calls in sick on Wednesday. The merchant declines a confirmed, paid Thursday slot.
+The doctor calls in sick on Wednesday. The merchant declines a confirmed, paid Thursday slot — one
+merchant action, one atomic transaction, four consequences, no human touches any of the four:
+
+```mermaid
+flowchart LR
+    Decline(["Merchant clicks Decline<br/>POST /bookings/:id/decline"])
+    Decline --> Refund["REFUND_ISSUED<br/>₹300 → original instrument"]
+    Decline --> Release["SLOT_RELEASED<br/>back to inventory"]
+    Decline --> Mandate["SESSION_COMPLETE_AUTHORIZATION_RELEASED<br/>never captured, left to lapse"]
+    Decline --> Alts["ALTERNATIVES_OFFERED<br/>3 matching slots, pushed to the agent"]
+```
 
 ```
 MERCHANT_DECLINED     cause=MERCHANT → cancellation ladder deliberately NOT applied
@@ -190,7 +323,7 @@ createdb -h localhost -p 5433 -U latch latch_test
 DATABASE_URL=postgres://latch:latch@localhost:5433/latch_test npm run db:migrate
 DATABASE_URL=postgres://latch:latch@localhost:5433/latch_test npm run db:seed
 
-npm test        # tsc --noEmit && vitest run — 262 tests, real Postgres, real Razorpay where the
+npm test        # tsc --noEmit && vitest run — 282 tests, real Postgres, real Razorpay where the
                  # existing convention already does that (never mocked for those paths)
 ```
 
