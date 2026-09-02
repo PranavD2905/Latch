@@ -1,4 +1,5 @@
 import type { BookingEvent, BoundEnforcer } from './types'
+import { enforcerOf } from './types'
 
 export interface RunningTotals {
   /** Deposits + no-show charges, net of refunds. Must land on ₹0 after a merchant decline — the demo's punchline. */
@@ -124,15 +125,12 @@ export function countRefusals(events: readonly BookingEvent[]): number {
   return events.filter((e) => e.type === 'ACTION_REFUSED').length
 }
 
-/** Event counts grouped by `bound.enforcedBy` — the input to the enforcement-tier breakdown chart. `AUTHORIZATION_HELD` counts as `payment_rail` even though it's not a `MoneyFields` event (see `EnforcedByBadge` usage in `EventsTable`). */
+/** Event counts per enforcement tier — the input to the breakdown chart. Attribution comes from `enforcerOf`, the same function the table badge and the filter use. */
 export function countByEnforcement(events: readonly BookingEvent[]): Record<BoundEnforcer, number> {
   const counts: Record<BoundEnforcer, number> = { latch_policy: 0, db_constraint: 0, payment_rail: 0 }
   for (const event of events) {
-    if (event.type === 'AUTHORIZATION_HELD') {
-      counts.payment_rail += 1
-    } else if (event.bound?.enforcedBy) {
-      counts[event.bound.enforcedBy] += 1
-    }
+    const enforcedBy = enforcerOf(event)
+    if (enforcedBy) counts[enforcedBy] += 1
   }
   return counts
 }

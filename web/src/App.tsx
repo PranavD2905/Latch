@@ -16,7 +16,7 @@ import { TopBar } from './TopBar'
 import { AlertIcon, ChevronDown, ExternalIcon, LedgerIcon } from './icons'
 import { computeRunningSeries, computeTotals, countByEnforcement, countRefusals } from './totals'
 import type { BookingEvent } from './types'
-import { eventCategory } from './types'
+import { enforcerOf, eventCategory } from './types'
 import { useArrivals } from './useArrivals'
 import { useEventStream } from './useEventStream'
 
@@ -100,10 +100,7 @@ export default function App() {
     return dateScoped.filter((e) => {
       if (filters.category !== 'all' && eventCategory(e) !== filters.category) return false
       if (!matchesSearch(e, filters)) return false
-      if (filters.enforcement !== 'all') {
-        const enforcedBy = e.bound?.enforcedBy ?? (e.type === 'AUTHORIZATION_HELD' ? 'payment_rail' : undefined)
-        if (enforcedBy !== filters.enforcement) return false
-      }
+      if (filters.enforcement !== 'all' && enforcerOf(e) !== filters.enforcement) return false
       if (filters.types.size > 0 && !filters.types.has(e.type)) return false
       return true
     })

@@ -26,6 +26,15 @@ export default defineConfig({
         target: 'http://localhost:4001',
         changeOrigin: true,
       },
+      // The policy editor also reads and PATCHes the merchant's service
+      // catalogue (`web/src/policyApi.ts`). Without this the path fell
+      // through to Vite's SPA fallback and the editor parsed index.html as
+      // JSON — a failure only local dev ever saw, because in production
+      // `VITE_MERCHANT_API_URL` makes these calls absolute.
+      '/services': {
+        target: 'http://localhost:4001',
+        changeOrigin: true,
+      },
     },
   },
 })

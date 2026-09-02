@@ -4,7 +4,7 @@ import { AlertIcon, BlockedIcon, ChevronDown } from './icons'
 import { paginate } from './Pagination'
 import { RAZORPAY_MDR_RATE } from './totals'
 import type { BookingEvent, BoundEnforcer } from './types'
-import { eventCategory, formatRupees, formatRupeesFixed, shortId } from './types'
+import { enforcerOf, eventCategory, formatRupeesFixed, shortId } from './types'
 
 function timeLabel(iso: string): string {
   return new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
@@ -64,7 +64,7 @@ function synopsis(event: BookingEvent): string {
     case 'DEPOSIT_CAPTURED':
       return `deposit taken up front · ${event.action ? event.action.instrument : 'unknown instrument'}`
     case 'RETENTION_APPLIED':
-      return `ladder tier applied — merchant keeps ${formatRupees(event.action?.amountPaise ?? 0)}`
+      return `ladder tier applied — merchant keeps ${formatRupeesFixed(event.action?.amountPaise ?? 0)}`
     case 'REFUND_ISSUED':
       return `returned to the patient${event.authority?.razorpayRefundId ? ` · ${shortId(event.authority.razorpayRefundId)}` : ''}`
     case 'NO_SHOW_CHARGED':
@@ -241,8 +241,7 @@ export function EventsTable({
             const amount = amountCell(event)
             const isOpen = expanded === event.eventId
             const isNew = arrivals.has(event.eventId)
-            const enforcedBy: BoundEnforcer | undefined =
-              event.bound?.enforcedBy ?? (event.type === 'AUTHORIZATION_HELD' || event.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD' ? 'payment_rail' : undefined)
+            const enforcedBy: BoundEnforcer | undefined = enforcerOf(event)
 
             return (
               <Fragment key={event.eventId}>

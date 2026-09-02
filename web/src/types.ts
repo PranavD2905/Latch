@@ -106,6 +106,23 @@ export function eventCategory(event: BookingEvent): EventCategory {
   return 'lifecycle'
 }
 
+/**
+ * Which tier actually enforced this event's bound.
+ *
+ * Two event types carry no `bound` block but are nonetheless enforced by the
+ * payment rail: the authorisation is registered with Razorpay, and the
+ * authorised amount *is* the ceiling. This lived inline in three places —
+ * the table badge, the breakdown chart and the enforcement filter — and the
+ * chart and the filter each knew about only one of the two, so a
+ * session-complete hold showed a "Payment rail" badge that the chart did not
+ * count and the filter did not match. One function now answers for all three.
+ */
+export function enforcerOf(event: BookingEvent): BoundEnforcer | undefined {
+  if (event.bound?.enforcedBy) return event.bound.enforcedBy
+  if (event.type === 'AUTHORIZATION_HELD' || event.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD') return 'payment_rail'
+  return undefined
+}
+
 /** A coarse, display-only status derived from the last significant event for a booking — not a re-implementation of `fold()`. */
 export function bookingStatusLabel(events: readonly BookingEvent[]): { label: string; tone: 'good' | 'warning' | 'critical' | 'neutral' | 'blue' } {
   const byType = new Map<string, BookingEvent>()
