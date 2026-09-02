@@ -1,9 +1,10 @@
 import { Fragment, useState } from 'react'
 import { EnforcedByBadge } from './EnforcedByBadge'
-import { paginate, Pagination } from './Pagination'
+import { AlertIcon, BlockedIcon, ChevronDown } from './icons'
+import { paginate } from './Pagination'
 import { RAZORPAY_MDR_RATE } from './totals'
 import type { BookingEvent, BoundEnforcer } from './types'
-import { eventCategory, formatRupees, shortId } from './types'
+import { eventCategory, formatRupees, formatRupeesFixed, shortId } from './types'
 
 function timeLabel(iso: string): string {
   return new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
@@ -77,75 +78,66 @@ function synopsis(event: BookingEvent): string {
   }
 }
 
-function amountCell(event: BookingEvent): { text: string; color: string } | undefined {
+function amountCell(event: BookingEvent): { text: string; note: string; color: string } | undefined {
   if (event.action) {
     const isCredit = event.action.direction === 'credit'
-    return { text: `${formatRupees(event.action.amountPaise)} ${event.action.direction}`, color: isCredit ? 'var(--good-text)' : 'var(--warning-text)' }
+    return { text: formatRupeesFixed(event.action.amountPaise), note: event.action.direction, color: isCredit ? 'var(--good-text)' : 'var(--warning-text)' }
   }
   if (event.type === 'AUTHORIZATION_HELD' || event.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD') {
-    return { text: `${formatRupees(event['amountPaise'] as number)} ceiling`, color: 'var(--text)' }
+    return { text: formatRupeesFixed(event['amountPaise'] as number), note: 'ceiling', color: 'var(--text)' }
   }
   return undefined
 }
 
 const CATEGORY_TINT: Record<string, string> = {
-  money: 'var(--accent)',
+  money: 'var(--blue)',
   refused: 'var(--critical)',
-  lifecycle: 'var(--text-faint)',
+  lifecycle: 'var(--border-strong)',
 }
 
 function ChevronToggle({ open }: { open: boolean }) {
   return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="transition-transform duration-[var(--dur)] ease-[var(--ease-out-quart)]"
-      style={{ transform: open ? 'rotate(180deg)' : 'none' }}
-      aria-hidden
-    >
-      <path d="m6 9 6 6 6-6" />
-    </svg>
+    <span className="inline-block transition-transform duration-[var(--dur)] ease-[var(--ease-out-quart)]" style={{ transform: open ? 'rotate(180deg)' : 'none' }}>
+      <ChevronDown size={13} />
+    </span>
   )
 }
 
-/** One labelled fact inside the proof panel. Label above, value below, hairline-separated — the same shape for all four slots. */
+/** One labelled fact inside the proof panel. Label above, value below — the same shape for all four slots. */
 function ProofSlot({ tag, label, children }: { tag: string; label: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0">
       <div className="flex items-baseline gap-1.5">
-        <span className="font-mono text-[10px] font-bold tracking-[0.08em] text-[var(--text-faint)]">{tag}</span>
-        <span className="text-[length:var(--t-2xs)] font-semibold uppercase tracking-[0.06em] text-[var(--text-faint)]">{label}</span>
+        <span className="rounded bg-[var(--neutral-bg)] px-1 py-px text-[10px] font-semibold tracking-[0.06em] text-[var(--text-muted)]">{tag}</span>
+        <span className="text-[length:var(--t-xs)] font-medium text-[var(--text-muted)]">{label}</span>
       </div>
-      <div className="mt-1 font-mono text-[length:var(--t-xs)] leading-relaxed text-[var(--text)]">{children}</div>
+      <div className="mt-1.5 text-[length:var(--t-sm)] leading-relaxed text-[var(--text)]">{children}</div>
     </div>
   )
 }
 
 /**
- * The expanded row. For a money event this is the whole point of the
- * product rendered as one object: the action taken, the authority it was
- * taken under, the bound it stayed inside, and the gate it cleared — four
- * facts recorded at the time, not reconstructed afterwards.
+ * The expanded row. For a money event this is the whole product rendered as
+ * one object: the action taken, the authority it was taken under, the bound
+ * it stayed inside, and the gate it cleared — four facts recorded at the
+ * time, not reconstructed afterwards.
  */
 function DetailPanel({ event }: { event: BookingEvent }) {
   if (event.type === 'ACTION_REFUSED') {
     return (
-      <div className="rounded-lg bg-[var(--critical-bg)] p-4 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--critical)_28%,transparent)]">
+      <div className="rounded-[var(--r-card)] border border-[var(--critical-bg)] bg-[var(--critical-bg)] p-4">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded bg-[var(--critical-text)] px-1.5 py-0.5 font-mono text-[10px] font-bold tracking-[0.08em] text-white">REFUSED</span>
-          <span className="font-mono text-[length:var(--t-sm)] font-semibold text-[var(--critical-text)]">
+          <span className="pill" style={{ background: 'var(--critical-text)', color: '#fff' }}>
+            <BlockedIcon size={12} />
+            Refused
+          </span>
+          <span className="text-[length:var(--t-base)] font-semibold text-[var(--critical-text)]">
             {String(event['attemptedType'])} → {String(event['refusalCode'])}
           </span>
         </div>
-        <div className="mt-2 max-w-[80ch] font-mono text-[length:var(--t-xs)] leading-relaxed text-[var(--critical-text)] opacity-85">{String(event['reason'])}</div>
-        <div className="mt-2.5 border-t border-[color-mix(in_oklab,var(--critical)_22%,transparent)] pt-2.5 text-[length:var(--t-xs)] text-[var(--critical-text)] opacity-80">
-          The attempt is recorded exactly like a successful one. A bound that only stops things silently can&apos;t be audited.
+        <div className="mt-2.5 max-w-[80ch] text-[length:var(--t-sm)] leading-relaxed text-[var(--critical-text)]">{String(event['reason'])}</div>
+        <div className="mt-3 border-t border-[color-mix(in_oklab,var(--critical)_20%,transparent)] pt-2.5 text-[length:var(--t-sm)] text-[var(--critical-text)] opacity-80">
+          The attempt is recorded exactly like a successful one. A bound that only stops things silently cannot be audited.
         </div>
       </div>
     )
@@ -153,15 +145,15 @@ function DetailPanel({ event }: { event: BookingEvent }) {
 
   if (event.action && event.gate && event.bound && event.authority) {
     return (
-      <div className="rounded-lg bg-[var(--paper)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] pb-3">
-          <span className="text-[length:var(--t-xs)] font-medium text-[var(--text-muted)]">Recorded at the moment of the action</span>
+      <div className="rounded-[var(--r-card)] border border-[var(--border)] bg-[var(--surface)] p-4">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] pb-3">
+          <span className="text-[length:var(--t-sm)] text-[var(--text-secondary)]">Recorded at the moment of the action</span>
           <EnforcedByBadge enforcedBy={event.bound.enforcedBy} />
         </div>
-        <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2 xl:grid-cols-4">
           <ProofSlot tag="B1" label="Action">
-            {formatRupees(event.action.amountPaise)} {event.action.direction}
-            <span className="text-[var(--text-muted)]"> via {event.action.instrument}</span>
+            {formatRupeesFixed(event.action.amountPaise)} {event.action.direction}
+            <div className="text-[var(--text-muted)]">via {event.action.instrument}</div>
           </ProofSlot>
           <ProofSlot tag="B2" label="Authority">
             policy v{event.authority.policyVersion}
@@ -170,22 +162,23 @@ function DetailPanel({ event }: { event: BookingEvent }) {
             {event.authority.razorpayRefundId && <div className="text-[var(--text-muted)]">{shortId(event.authority.razorpayRefundId)}</div>}
           </ProofSlot>
           <ProofSlot tag="B3" label="Bound">
-            ceiling {formatRupees(event.bound.ceilingPaise)}
-            <div className="text-[var(--text-muted)]">headroom after {formatRupees(event.bound.headroomAfterPaise)}</div>
+            ceiling {formatRupeesFixed(event.bound.ceilingPaise)}
+            <div className="text-[var(--text-muted)]">headroom after {formatRupeesFixed(event.bound.headroomAfterPaise)}</div>
           </ProofSlot>
           <ProofSlot tag="B4" label="Gate cleared">
             {event.gate.cleared.length === 0 ? <span className="text-[var(--text-muted)]">—</span> : event.gate.cleared.join(' + ')}
           </ProofSlot>
         </div>
         {event.type === 'REFUND_ISSUED' && (
-          // docs/05-cost-model.md's "−₹7.08 sunk MDR" made live: the platform
-          // fee charged at capture is never reversed on a refund, whatever the
-          // reason for the refund.
-          <div className="mt-3 flex items-start gap-2 rounded-md bg-[var(--warning-bg)] px-3 py-2 text-[length:var(--t-xs)] leading-relaxed text-[var(--warning-text)]">
-            <span aria-hidden>⚠</span>
+          // docs/05-cost-model.md: the platform fee charged at capture is never
+          // reversed on a refund, whatever the reason for the refund.
+          <div className="mt-4 flex items-start gap-2 rounded-[var(--r-control)] bg-[var(--warning-bg)] px-3 py-2.5 text-[length:var(--t-sm)] leading-relaxed text-[var(--warning-text)]">
+            <span className="mt-px shrink-0">
+              <AlertIcon size={13} />
+            </span>
             <span>
-              MDR <span className="font-mono font-semibold">{formatRupees(Math.round(event.action.amountPaise * RAZORPAY_MDR_RATE))}</span> is not recovered on
-              a refund — borne by the merchant.
+              MDR <span className="font-semibold">{formatRupeesFixed(Math.round(event.action.amountPaise * RAZORPAY_MDR_RATE))}</span> is not recovered on a
+              refund — borne by the merchant.
             </span>
           </div>
         )}
@@ -195,11 +188,11 @@ function DetailPanel({ event }: { event: BookingEvent }) {
 
   if (event.type === 'AUTHORIZATION_HELD' || event.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD') {
     return (
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-[var(--paper)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
-        <span className="max-w-[74ch] font-mono text-[length:var(--t-xs)] leading-relaxed text-[var(--text-muted)]">
-          {event.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD' ? 'session-complete mandate' : 'no-show ceiling'} registered:{' '}
-          <span className="font-semibold text-[var(--text)]">{formatRupees(event['amountPaise'] as number)}</span> — the authorised amount IS the ceiling, so
-          there is no headroom to abuse.
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--r-card)] border border-[var(--border)] bg-[var(--surface)] p-4">
+        <span className="max-w-[76ch] text-[length:var(--t-sm)] leading-relaxed text-[var(--text-secondary)]">
+          {event.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD' ? 'Session-complete mandate' : 'No-show ceiling'} registered:{' '}
+          <span className="font-semibold text-[var(--text)]">{formatRupeesFixed(event['amountPaise'] as number)}</span> — the authorised amount is the ceiling,
+          so there is no headroom to abuse.
         </span>
         <EnforcedByBadge enforcedBy="payment_rail" />
       </div>
@@ -207,7 +200,7 @@ function DetailPanel({ event }: { event: BookingEvent }) {
   }
 
   return (
-    <div className="rounded-lg bg-[var(--paper)] p-4 font-mono text-[length:var(--t-xs)] leading-relaxed text-[var(--text-muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+    <div className="rounded-[var(--r-card)] border border-[var(--border)] bg-[var(--surface)] p-4 text-[length:var(--t-sm)] leading-relaxed text-[var(--text-secondary)]">
       {synopsis(event) || 'No additional detail recorded for this event type.'}
     </div>
   )
@@ -218,118 +211,113 @@ export function EventsTable({
   arrivals,
   page,
   pageSize,
-  onPageChange,
-  onPageSizeChange,
 }: {
   events: readonly BookingEvent[]
   arrivals: ReadonlySet<string>
   page: number
   pageSize: number
-  onPageChange: (page: number) => void
-  onPageSizeChange: (size: number) => void
 }) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const pageEvents = paginate(events, page, pageSize)
 
   return (
-    <div>
-      <div className="overflow-x-auto">
-        <table className="ledger">
-          <thead>
-            <tr>
-              <th className="cell-edge-l">Event</th>
-              <th>Booking</th>
-              <th>Detail</th>
-              <th>Occurred</th>
-              <th className="text-right">Amount</th>
-              <th>Enforcement</th>
-              <th className="cell-edge-r" />
-            </tr>
-          </thead>
-          <tbody>
-            {pageEvents.map((event) => {
-              const category = eventCategory(event)
-              const isRefused = category === 'refused'
-              const amount = amountCell(event)
-              const isOpen = expanded === event.eventId
-              const isNew = arrivals.has(event.eventId)
-              const enforcedBy: BoundEnforcer | undefined =
-                event.bound?.enforcedBy ?? (event.type === 'AUTHORIZATION_HELD' || event.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD' ? 'payment_rail' : undefined)
+    <div className="overflow-x-auto">
+      <table className="grid-table">
+        <thead>
+          <tr>
+            <th className="edge-l">Event</th>
+            <th>Booking ID</th>
+            <th>Detail</th>
+            <th>Occurred on</th>
+            <th className="text-right">Amount</th>
+            <th>Enforcement</th>
+            <th className="edge-r" />
+          </tr>
+        </thead>
+        <tbody>
+          {pageEvents.map((event) => {
+            const category = eventCategory(event)
+            const isRefused = category === 'refused'
+            const amount = amountCell(event)
+            const isOpen = expanded === event.eventId
+            const isNew = arrivals.has(event.eventId)
+            const enforcedBy: BoundEnforcer | undefined =
+              event.bound?.enforcedBy ?? (event.type === 'AUTHORIZATION_HELD' || event.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD' ? 'payment_rail' : undefined)
 
-              return (
-                <Fragment key={event.eventId}>
-                  <tr
-                    className={`row-hoverable ${isOpen ? 'row-open' : ''} ${isNew ? 'row-arrive' : ''}`}
-                    style={
-                      {
-                        '--arrive-tint': `color-mix(in oklab, ${CATEGORY_TINT[category]} 16%, transparent)`,
-                        ...(isRefused ? { background: 'var(--critical-bg)' } : null),
-                      } as React.CSSProperties
-                    }
-                  >
-                    <td className="cell-edge-l">
-                      <span className="flex items-center gap-2.5">
-                        <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: CATEGORY_TINT[category] }} aria-hidden />
-                        <span
-                          className="font-mono text-[length:var(--t-sm)] font-semibold tracking-[-0.01em]"
-                          style={{ color: isRefused ? 'var(--critical-text)' : 'var(--text)' }}
-                        >
-                          {event.type}
-                        </span>
-                      </span>
-                    </td>
-                    <td className="whitespace-nowrap font-mono text-[length:var(--t-xs)] text-[var(--text-muted)]" title={event.bookingId}>
-                      {shortId(event.bookingId)}
-                    </td>
-                    <td className="max-w-[220px] truncate text-[length:var(--t-xs)] text-[var(--text-muted)]" title={synopsis(event)}>
-                      {synopsis(event)}
-                    </td>
-                    <td className="whitespace-nowrap font-mono text-[length:var(--t-xs)] text-[var(--text-muted)]" title={fullTimeLabel(event.occurredAt)}>
-                      {timeLabel(event.occurredAt)}
-                    </td>
-                    <td className="whitespace-nowrap text-right font-mono text-[length:var(--t-sm)] font-semibold tabular-nums" style={{ color: amount?.color ?? 'var(--text-faint)' }}>
-                      {amount?.text ?? '—'}
-                    </td>
-                    <td>
-                      {isRefused ? (
-                        <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md bg-[var(--critical-text)] px-2 py-1 font-mono text-[10px] font-bold tracking-[0.08em] text-white">
-                          REFUSED
-                        </span>
-                      ) : enforcedBy ? (
-                        <EnforcedByBadge enforcedBy={enforcedBy} compact />
-                      ) : (
-                        <span className="text-[var(--text-faint)]">—</span>
-                      )}
-                    </td>
-                    <td className="cell-edge-r text-right">
-                      <button
-                        type="button"
-                        onClick={() => setExpanded(isOpen ? null : event.eventId)}
-                        aria-expanded={isOpen}
-                        aria-label={`${isOpen ? 'Hide' : 'Show'} recorded proof for ${event.type}`}
-                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[length:var(--t-xs)] font-medium text-[var(--accent-text)] transition-colors duration-[var(--dur)] hover:bg-[var(--accent-bg)]"
+            return (
+              <Fragment key={event.eventId}>
+                <tr className={`rowlink ${isNew ? 'row-arrive' : ''}`} style={isOpen ? { background: 'var(--surface-hover)' } : undefined}>
+                  <td className="edge-l">
+                    <span className="flex items-center gap-2.5">
+                      <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: CATEGORY_TINT[category] }} aria-hidden />
+                      <span
+                        className="text-[length:var(--t-base)] font-medium"
+                        style={{ color: isRefused ? 'var(--critical-text)' : 'var(--text)' }}
                       >
-                        Proof
-                        <ChevronToggle open={isOpen} />
-                      </button>
+                        {event.type}
+                      </span>
+                    </span>
+                  </td>
+                  <td className="whitespace-nowrap text-[length:var(--t-sm)] text-[var(--text-secondary)]" title={event.bookingId}>
+                    {shortId(event.bookingId)}
+                  </td>
+                  <td className="max-w-[240px] truncate text-[length:var(--t-sm)] text-[var(--text-muted)]" title={synopsis(event)}>
+                    {synopsis(event)}
+                  </td>
+                  <td className="whitespace-nowrap text-[length:var(--t-sm)] text-[var(--text-secondary)]" title={fullTimeLabel(event.occurredAt)}>
+                    {timeLabel(event.occurredAt)}
+                  </td>
+                  <td className="whitespace-nowrap text-right">
+                    {amount ? (
+                      <>
+                        <div className="text-[length:var(--t-base)] font-medium tabular-nums" style={{ color: amount.color }}>
+                          {amount.text}
+                        </div>
+                        <div className="text-[length:var(--t-xs)] text-[var(--text-muted)]">{amount.note}</div>
+                      </>
+                    ) : (
+                      <span className="text-[var(--text-muted)]">—</span>
+                    )}
+                  </td>
+                  <td>
+                    {isRefused ? (
+                      <span className="pill" style={{ background: 'var(--critical-bg)', color: 'var(--critical-text)' }}>
+                        <BlockedIcon size={12} />
+                        Refused
+                      </span>
+                    ) : enforcedBy ? (
+                      <EnforcedByBadge enforcedBy={enforcedBy} />
+                    ) : (
+                      <span className="text-[var(--text-muted)]">—</span>
+                    )}
+                  </td>
+                  <td className="edge-r text-right">
+                    <button
+                      type="button"
+                      onClick={() => setExpanded(isOpen ? null : event.eventId)}
+                      aria-expanded={isOpen}
+                      aria-label={`${isOpen ? 'Hide' : 'Show'} recorded proof for ${event.type}`}
+                      className="link inline-flex items-center gap-1 whitespace-nowrap text-[length:var(--t-sm)]"
+                    >
+                      Details
+                      <ChevronToggle open={isOpen} />
+                    </button>
+                  </td>
+                </tr>
+                {isOpen && (
+                  <tr>
+                    <td colSpan={7} className="edge-l edge-r bg-[var(--surface-sunk)] !py-4">
+                      <div className="detail-open">
+                        <DetailPanel event={event} />
+                      </div>
                     </td>
                   </tr>
-                  {isOpen && (
-                    <tr>
-                      <td colSpan={7} className="cell-edge-l cell-edge-r bg-[var(--paper-sunk)] !py-4">
-                        <div className="detail-open">
-                          <DetailPanel event={event} />
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-      <Pagination page={page} pageSize={pageSize} totalCount={events.length} onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} label="events" />
+                )}
+              </Fragment>
+            )
+          })}
+        </tbody>
+      </table>
     </div>
   )
 }

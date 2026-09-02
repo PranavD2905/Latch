@@ -71,6 +71,25 @@ export function formatRupees(paise: number): string {
   return `₹${rupees.toLocaleString('en-IN', { minimumFractionDigits: rupees % 1 === 0 ? 0 : 2 })}`
 }
 
+/**
+ * Money the way the dashboard renders it: always two decimals, and split so
+ * the paise can be set smaller than the rupees. Razorpay's amount cards do
+ * this — the eye lands on the rupee figure and the paise stay available
+ * without competing for it.
+ */
+export function splitRupees(paise: number): { whole: string; frac: string } {
+  const rupees = paise / 100
+  const [whole, frac = '00'] = Math.abs(rupees).toFixed(2).split('.')
+  const sign = rupees < 0 ? '-' : ''
+  return { whole: `${sign}₹${Number(whole).toLocaleString('en-IN')}`, frac: `.${frac}` }
+}
+
+/** The same value as one string, for table cells and inline prose. */
+export function formatRupeesFixed(paise: number): string {
+  const { whole, frac } = splitRupees(paise)
+  return whole + frac
+}
+
 export function formatCompactRupees(paise: number): string {
   const rupees = paise / 100
   if (Math.abs(rupees) >= 100000) return `₹${(rupees / 100000).toFixed(1)}L`

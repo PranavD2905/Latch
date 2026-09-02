@@ -1,16 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
-import { BookingsTable } from './BookingsTable'
+import { BookingsTable, useBookingRows } from './BookingsTable'
 import { EnforcementBreakdown } from './EnforcementBreakdown'
 import { EventsTable } from './EventsTable'
-import type { Filters, ViewTab } from './FilterBar'
+import type { Filters } from './FilterBar'
 import { FilterBar } from './FilterBar'
 import { LatchMark } from './LatchMark'
-import { LedgerSummary } from './LedgerSummary'
 import { MoneyFlowChart } from './MoneyFlowChart'
+import { Pagination } from './Pagination'
 import { PolicyEditor } from './PolicyEditor'
+import { SummaryCards } from './SummaryCards'
+import type { View } from './Sidebar'
+import { CompactNav, Sidebar } from './Sidebar'
+import type { Section } from './TopBar'
+import { TopBar } from './TopBar'
+import { AlertIcon, ChevronDown, ExternalIcon, LedgerIcon } from './icons'
 import { computeRunningSeries, computeTotals, countByEnforcement, countRefusals } from './totals'
-import type { Section } from './TopNav'
-import { TopNav } from './TopNav'
 import type { BookingEvent } from './types'
 import { eventCategory } from './types'
 import { useArrivals } from './useArrivals'
@@ -18,6 +22,21 @@ import { useEventStream } from './useEventStream'
 
 const token = import.meta.env['VITE_AUDIT_TRAIL_TOKEN'] as string | undefined
 const streamUrl = `/events${token ? `?token=${encodeURIComponent(token)}` : ''}`
+const REPO_URL = 'https://github.com/PranavD2905/Latch'
+
+const SCOPES = [
+  { key: 'all', label: 'All time', days: 0 },
+  { key: '1', label: 'Today', days: 1 },
+  { key: '7', label: 'Last 7 days', days: 7 },
+  { key: '30', label: 'Last 30 days', days: 30 },
+] as const
+type ScopeKey = (typeof SCOPES)[number]['key']
+
+function daysAgoISO(days: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() - (days - 1))
+  return d.toISOString().slice(0, 10)
+}
 
 function inDateRange(event: BookingEvent, from: string, to: string): boolean {
   if (!from && !to) return true
@@ -34,46 +53,11 @@ function matchesSearch(event: BookingEvent, filters: Filters): boolean {
   return haystack.toLowerCase().includes(needle)
 }
 
-/**
- * Shell footer. The Razorpay line is an attribution, not a co-brand: the
- * strongest tier in this trail is `payment_rail`, and the badge on those rows
- * already says "enforced by Razorpay — outside our trust boundary". Naming
- * the rail here closes that loop for someone reading the dashboard cold.
- */
-function ShellFooter() {
-  return (
-    <footer className="on-ink border-t border-[var(--ink-line-soft)] px-5 py-5 sm:px-7">
-      <div className="mx-auto flex max-w-[1240px] flex-wrap items-center justify-between gap-x-6 gap-y-2">
-        <span className="flex items-center gap-2 text-[length:var(--t-xs)] text-[var(--on-ink-faint)]">
-          <LatchMark size={14} />
-          Latch — bounded payments for agentic bookings
-        </span>
-        <span
-          className="text-[length:var(--t-xs)] text-[var(--on-ink-faint)]"
-          title="Deposits, refunds and authorisations are executed and enforced by Razorpay — the payment_rail tier in this trail."
-        >
-          Payments by <span className="font-medium text-[var(--on-ink-muted)]">Razorpay</span>
-        </span>
-      </div>
-    </footer>
-  )
-}
-
-/** Panel heading — one shape for every paper panel in the app. */
-function PanelHead({ title, note }: { title: string; note?: string }) {
-  return (
-    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-5 pb-4 pt-5">
-      <h2 className="text-[length:var(--t-base)] font-semibold tracking-[-0.005em] text-[var(--text)]">{title}</h2>
-      {note && <span className="text-[length:var(--t-xs)] text-[var(--text-muted)]">{note}</span>}
-    </div>
-  )
-}
-
 export default function App() {
   const { events, connection } = useEventStream(streamUrl)
   const arrivals = useArrivals(events)
-  const [section, setSection] = useState<Section>('audits')
-  const [tab, setTab] = useState<ViewTab>('events')
+  const [view, setView] = useState<View>('events')
+  const [scope, setScope] = useState<ScopeKey>('all')
   const [filters, setFilters] = useState<Filters>({
     category: 'all',
     search: '',
@@ -83,15 +67,26 @@ export default function App() {
     enforcement: 'all',
     types: new Set(),
   })
-  const [eventsPagination, setEventsPagination] = useState({ page: 1, pageSize: 10 })
-  const [bookingsPagination, setBookingsPagination] = useState({ page: 1, pageSize: 10 })
+  const [eventsPage, setEventsPage] = useState({ page: 1, pageSize: 25 })
+  const [bookingsPage, setBookingsPage] = useState({ page: 1, pageSize: 25 })
+
+  const section: Section = view === 'policy' ? 'policy' : 'audits'
 
   // A filter change can shrink the result set out from under whatever page the
   // user was on — reset to page 1 rather than leave them staring at an empty table.
   useEffect(() => {
-    setEventsPagination((p) => ({ ...p, page: 1 }))
-    setBookingsPagination((p) => ({ ...p, page: 1 }))
+    setEventsPage((p) => ({ ...p, page: 1 }))
+    setBookingsPage((p) => ({ ...p, page: 1 }))
   }, [filters])
+
+  function handleView(next: View) {
+    setView(next)
+  }
+
+  function handleScope(next: ScopeKey) {
+    setScope(next)
+    setFilters((f) => ({ ...f, dateFrom: next === 'all' ? '' : daysAgoISO(Number(next)), dateTo: '' }))
+  }
 
   const dateScoped = useMemo(() => events.filter((e) => inDateRange(e, filters.dateFrom, filters.dateTo)), [events, filters.dateFrom, filters.dateTo])
 
@@ -99,7 +94,6 @@ export default function App() {
   const series = useMemo(() => computeRunningSeries(dateScoped), [dateScoped])
   const enforcementCounts = useMemo(() => countByEnforcement(dateScoped), [dateScoped])
   const refusalCount = useMemo(() => countRefusals(dateScoped), [dateScoped])
-  const bookingCount = useMemo(() => new Set(dateScoped.map((e) => e.bookingId)).size, [dateScoped])
   const allTypes = useMemo(() => [...new Set(events.map((e) => e.type))].sort(), [events])
 
   const tableFiltered = useMemo(() => {
@@ -116,111 +110,188 @@ export default function App() {
   }, [dateScoped, filters])
 
   const newestFirst = useMemo(() => [...tableFiltered].reverse(), [tableFiltered])
+  const bookingRows = useBookingRows(dateScoped)
+  const bookingCount = bookingRows.length
+
+  const trailWindow =
+    dateScoped.length === 0
+      ? 'No events in this window'
+      : `${new Date(dateScoped[0]!.occurredAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} – ${new Date(
+          dateScoped[dateScoped.length - 1]!.occurredAt,
+        ).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} · append-only`
+
+  const showingEvents = view !== 'bookings'
+  const activePage = showingEvents ? eventsPage : bookingsPage
+  const rowTotal = showingEvents ? newestFirst.length : bookingCount
+  const rangeFrom = rowTotal === 0 ? 0 : (Math.min(activePage.page, Math.max(1, Math.ceil(rowTotal / activePage.pageSize))) - 1) * activePage.pageSize + 1
+  const rangeTo = Math.min(rangeFrom + activePage.pageSize - 1, rowTotal)
 
   return (
-    <div className="min-h-screen bg-[var(--ink)]">
-      <TopNav section={section} onSection={setSection} refusalCount={refusalCount} connection={connection} eventCount={events.length} />
+    <div className="min-h-screen bg-[var(--bg)]">
+      <TopBar connection={connection} eventCount={events.length} />
 
-      {section === 'policy' ? (
-        <>
-          <section className="on-ink px-5 pb-7 pt-6 sm:px-7">
-            <div className="mx-auto max-w-[1240px]">
-              <div className="font-mono text-[length:var(--t-xs)] text-[var(--on-ink-faint)]">Dr. Rao&apos;s Clinic · merchant API</div>
-              <h1 className="mt-2 text-[length:var(--t-2xl)] font-semibold tracking-[-0.02em] text-[var(--on-ink)]">Policy</h1>
-              <p className="mt-2 max-w-[68ch] text-[length:var(--t-sm)] leading-relaxed text-[var(--on-ink-muted)]">
-                What an agent is allowed to do on this merchant&apos;s behalf, and what a cancellation costs. Publishing appends a new version — it never edits
-                the one bookings are already citing.
-              </p>
+      <div className="flex">
+        <Sidebar view={view} onView={handleView} refusalCount={refusalCount} trailWindow={trailWindow} />
+
+        <main className="flex min-h-[calc(100vh-var(--topbar-h))] min-w-0 flex-1 flex-col">
+          <CompactNav view={view} onView={handleView} refusalCount={refusalCount} />
+
+          <div className="flex-1 px-4 py-5 sm:px-6">
+            {/* page header */}
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <h1 className="text-[length:var(--t-lg)] font-semibold tracking-[-0.01em] text-[var(--text)]">
+                  {section === 'policy' ? 'Policy' : view === 'bookings' ? 'Bookings' : 'Overview'}
+                </h1>
+                {section === 'audits' && (
+                  <label className="flex cursor-pointer items-center gap-0.5 text-[var(--blue)]">
+                    <select
+                      value={scope}
+                      onChange={(e) => handleScope(e.target.value as ScopeKey)}
+                      aria-label="Time window"
+                      className="cursor-pointer appearance-none bg-transparent text-[length:var(--t-lg)] font-semibold tracking-[-0.01em] outline-none"
+                    >
+                      {SCOPES.map((s) => (
+                        <option key={s.key} value={s.key}>
+                          {s.label}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown size={15} />
+                  </label>
+                )}
+              </div>
+              <a href={REPO_URL} target="_blank" rel="noreferrer noopener" className="link flex items-center gap-1.5 text-[length:var(--t-sm)]">
+                Documentation
+                <ExternalIcon size={13} />
+              </a>
             </div>
-          </section>
-          <main className="mx-auto max-w-[1240px] px-5 pb-14 sm:px-7">
-            <PolicyEditor />
-          </main>
-          <ShellFooter />
-        </>
-      ) : (
-        <>
-          <LedgerSummary
-            totals={totals}
-            refusalCount={refusalCount}
-            bookingCount={bookingCount}
-            eventCount={dateScoped.length}
-            firstAt={dateScoped[0]?.occurredAt}
-            lastAt={dateScoped[dateScoped.length - 1]?.occurredAt}
-            onFilterRefusals={() => setFilters((f) => ({ ...f, category: 'refused' }))}
-          />
 
-          <main className="mx-auto max-w-[1240px] px-5 pb-14 sm:px-7">
-            {!token && (
+            {!token && section === 'audits' && (
               <div
-                className="mb-4 flex items-start gap-2.5 rounded-xl px-4 py-3 font-mono text-[length:var(--t-xs)] leading-relaxed"
-                style={{ background: 'oklch(0.775 0.145 78 / 0.13)', color: 'var(--warning-on-ink)', boxShadow: 'inset 0 0 0 1px oklch(0.775 0.145 78 / 0.3)' }}
+                className="mb-4 flex items-start gap-2.5 rounded-[var(--r-card)] border border-[var(--warning)] bg-[var(--warning-bg)] px-4 py-3 text-[length:var(--t-sm)] leading-relaxed text-[var(--warning-text)]"
                 role="status"
               >
-                <span aria-hidden>⚠</span>
+                <span className="mt-px shrink-0">
+                  <AlertIcon size={14} />
+                </span>
                 <span>VITE_AUDIT_TRAIL_TOKEN is not set in web/.env — the SSE connection will be refused (401).</span>
               </div>
             )}
 
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-              <div className="panel lg:col-span-2">
-                <PanelHead title="Cumulative money flow" note="one point per event, shared ₹ axis" />
-                <div className="px-5 pb-5">
-                  <MoneyFlowChart series={series} />
-                </div>
-              </div>
-              <div className="panel">
-                <PanelHead title="Enforcement tiers" note="what actually held the line" />
-                <div className="px-5 pb-5">
-                  <EnforcementBreakdown counts={enforcementCounts} />
-                </div>
-              </div>
-            </div>
-
-            <div className="panel mt-4">
-              <FilterBar
-                tab={tab}
-                onTab={setTab}
-                filters={filters}
-                onFilters={setFilters}
-                allTypes={allTypes}
-                totalCount={dateScoped.length}
-                shownCount={tableFiltered.length}
-                bookingCount={bookingCount}
-              />
-
-              {tab === 'events' ? (
-                newestFirst.length === 0 ? (
-                  <EmptyTrail hasEvents={events.length > 0} onClear={() => setFilters((f) => ({ ...f, category: 'all', search: '', enforcement: 'all', types: new Set() }))} />
-                ) : (
-                  <EventsTable
-                    events={newestFirst}
-                    arrivals={arrivals}
-                    page={eventsPagination.page}
-                    pageSize={eventsPagination.pageSize}
-                    onPageChange={(page) => setEventsPagination((p) => ({ ...p, page }))}
-                    onPageSizeChange={(pageSize) => setEventsPagination({ page: 1, pageSize })}
-                  />
-                )
-              ) : (
-                <BookingsTable
-                  events={dateScoped}
-                  page={bookingsPagination.page}
-                  pageSize={bookingsPagination.pageSize}
-                  onPageChange={(page) => setBookingsPagination((p) => ({ ...p, page }))}
-                  onPageSizeChange={(pageSize) => setBookingsPagination({ page: 1, pageSize })}
+            {section === 'policy' ? (
+              <PolicyEditor />
+            ) : (
+              <>
+                <SummaryCards
+                  totals={totals}
+                  refusalCount={refusalCount}
+                  bookingCount={bookingCount}
+                  eventCount={dateScoped.length}
+                  onFilterRefusals={() => {
+                    setView('events')
+                    setFilters((f) => ({ ...f, category: 'refused' }))
+                  }}
                 />
-              )}
-            </div>
 
-            <p className="mt-5 max-w-[70ch] text-[length:var(--t-xs)] leading-relaxed text-[var(--on-ink-faint)]">
-              Every row above is an immutable, append-only fact recorded at the moment the action was attempted — including the ones that were refused. Nothing
-              here is reconstructed after the fact.
-            </p>
-          </main>
-          <ShellFooter />
-        </>
-      )}
+                <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
+                  <div className="card xl:col-span-2">
+                    <div className="card-head">
+                      <h2 className="text-[length:var(--t-base)] font-semibold text-[var(--text)]">Cumulative money flow</h2>
+                      <span className="text-[length:var(--t-sm)] text-[var(--text-muted)]">one point per event, shared ₹ axis</span>
+                    </div>
+                    <div className="border-t border-[var(--border)] px-5 py-4">
+                      <MoneyFlowChart series={series} />
+                    </div>
+                  </div>
+                  <div className="card">
+                    <div className="card-head">
+                      <h2 className="text-[length:var(--t-base)] font-semibold text-[var(--text)]">Enforcement tiers</h2>
+                      <span className="text-[length:var(--t-sm)] text-[var(--text-muted)]">what held the line</span>
+                    </div>
+                    <div className="border-t border-[var(--border)] px-5 py-4">
+                      <EnforcementBreakdown counts={enforcementCounts} />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="card mt-4 overflow-hidden">
+                  {showingEvents ? (
+                    <FilterBar
+                      filters={filters}
+                      onFilters={setFilters}
+                      allTypes={allTypes}
+                      totalCount={dateScoped.length}
+                      shownCount={newestFirst.length}
+                      rangeFrom={rangeFrom}
+                      rangeTo={rangeTo}
+                      unit="events"
+                    />
+                  ) : (
+                    <div className="px-4 pb-3 pt-4 text-[length:var(--t-sm)] text-[var(--text-secondary)]">
+                      {bookingCount === 0
+                        ? 'No bookings'
+                        : `Showing ${rangeFrom.toLocaleString('en-IN')}–${rangeTo.toLocaleString('en-IN')} of ${bookingCount.toLocaleString('en-IN')} bookings`}
+                    </div>
+                  )}
+
+                  {showingEvents ? (
+                    newestFirst.length === 0 ? (
+                      <EmptyTrail
+                        hasEvents={events.length > 0}
+                        onClear={() => setFilters({ ...filters, category: 'all', search: '', enforcement: 'all', types: new Set() })}
+                      />
+                    ) : (
+                      <EventsTable events={newestFirst} arrivals={arrivals} page={eventsPage.page} pageSize={eventsPage.pageSize} />
+                    )
+                  ) : bookingCount === 0 ? (
+                    <EmptyTrail hasEvents={events.length > 0} onClear={() => handleView('events')} />
+                  ) : (
+                    <BookingsTable rows={bookingRows} page={bookingsPage.page} pageSize={bookingsPage.pageSize} />
+                  )}
+
+                  {showingEvents ? (
+                    <Pagination
+                      page={eventsPage.page}
+                      pageSize={eventsPage.pageSize}
+                      totalCount={newestFirst.length}
+                      onPageChange={(page) => setEventsPage((p) => ({ ...p, page }))}
+                      onPageSizeChange={(pageSize) => setEventsPage({ page: 1, pageSize })}
+                      label="events"
+                    />
+                  ) : (
+                    <Pagination
+                      page={bookingsPage.page}
+                      pageSize={bookingsPage.pageSize}
+                      totalCount={bookingCount}
+                      onPageChange={(page) => setBookingsPage((p) => ({ ...p, page }))}
+                      onPageSizeChange={(pageSize) => setBookingsPage({ page: 1, pageSize })}
+                      label="bookings"
+                    />
+                  )}
+                </div>
+
+                <p className="mt-4 max-w-[74ch] text-[length:var(--t-sm)] leading-relaxed text-[var(--text-muted)]">
+                  Every row above is an immutable, append-only fact recorded at the moment the action was attempted — including the ones that were refused.
+                  Nothing here is reconstructed after the fact.
+                </p>
+              </>
+            )}
+          </div>
+
+          <footer className="border-t border-[var(--border)] px-4 py-4 sm:px-6">
+            <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 text-[length:var(--t-sm)] text-[var(--text-muted)]">
+              <span className="flex items-center gap-2">
+                <LatchMark size={14} />
+                Latch — bounded payments for agentic bookings
+              </span>
+              <span title="Deposits, refunds and authorisations are executed and enforced by Razorpay — the payment_rail tier in this trail.">
+                Payments by <span className="font-medium text-[var(--text-secondary)]">Razorpay</span>
+              </span>
+            </div>
+          </footer>
+        </main>
+      </div>
     </div>
   )
 }
@@ -232,16 +303,13 @@ export default function App() {
  */
 function EmptyTrail({ hasEvents, onClear }: { hasEvents: boolean; onClear: () => void }) {
   return (
-    <div className="flex flex-col items-center gap-3 px-6 py-20 text-center">
-      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--paper-deep)] text-[var(--text-faint)]" aria-hidden>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="4" y="3" width="16" height="18" rx="2" />
-          <path d="M8 9h8M8 13h8M8 17h4" />
-        </svg>
+    <div className="flex flex-col items-center gap-3 border-t border-[var(--border)] px-6 py-20 text-center">
+      <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[var(--neutral-bg)] text-[var(--text-muted)]" aria-hidden>
+        <LedgerIcon size={20} />
       </div>
       {hasEvents ? (
         <>
-          <div className="text-[length:var(--t-base)] font-medium text-[var(--text)]">No events match these filters</div>
+          <div className="text-[length:var(--t-md)] font-semibold text-[var(--text)]">No events match these filters</div>
           <div className="max-w-[46ch] text-[length:var(--t-sm)] text-[var(--text-muted)]">The trail still holds every event — this view is just narrowed.</div>
           <button type="button" onClick={onClear} className="btn btn-secondary mt-1">
             Clear filters
@@ -249,11 +317,11 @@ function EmptyTrail({ hasEvents, onClear }: { hasEvents: boolean; onClear: () =>
         </>
       ) : (
         <>
-          <div className="text-[length:var(--t-base)] font-medium text-[var(--text)]">Waiting for the first event</div>
-          <div className="max-w-[52ch] text-[length:var(--t-sm)] leading-relaxed text-[var(--text-muted)]">
-            Drive an agent through the MCP tools — <span className="font-mono text-[var(--text)]">hold_slot</span>,{' '}
-            <span className="font-mono text-[var(--text)]">confirm_with_deposit</span>, <span className="font-mono text-[var(--text)]">cancel</span> — and each
-            attempt lands here as it happens, refusals included.
+          <div className="text-[length:var(--t-md)] font-semibold text-[var(--text)]">Waiting for the first event</div>
+          <div className="max-w-[54ch] text-[length:var(--t-sm)] leading-relaxed text-[var(--text-muted)]">
+            Drive an agent through the MCP tools — <span className="font-medium text-[var(--text)]">hold_slot</span>,{' '}
+            <span className="font-medium text-[var(--text)]">confirm_with_deposit</span>, <span className="font-medium text-[var(--text)]">cancel</span> — and
+            each attempt lands here as it happens, refusals included.
           </div>
         </>
       )}

@@ -34,16 +34,16 @@ export function EnforcementBreakdown({ counts }: { counts: Record<BoundEnforcer,
                       <span
                         key={d}
                         className="h-[5px] w-[5px] rounded-full"
-                        style={{ background: d <= i ? TIER_COLOR[tier.key] : 'var(--line-strong)' }}
+                        style={{ background: d <= i ? TIER_COLOR[tier.key] : 'var(--border-strong)' }}
                       />
                     ))}
                   </span>
                   <span className="text-[length:var(--t-sm)] font-medium text-[var(--text)]">{tier.label}</span>
-                  <span className="text-[length:var(--t-2xs)] text-[var(--text-faint)]">{tier.sub}</span>
+                  <span className="text-[length:var(--t-2xs)] text-[var(--text-muted)]">{tier.sub}</span>
                 </span>
-                <span className="font-mono text-[length:var(--t-sm)] font-semibold tabular-nums text-[var(--text)]">{value}</span>
+                <span className="text-[length:var(--t-sm)] font-semibold tabular-nums text-[var(--text)]">{value}</span>
               </div>
-              <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-[var(--paper-deep)]">
+              <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-[var(--neutral-bg)]">
                 <div
                   className="h-full rounded-full transition-[width] duration-[var(--dur-slow)] ease-[var(--ease-out-expo)]"
                   style={{ width: `${pct}%`, background: TIER_COLOR[tier.key] }}
@@ -54,7 +54,7 @@ export function EnforcementBreakdown({ counts }: { counts: Record<BoundEnforcer,
         })}
       </div>
 
-      <p className="mt-4 border-t border-[var(--line)] pt-3 text-[length:var(--t-xs)] leading-relaxed text-[var(--text-muted)]">
+      <p className="mt-4 border-t border-[var(--border)] pt-3 text-[length:var(--t-xs)] leading-relaxed text-[var(--text-muted)]">
         {total === 0
           ? 'No bounded actions recorded yet — each one will land in the tier that actually enforced it.'
           : 'Each bounded action is attributed to the strongest thing that actually stopped it going further. Higher on this ladder means less of the guarantee rests on Latch being bug-free.'}

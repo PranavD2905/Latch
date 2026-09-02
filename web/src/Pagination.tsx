@@ -1,21 +1,7 @@
 import { useMemo } from 'react'
+import { ChevronLeft, ChevronRight } from './icons'
 
-const PAGE_SIZE_OPTIONS = [10, 50, 100] as const
-
-function ChevronLeft() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="m15 18-6-6 6-6" />
-    </svg>
-  )
-}
-function ChevronRight() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="m9 18 6-6-6-6" />
-    </svg>
-  )
-}
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const
 
 /** Windowed page list — first, last, current ±1, with ellipses for gaps — so a large trail never renders hundreds of page buttons. */
 function pageWindow(current: number, total: number): (number | 'ellipsis')[] {
@@ -58,40 +44,32 @@ export function Pagination({
 
   if (totalCount === 0) return null
 
-  const first = (clampedPage - 1) * pageSize + 1
-  const last = Math.min(clampedPage * pageSize, totalCount)
-
   return (
-    <nav className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] bg-[var(--paper-sunk)] px-5 py-2.5" aria-label={`${label} pagination`}>
-      <div className="flex items-center gap-3">
-        <label className="flex items-center gap-1.5 text-[length:var(--t-xs)] text-[var(--text-muted)]">
-          Rows
-          <select value={pageSize} onChange={(e) => onPageSizeChange(Number(e.target.value))} className="control w-auto cursor-pointer py-1 text-[length:var(--t-xs)]">
-            {PAGE_SIZE_OPTIONS.map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="font-mono text-[length:var(--t-xs)] tabular-nums text-[var(--text-faint)]">
-          {first}–{last} of {totalCount}
-        </span>
-      </div>
+    <nav className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] px-4 py-3" aria-label={`${label} pagination`}>
+      <label className="flex items-center gap-2 text-[length:var(--t-sm)] text-[var(--text-secondary)]">
+        Rows per page
+        <select value={pageSize} onChange={(e) => onPageSizeChange(Number(e.target.value))} className="control w-auto cursor-pointer py-1">
+          {PAGE_SIZE_OPTIONS.map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </select>
+      </label>
 
       <div className="flex items-center gap-1">
         <button
           onClick={() => onPageChange(clampedPage - 1)}
           disabled={clampedPage === 1}
-          className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-muted)] transition-colors duration-[var(--dur)] hover:bg-[var(--paper-deep)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
+          className="flex h-7 w-7 items-center justify-center rounded-[var(--r-control)] border border-[var(--border-strong)] text-[var(--text-secondary)] transition-colors duration-[var(--dur)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"
           aria-label="Previous page"
         >
-          <ChevronLeft />
+          <ChevronLeft size={13} />
         </button>
 
         {windowed.map((p, i) =>
           p === 'ellipsis' ? (
-            <span key={`e${i}`} className="px-1 text-[length:var(--t-xs)] text-[var(--text-faint)]" aria-hidden>
+            <span key={`e${i}`} className="px-1 text-[length:var(--t-sm)] text-[var(--text-muted)]" aria-hidden>
               …
             </span>
           ) : (
@@ -99,8 +77,10 @@ export function Pagination({
               key={p}
               onClick={() => onPageChange(p)}
               aria-current={p === clampedPage ? 'page' : undefined}
-              className={`flex h-7 min-w-7 items-center justify-center rounded-md px-1.5 font-mono text-[length:var(--t-xs)] font-medium tabular-nums transition-colors duration-[var(--dur)] ${
-                p === clampedPage ? 'bg-[var(--text)] text-[var(--paper)]' : 'text-[var(--text-muted)] hover:bg-[var(--paper-deep)] hover:text-[var(--text)]'
+              className={`flex h-7 min-w-7 items-center justify-center rounded-[var(--r-control)] px-2 text-[length:var(--t-sm)] tabular-nums transition-colors duration-[var(--dur)] ${
+                p === clampedPage
+                  ? 'border border-[var(--blue)] bg-[var(--blue-bg)] font-semibold text-[var(--blue-hover)]'
+                  : 'border border-transparent text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]'
               }`}
             >
               {p}
@@ -111,10 +91,10 @@ export function Pagination({
         <button
           onClick={() => onPageChange(clampedPage + 1)}
           disabled={clampedPage === pageCount}
-          className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-muted)] transition-colors duration-[var(--dur)] hover:bg-[var(--paper-deep)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
+          className="flex h-7 w-7 items-center justify-center rounded-[var(--r-control)] border border-[var(--border-strong)] text-[var(--text-secondary)] transition-colors duration-[var(--dur)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"
           aria-label="Next page"
         >
-          <ChevronRight />
+          <ChevronRight size={13} />
         </button>
       </div>
     </nav>

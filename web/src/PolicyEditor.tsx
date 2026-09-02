@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { fetchActivePolicy, fetchServices, PolicyApiError, publishPolicy, updateService } from './policyApi'
 import type { LadderTier, Policy, PolicyDraft, Service } from './policyTypes'
 import { draftFromPolicy, validateDraft } from './policyTypes'
-import { formatRupees } from './types'
+import { AlertIcon, CheckCircleIcon } from './icons'
+import { formatRupeesFixed } from './types'
 
 const TOKEN_KEY = 'latch_merchant_token'
 
@@ -30,14 +31,12 @@ function durationLabel(seconds: number): string {
 
 /* ---------- shared panel furniture ---------- */
 
-function Panel({ title, note, children }: { title: string; note?: React.ReactNode; children: React.ReactNode }) {
+function Panel({ title, note, children, id }: { title: string; note?: React.ReactNode; children: React.ReactNode; id?: string }) {
   return (
-    <section className="panel">
-      <div className="flex flex-wrap items-start justify-between gap-3 px-5 pt-5">
-        <div className="max-w-[72ch]">
-          <h2 className="text-[length:var(--t-base)] font-semibold tracking-[-0.005em] text-[var(--text)]">{title}</h2>
-          {note && <p className="mt-1 text-[length:var(--t-xs)] leading-relaxed text-[var(--text-muted)]">{note}</p>}
-        </div>
+    <section className="card scroll-mt-20" id={id}>
+      <div className="px-5 pt-5">
+        <h2 className="text-[length:var(--t-base)] font-semibold text-[var(--text)]">{title}</h2>
+        {note && <p className="mt-1 max-w-[78ch] text-[length:var(--t-sm)] leading-relaxed text-[var(--text-muted)]">{note}</p>}
       </div>
       <div className="px-5 pb-5 pt-4">{children}</div>
     </section>
@@ -49,7 +48,7 @@ function Field({ label, hint, children }: { label: string; hint?: React.ReactNod
     <label className="flex flex-col gap-1.5">
       <span className="text-[length:var(--t-xs)] font-medium text-[var(--text-muted)]">{label}</span>
       {children}
-      {hint && <span className="text-[length:var(--t-2xs)] text-[var(--text-faint)]">{hint}</span>}
+      {hint && <span className="text-[length:var(--t-2xs)] text-[var(--text-muted)]">{hint}</span>}
     </label>
   )
 }
@@ -60,12 +59,12 @@ function NumberField({ label, value, onChange, hint, suffix }: { label: string; 
       <span className="relative flex items-center">
         <input
           type="number"
-          className="control font-mono tabular-nums"
+          className="control tabular-nums"
           style={suffix ? { paddingRight: `${suffix.length * 0.58 + 1.1}rem` } : undefined}
           value={Number.isFinite(value) ? value : ''}
           onChange={(e) => onChange(e.target.valueAsNumber)}
         />
-        {suffix && <span className="pointer-events-none absolute right-2.5 font-mono text-[length:var(--t-2xs)] text-[var(--text-faint)]">{suffix}</span>}
+        {suffix && <span className="pointer-events-none absolute right-2.5 text-[length:var(--t-2xs)] text-[var(--text-muted)]">{suffix}</span>}
       </span>
     </Field>
   )
@@ -98,7 +97,7 @@ function LadderEditor({ ladder, depositPaise, onChange }: { ladder: readonly Lad
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="grid grid-cols-[7rem_6rem_1fr_auto] items-center gap-3 px-3 text-[length:var(--t-2xs)] font-semibold uppercase tracking-[0.06em] text-[var(--text-faint)]">
+      <div className="grid grid-cols-[7rem_6rem_1fr_auto] items-center gap-3 px-3 text-[length:var(--t-2xs)] font-semibold uppercase tracking-[0.06em] text-[var(--text-muted)]">
         <span>Hours before</span>
         <span>Retained</span>
         <span>What that means</span>
@@ -113,12 +112,12 @@ function LadderEditor({ ladder, depositPaise, onChange }: { ladder: readonly Lad
         return (
           <div
             key={i}
-            className="grid grid-cols-[7rem_6rem_1fr_auto] items-center gap-3 rounded-lg bg-[var(--paper-sunk)] px-3 py-2.5 shadow-[inset_0_0_0_1px_var(--line)]"
+            className="grid grid-cols-[7rem_6rem_1fr_auto] items-center gap-3 rounded-[var(--r-control)] border border-[var(--border)] bg-[var(--surface-sunk)] px-3 py-2.5"
           >
             <span className="relative flex items-center">
               <input
                 type="number"
-                className="control font-mono tabular-nums"
+                className="control tabular-nums"
                 value={Number.isFinite(tier.hoursBefore) ? tier.hoursBefore : ''}
                 readOnly={isFloor}
                 disabled={isFloor}
@@ -130,23 +129,23 @@ function LadderEditor({ ladder, depositPaise, onChange }: { ladder: readonly Lad
             <span className="relative flex items-center">
               <input
                 type="number"
-                className="control pr-6 font-mono tabular-nums"
+                className="control pr-6 tabular-nums"
                 value={Number.isFinite(tier.retainPct) ? tier.retainPct : ''}
                 aria-label={`Tier ${i + 1} percent of deposit retained`}
                 onChange={(e) => updateTier(i, { retainPct: e.target.valueAsNumber })}
               />
-              <span className="pointer-events-none absolute right-2.5 font-mono text-[length:var(--t-2xs)] text-[var(--text-faint)]">%</span>
+              <span className="pointer-events-none absolute right-2.5 text-[length:var(--t-2xs)] text-[var(--text-muted)]">%</span>
             </span>
 
             <span className="min-w-0 text-[length:var(--t-xs)] text-[var(--text-muted)]">
               {validPct ? (
                 <>
-                  merchant keeps <span className="font-mono font-semibold text-[var(--text)]">{formatRupees(kept)}</span>, patient gets{' '}
-                  <span className="font-mono font-semibold" style={{ color: back > 0 ? 'var(--good-text)' : 'var(--text)' }}>
-                    {formatRupees(back)}
+                  merchant keeps <span className="font-semibold text-[var(--text)]">{formatRupeesFixed(kept)}</span>, patient gets{' '}
+                  <span className="font-semibold" style={{ color: back > 0 ? 'var(--good-text)' : 'var(--text)' }}>
+                    {formatRupeesFixed(back)}
                   </span>{' '}
                   back
-                  {isFloor && <span className="ml-1.5 text-[var(--text-faint)]">· floor tier, covers the appointment itself</span>}
+                  {isFloor && <span className="ml-1.5 text-[var(--text-muted)]">· floor tier, covers the appointment itself</span>}
                 </>
               ) : (
                 <span className="text-[var(--critical-text)]">retained % must be 0–100</span>
@@ -169,7 +168,7 @@ function LadderEditor({ ladder, depositPaise, onChange }: { ladder: readonly Lad
       <button
         type="button"
         onClick={addTier}
-        className="mt-1 w-fit rounded-lg border border-dashed border-[var(--line-strong)] px-3 py-1.5 text-[length:var(--t-xs)] font-medium text-[var(--text-muted)] transition-colors duration-[var(--dur)] hover:border-[var(--accent)] hover:text-[var(--accent-text)]"
+        className="mt-1 w-fit rounded-lg border border-dashed border-[var(--border-strong)] px-3 py-1.5 text-[length:var(--t-xs)] font-medium text-[var(--text-muted)] transition-colors duration-[var(--dur)] hover:border-[var(--blue)] hover:text-[var(--blue-hover)]"
       >
         + Add tier
       </button>
@@ -252,7 +251,7 @@ function ServicesEditor({ token, depositAmountPaise }: { token: string; depositA
       <Panel title="Services &amp; pricing" note={note}>
         <div className="flex flex-col gap-2" aria-busy="true" aria-label="Loading services">
           {[0, 1, 2].map((i) => (
-            <div key={i} className="h-[58px] animate-pulse rounded-lg bg-[var(--paper-deep)]" />
+            <div key={i} className="h-[58px] animate-pulse rounded-lg bg-[var(--neutral-bg)]" />
           ))}
         </div>
       </Panel>
@@ -270,11 +269,11 @@ function ServicesEditor({ token, depositAmountPaise }: { token: string; depositA
           return (
             <div
               key={service.serviceId}
-              className="flex flex-wrap items-center gap-3 rounded-lg bg-[var(--paper-sunk)] px-3 py-2.5 shadow-[inset_0_0_0_1px_var(--line)]"
+              className="flex flex-wrap items-center gap-3 rounded-[var(--r-control)] border border-[var(--border)] bg-[var(--surface-sunk)] px-3 py-2.5"
             >
               <div className="min-w-[9rem] flex-1">
                 <div className="text-[length:var(--t-sm)] font-medium text-[var(--text)]">{service.name}</div>
-                <div className="font-mono text-[length:var(--t-2xs)] text-[var(--text-faint)]">
+                <div className="text-[length:var(--t-2xs)] text-[var(--text-muted)]">
                   {service.durationMinutes} min · {shortServiceId(service.serviceId)}
                 </div>
               </div>
@@ -282,18 +281,18 @@ function ServicesEditor({ token, depositAmountPaise }: { token: string; depositA
               <span className="relative flex items-center">
                 <input
                   type="number"
-                  className="control w-36 pr-11 font-mono tabular-nums"
+                  className="control w-36 pr-11 tabular-nums"
                   aria-label={`${service.name} price in paise`}
                   value={draftValue}
                   onChange={(e) => setDrafts((prev) => ({ ...prev, [service.serviceId]: e.target.value }))}
                 />
-                <span className="pointer-events-none absolute right-2.5 font-mono text-[length:var(--t-2xs)] text-[var(--text-faint)]">paise</span>
+                <span className="pointer-events-none absolute right-2.5 text-[length:var(--t-2xs)] text-[var(--text-muted)]">paise</span>
               </span>
 
               <div className="min-w-[10rem] text-[length:var(--t-xs)]">
-                <div className="font-mono text-[var(--text)]">{Number.isFinite(Number(draftValue)) ? formatRupees(Number(draftValue)) : '—'}</div>
+                <div className="text-[var(--text)]">{Number.isFinite(Number(draftValue)) ? formatRupeesFixed(Number(draftValue)) : '—'}</div>
                 <div style={{ color: belowDeposit ? 'var(--critical-text)' : 'var(--text-muted)' }}>
-                  {belowDeposit ? '⚠ price is below the deposit' : Number.isFinite(mandatePaise) ? `mandate ${formatRupees(Math.max(mandatePaise, 0))}` : ''}
+                  {belowDeposit ? '⚠ price is below the deposit' : Number.isFinite(mandatePaise) ? `mandate ${formatRupeesFixed(Math.max(mandatePaise, 0))}` : ''}
                 </div>
               </div>
 
@@ -303,7 +302,7 @@ function ServicesEditor({ token, depositAmountPaise }: { token: string; depositA
                   {savingId === service.serviceId ? 'Saving…' : 'Save'}
                 </button>
               ) : (
-                <span className="flex min-w-[5.25rem] items-center justify-center gap-1.5 px-2 text-[length:var(--t-xs)] text-[var(--text-faint)]">
+                <span className="flex min-w-[5.25rem] items-center justify-center gap-1.5 px-2 text-[length:var(--t-xs)] text-[var(--text-muted)]">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                     <path d="M20 6 9 17l-5-5" />
                   </svg>
@@ -340,10 +339,11 @@ function Alert({ tone, children }: { tone: keyof typeof ALERT_TONE; children: Re
   return (
     <div
       role={tone === 'critical' ? 'alert' : 'status'}
-      className="rounded-lg px-3.5 py-2.5 text-[length:var(--t-sm)] leading-relaxed"
-      style={{ background: t.bg, color: t.text, boxShadow: `inset 0 0 0 1px color-mix(in oklab, ${t.ring} 30%, transparent)` }}
+      className="flex items-start gap-2 rounded-[var(--r-control)] border px-3 py-2.5 text-[length:var(--t-sm)] leading-relaxed"
+      style={{ background: t.bg, color: t.text, borderColor: `color-mix(in oklab, ${t.ring} 32%, transparent)` }}
     >
-      {children}
+      <span className="mt-px shrink-0">{tone === 'good' ? <CheckCircleIcon size={13} /> : <AlertIcon size={13} />}</span>
+      <span>{children}</span>
     </div>
   )
 }
@@ -367,7 +367,7 @@ function diffDraft(current: PolicyDraft | undefined, next: PolicyDraft): Change[
   const push = (label: string, from: string | number, to: string | number) => {
     if (String(from) !== String(to)) changes.push({ label, from: String(from), to: String(to) })
   }
-  push('Deposit', formatRupees(current.depositAmountPaise), formatRupees(next.depositAmountPaise))
+  push('Deposit', formatRupeesFixed(current.depositAmountPaise), formatRupeesFixed(next.depositAmountPaise))
   push('Cancellation ladder', ladderText(current.cancellationLadder), ladderText(next.cancellationLadder))
   push('Hold TTL', durationLabel(current.holdTtlSeconds), durationLabel(next.holdTtlSeconds))
   push('Max concurrent holds', current.maxConcurrentHoldsPerAgent, next.maxConcurrentHoldsPerAgent)
@@ -380,7 +380,7 @@ function diffDraft(current: PolicyDraft | undefined, next: PolicyDraft): Change[
 function TokenGate({ onSubmit }: { onSubmit: (token: string) => void }) {
   const [value, setValue] = useState('')
   return (
-    <div className="panel mx-auto mt-6 max-w-[26rem] p-6">
+    <div className="card mx-auto mt-6 max-w-[26rem] p-6">
       <div className="text-[length:var(--t-lg)] font-semibold tracking-[-0.01em] text-[var(--text)]">Merchant sign-in</div>
       <p className="mt-1.5 text-[length:var(--t-sm)] leading-relaxed text-[var(--text-muted)]">
         Publishing a policy needs the merchant API token. It&apos;s kept only in this browser tab&apos;s session storage — never sent anywhere but the merchant
@@ -394,7 +394,7 @@ function TokenGate({ onSubmit }: { onSubmit: (token: string) => void }) {
         }}
       >
         <Field label="Merchant API token">
-          <input type="password" className="control font-mono" placeholder="latch_mk_…" value={value} onChange={(e) => setValue(e.target.value)} autoFocus />
+          <input type="password" className="control" placeholder="latch_mk_…" value={value} onChange={(e) => setValue(e.target.value)} autoFocus />
         </Field>
         <button type="submit" disabled={!value.trim()} className="btn btn-primary w-full">
           Continue
@@ -416,7 +416,6 @@ export function PolicyEditor() {
   const [publishing, setPublishing] = useState(false)
   const [publishError, setPublishError] = useState<string | undefined>()
   const [justPublished, setJustPublished] = useState<number | undefined>()
-
   useEffect(() => {
     if (!token) return
     let cancelled = false
@@ -485,10 +484,10 @@ export function PolicyEditor() {
     return (
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_21rem]" aria-busy="true" aria-label="Loading the active policy">
         <div className="flex flex-col gap-4">
-          <div className="panel h-[248px] animate-pulse" />
-          <div className="panel h-[168px] animate-pulse" />
+          <div className="card h-[248px] animate-pulse" />
+          <div className="card h-[168px] animate-pulse" />
         </div>
-        <div className="panel h-[224px] animate-pulse" />
+        <div className="card h-[224px] animate-pulse" />
       </div>
     )
   }
@@ -520,7 +519,7 @@ export function PolicyEditor() {
               value={draft.depositAmountPaise}
               onChange={(n) => setDraft({ ...draft, depositAmountPaise: n })}
               hint={
-                <span className="font-mono text-[length:var(--t-xs)] text-[var(--text)]">{formatRupees(draft.depositAmountPaise || 0)}</span>
+                <span className="text-[length:var(--t-xs)] font-medium text-[var(--text)]">{formatRupeesFixed(draft.depositAmountPaise || 0)}</span>
               }
             />
             <p className="text-[length:var(--t-xs)] leading-relaxed text-[var(--text-muted)]">
@@ -528,7 +527,7 @@ export function PolicyEditor() {
             </p>
           </div>
 
-          <div className="mt-5 border-t border-[var(--line)] pt-4">
+          <div className="mt-5 border-t border-[var(--border)] pt-4">
             <LadderEditor
               ladder={draft.cancellationLadder}
               depositPaise={draft.depositAmountPaise}
@@ -571,13 +570,13 @@ export function PolicyEditor() {
 
       {/* ------- right: version, diff, publish ------- */}
       <aside className="flex flex-col gap-4 lg:sticky lg:top-[4.5rem]">
-        <section className="panel p-5">
+        <section className="card p-5">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-[length:var(--t-2xs)] font-semibold uppercase tracking-[0.06em] text-[var(--text-faint)]">Active version</div>
+              <div className="text-[length:var(--t-2xs)] font-semibold uppercase tracking-[0.06em] text-[var(--text-muted)]">Active version</div>
               {policy ? (
                 <div className="mt-1.5 flex items-baseline gap-2">
-                  <span className="font-mono text-[length:var(--t-xl)] font-semibold tabular-nums text-[var(--text)]">v{policy.policyVersion}</span>
+                  <span className="text-[length:var(--t-xl)] font-semibold tabular-nums text-[var(--text)]">v{policy.policyVersion}</span>
                   <span className="text-[length:var(--t-xs)] text-[var(--text-muted)]">cited by every new booking</span>
                 </div>
               ) : (
@@ -589,8 +588,8 @@ export function PolicyEditor() {
             </button>
           </div>
 
-          <div className="mt-4 border-t border-[var(--line)] pt-4">
-            <div className="text-[length:var(--t-2xs)] font-semibold uppercase tracking-[0.06em] text-[var(--text-faint)]">Pending changes</div>
+          <div className="mt-4 border-t border-[var(--border)] pt-4">
+            <div className="text-[length:var(--t-2xs)] font-semibold uppercase tracking-[0.06em] text-[var(--text-muted)]">Pending changes</div>
 
             {!hasChanges ? (
               <p className="mt-2 text-[length:var(--t-sm)] text-[var(--text-muted)]">The draft matches the active policy. Edit something on the left to publish a new version.</p>
@@ -601,9 +600,9 @@ export function PolicyEditor() {
                 {changes.map((c) => (
                   <li key={c.label}>
                     <div className="text-[length:var(--t-xs)] font-medium text-[var(--text)]">{c.label}</div>
-                    <div className="mt-0.5 flex flex-wrap items-baseline gap-1.5 font-mono text-[length:var(--t-xs)]">
-                      <span className="text-[var(--text-faint)] line-through">{c.from}</span>
-                      <span className="text-[var(--text-faint)]" aria-hidden>
+                    <div className="mt-0.5 flex flex-wrap items-baseline gap-1.5 text-[length:var(--t-xs)]">
+                      <span className="text-[var(--text-muted)] line-through">{c.from}</span>
+                      <span className="text-[var(--text-muted)]" aria-hidden>
                         →
                       </span>
                       <span className="font-semibold text-[var(--text)]">{c.to}</span>
@@ -614,7 +613,7 @@ export function PolicyEditor() {
             )}
           </div>
 
-          <div className="mt-4 flex flex-col gap-2.5 border-t border-[var(--line)] pt-4">
+          <div className="mt-4 flex flex-col gap-2.5 border-t border-[var(--border)] pt-4">
             {justPublished !== undefined && !hasChanges && (
               <Alert tone="good">
                 Published v{justPublished}. Immutable from here — a booking confirmed under an older version keeps cancelling under that version, forever.
