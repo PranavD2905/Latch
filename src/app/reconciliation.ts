@@ -1,5 +1,5 @@
 import { createReconciliationMismatchEvent } from '../domain/event-factory.js'
-import type { AuthorizationHeldEvent, BookingEvent, DepositCapturedEvent, ReconciliationMismatchEvent } from '../domain/events.js'
+import type { AuthorizationHeldEvent, BookingEvent, DepositCapturedEvent, ReconciliationMismatchEvent, SessionCompleteAuthorizationHeldEvent } from '../domain/events.js'
 import type { Paise } from '../domain/money.js'
 import type { BookingSnapshot } from '../ports/event-store.js'
 import type { AppDeps } from './types.js'
@@ -142,7 +142,18 @@ export async function reconcileObservedPayment(bookingId: string, observed: Obse
 function isRecordedAnywhere(history: readonly BookingEvent[], razorpayId: string): boolean {
   return history.some((e) => {
     if (e.type === 'DEPOSIT_CAPTURED' || e.type === 'NO_SHOW_CHARGED') return e.authority.razorpayPaymentId === razorpayId
+    // AUTHORIZATION_HELD is the no-show leg's event type, historical-only
+    // since that feature's removal — no live booking can produce one. The
+    // session-complete mandate's authorization (the one every live booking
+    // actually has) is SESSION_COMPLETE_AUTHORIZATION_HELD; missing it here
+    // meant a `payment.authorized` webhook that arrived (or redelivered)
+    // after the booking's own finalize had already recorded it would find
+    // nothing this function recognised, `pendingPaymentLegs` already cleared
+    // by that same finalize, and fire a false RECONCILIATION_MISMATCH
+    // ("Razorpay says authorized") against a payment that was, in fact,
+    // already fully recorded — just under this type instead.
     if (e.type === 'AUTHORIZATION_HELD') return (e as AuthorizationHeldEvent).authorizationId === razorpayId
+    if (e.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD') return (e as SessionCompleteAuthorizationHeldEvent).authorizationId === razorpayId
     return false
   })
 }
