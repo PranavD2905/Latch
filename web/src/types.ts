@@ -60,6 +60,7 @@ export type BookingEvent = EventBase & {
   [key: string]: unknown
 } & Partial<MoneyFields>
 
+/** `NO_SHOW_CHARGED` is retired (migration 0017) but stays here: a pre-removal event still has to categorise as money when the trail is read back. */
 export const MONEY_EVENT_TYPES = ['DEPOSIT_CAPTURED', 'RETENTION_APPLIED', 'REFUND_ISSUED', 'NO_SHOW_CHARGED', 'SESSION_COMPLETE_CHARGED'] as const
 
 export function isMoneyEvent(event: BookingEvent): boolean {

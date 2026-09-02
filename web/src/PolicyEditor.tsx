@@ -510,7 +510,7 @@ export function PolicyEditor() {
       <div className="flex flex-col gap-4">
         <Panel
           title="Deposit &amp; cancellation ladder"
-          note="Taken up front when a booking is confirmed, and returned on the sliding scale below. A no-show forfeits the deposit at the floor tier; a patient who attends is charged the session-complete mandate instead."
+          note="Taken up front when a booking is confirmed, and returned on the sliding scale below. A patient who never cancels and never attends is caught by the floor tier, which forfeits the deposit. A patient who does attend is charged the session-complete mandate instead."
         >
           <div className="grid gap-4 sm:grid-cols-[13rem_minmax(0,1fr)] sm:items-end">
             <NumberField

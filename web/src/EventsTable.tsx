@@ -26,7 +26,7 @@ function synopsis(event: BookingEvent): string {
     case 'POLICY_ACKNOWLEDGED':
       return `agent acknowledged ladder v${event['policyVersion']}`
     case 'AUTHORIZATION_HELD':
-      return `no-show ceiling · rail=${event['rail']} · lapses ${timeLabel(event['expiresAt'] as string)}`
+      return `no-show ceiling · rail=${event['rail']} · was due to lapse ${timeLabel(event['expiresAt'] as string)}`
     case 'SESSION_COMPLETE_AUTHORIZATION_HELD':
       return `session-complete mandate · rail=${event['rail']} · lapses ${timeLabel(event['expiresAt'] as string)}`
     case 'SESSION_COMPLETE_AUTHORIZATION_RELEASED':
@@ -88,6 +88,22 @@ function amountCell(event: BookingEvent): { text: string; note: string; color: s
   }
   return undefined
 }
+
+/**
+ * Event types belonging to the no-show feature, removed in migration 0017
+ * (dev-logs/032). Nothing new produces them, but the trail is append-only, so
+ * a pre-removal booking's history still carries them and must stay readable
+ * forever. They are labelled rather than hidden — a reader has to be able to
+ * tell a live mechanism from a retired one.
+ */
+const RETIRED_TYPES = new Set([
+  'AUTHORIZATION_HELD',
+  'AUTHORIZATION_RELEASED',
+  'AUTHORIZATION_LAPSED',
+  'NO_SHOW_ELIGIBLE',
+  'NO_SHOW_CHARGED',
+  'NON_ATTENDANCE_MARKED',
+])
 
 const CATEGORY_TINT: Record<string, string> = {
   money: 'var(--blue)',
@@ -190,7 +206,7 @@ function DetailPanel({ event }: { event: BookingEvent }) {
     return (
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--r-card)] border border-[var(--border)] bg-[var(--surface)] p-4">
         <span className="max-w-[76ch] text-[length:var(--t-sm)] leading-relaxed text-[var(--text-secondary)]">
-          {event.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD' ? 'Session-complete mandate' : 'No-show ceiling'} registered:{' '}
+          {event.type === 'SESSION_COMPLETE_AUTHORIZATION_HELD' ? 'Session-complete mandate' : 'No-show ceiling (retired feature)'} registered:{' '}
           <span className="font-semibold text-[var(--text)]">{formatRupeesFixed(event['amountPaise'] as number)}</span> — the authorised amount is the ceiling,
           so there is no headroom to abuse.
         </span>
@@ -255,6 +271,15 @@ export function EventsTable({
                       >
                         {event.type}
                       </span>
+                      {RETIRED_TYPES.has(event.type) && (
+                        <span
+                          className="pill"
+                          style={{ background: 'var(--neutral-bg)', color: 'var(--text-muted)' }}
+                          title="The no-show feature was removed in migration 0017. This is a recorded historical fact; nothing new produces this event type."
+                        >
+                          Retired
+                        </span>
+                      )}
                     </span>
                   </td>
                   <td className="whitespace-nowrap text-[length:var(--t-sm)] text-[var(--text-secondary)]" title={event.bookingId}>

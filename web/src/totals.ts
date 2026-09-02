@@ -2,12 +2,27 @@ import type { BookingEvent, BoundEnforcer } from './types'
 import { enforcerOf } from './types'
 
 export interface RunningTotals {
-  /** Deposits + no-show charges, net of refunds. Must land on ₹0 after a merchant decline — the demo's punchline. */
+  /** Deposits + session-complete charges, net of refunds. Must land on ₹0 after a merchant decline — the demo's punchline. */
   netCustomerCostPaise: number
-  /** What the merchant actually keeps: applied retentions plus no-show charges. */
+  /** What the merchant actually keeps: applied retentions plus session-complete charges. */
   netMerchantRetentionPaise: number
-  /** Sum, across every still-open authorisation, of ceiling minus whatever has been captured against it. */
+  /**
+   * Headroom Latch can still act on: the session-complete mandates that are
+   * open right now.
+   *
+   * Deliberately excludes the pre-removal no-show authorisation leg, which is
+   * counted separately below. Both are real money still held on the rail, but
+   * only one of them is capturable — see `retiredNoShowHeadroomPaise`.
+   */
   authorizationHeadroomPaise: number
+  /**
+   * The no-show authorisation leg, removed in migration 0017 (dev-logs/032).
+   * Any leg opened before that removal is frozen: no tool can capture it,
+   * and `authorization-lapse-worker.ts` no longer sweeps it, so it can never
+   * lapse either. Folding it into the headline headroom would overstate what
+   * the merchant can actually collect, so the two are reported apart.
+   */
+  retiredNoShowHeadroomPaise: number
   /**
    * dev-logs/014, item 5: docs/05-cost-model.md's "−₹7.08 sunk MDR" made
    * live rather than doc-only. Razorpay's platform fee (2% + 18% GST =
@@ -32,7 +47,13 @@ export interface RunningPoint extends RunningTotals {
 /** docs/05-cost-model.md Part 2: 2% platform fee × 1.18 GST. ₹300 × this rate = ₹7.08, exactly the worked example. */
 export const RAZORPAY_MDR_RATE = 0.0236
 
-const EMPTY_TOTALS: RunningTotals = { netCustomerCostPaise: 0, netMerchantRetentionPaise: 0, authorizationHeadroomPaise: 0, sunkMdrPaise: 0 }
+const EMPTY_TOTALS: RunningTotals = {
+  netCustomerCostPaise: 0,
+  netMerchantRetentionPaise: 0,
+  authorizationHeadroomPaise: 0,
+  retiredNoShowHeadroomPaise: 0,
+  sunkMdrPaise: 0,
+}
 
 /**
  * Folds `events` (oldest first) into a running snapshot at every step —
@@ -41,7 +62,7 @@ const EMPTY_TOTALS: RunningTotals = { netCustomerCostPaise: 0, netMerchantRetent
  * not the raw `action.direction` field: docs/03-domain-model.md §4's event
  * catalogue names each money event's direction relative to the merchant
  * explicitly (`DEPOSIT_CAPTURED` "in", `RETENTION_APPLIED` "kept",
- * `REFUND_ISSUED` "out", `NO_SHOW_CHARGED` "in") — that's the authoritative
+ * `REFUND_ISSUED` "out", `SESSION_COMPLETE_CHARGED` "in") — that's the authoritative
  * axis for a running total. `direction` itself is rendered verbatim on each
  * event row since it's part of the actual recorded fact, but it isn't a
  * safe input to sum across event types for this purpose (see dev-logs/011).
@@ -50,7 +71,10 @@ export function computeRunningSeries(events: readonly BookingEvent[]): RunningPo
   let netCustomerCostPaise = 0
   let netMerchantRetentionPaise = 0
   let sunkMdrPaise = 0
-  const headroomByBooking = new Map<string, number>()
+  // Two ledgers, not one keyed map: the session-complete leg is live and the
+  // no-show leg is frozen history, and the summary reports them separately.
+  const sessionCompleteHeadroom = new Map<string, number>()
+  const retiredNoShowHeadroom = new Map<string, number>()
 
   return events.map((event, index) => {
     switch (event.type) {
@@ -75,44 +99,51 @@ export function computeRunningSeries(events: readonly BookingEvent[]): RunningPo
         const amount = event.action?.amountPaise ?? 0
         netCustomerCostPaise += amount
         netMerchantRetentionPaise += amount
-        headroomByBooking.set(`${event.bookingId}:no_show`, event.bound?.headroomAfterPaise ?? 0)
+        retiredNoShowHeadroom.set(event.bookingId, event.bound?.headroomAfterPaise ?? 0)
         break
       }
       case 'SESSION_COMPLETE_CHARGED': {
         const amount = event.action?.amountPaise ?? 0
         netCustomerCostPaise += amount
         netMerchantRetentionPaise += amount
-        headroomByBooking.set(`${event.bookingId}:session_complete`, event.bound?.headroomAfterPaise ?? 0)
+        sessionCompleteHeadroom.set(event.bookingId, event.bound?.headroomAfterPaise ?? 0)
         break
       }
+      // The unprefixed AUTHORIZATION_* types are the no-show leg. Nothing new
+      // produces them, but a pre-removal booking's history still carries them
+      // and must fold exactly as it always did.
       case 'AUTHORIZATION_HELD': {
-        // Keyed per leg, not just per booking — a single booking can have
-        // both a no-show ceiling and a session-complete mandate live at
-        // once, and they must be summed independently rather than one
-        // overwriting the other.
-        headroomByBooking.set(`${event.bookingId}:no_show`, (event['amountPaise'] as number | undefined) ?? 0)
+        retiredNoShowHeadroom.set(event.bookingId, (event['amountPaise'] as number | undefined) ?? 0)
         break
       }
       case 'SESSION_COMPLETE_AUTHORIZATION_HELD': {
-        headroomByBooking.set(`${event.bookingId}:session_complete`, (event['amountPaise'] as number | undefined) ?? 0)
+        sessionCompleteHeadroom.set(event.bookingId, (event['amountPaise'] as number | undefined) ?? 0)
         break
       }
       case 'AUTHORIZATION_RELEASED':
       case 'AUTHORIZATION_LAPSED': {
-        headroomByBooking.delete(`${event.bookingId}:no_show`)
+        retiredNoShowHeadroom.delete(event.bookingId)
         break
       }
       case 'SESSION_COMPLETE_AUTHORIZATION_RELEASED':
       case 'SESSION_COMPLETE_AUTHORIZATION_LAPSED': {
-        headroomByBooking.delete(`${event.bookingId}:session_complete`)
+        sessionCompleteHeadroom.delete(event.bookingId)
         break
       }
       default:
         break
     }
 
-    const authorizationHeadroomPaise = [...headroomByBooking.values()].reduce((sum, v) => sum + v, 0)
-    return { event, index, netCustomerCostPaise, netMerchantRetentionPaise, authorizationHeadroomPaise, sunkMdrPaise }
+    const sum = (m: Map<string, number>) => [...m.values()].reduce((total, v) => total + v, 0)
+    return {
+      event,
+      index,
+      netCustomerCostPaise,
+      netMerchantRetentionPaise,
+      authorizationHeadroomPaise: sum(sessionCompleteHeadroom),
+      retiredNoShowHeadroomPaise: sum(retiredNoShowHeadroom),
+      sunkMdrPaise,
+    }
   })
 }
 

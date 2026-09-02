@@ -79,7 +79,7 @@ export function SummaryCards({
       <div className="card px-6 py-5">
         <div className="flex items-center gap-1.5 text-[length:var(--t-base)] font-semibold text-[var(--text)]">
           Net customer cost
-          <Info text="Deposits and no-show charges, net of refunds. Lands on ₹0 after a merchant decline." />
+          <Info text="Deposits and session-complete charges, net of refunds. Lands on ₹0 after a merchant decline." />
         </div>
         <div
           className="mt-1.5 text-[length:var(--t-figure)] font-semibold leading-none tracking-[-0.02em]"
@@ -104,12 +104,12 @@ export function SummaryCards({
           icon={<RupeeFlowIcon size={16} />}
           tint="var(--good)"
           title="Merchant retention"
-          info="Applied retentions plus no-show charges — what the merchant actually keeps."
+          info="Applied retentions plus session-complete charges — what the merchant actually keeps."
           value={<Amount paise={totals.netMerchantRetentionPaise} />}
           caption={
             totals.sunkMdrPaise > 0 ? (
               <>
-                kept from cancellations + no-shows ·{' '}
+                kept from the cancellation ladder ·{' '}
                 <span
                   className="font-medium text-[var(--warning-text)]"
                   title="Razorpay's platform fee is charged at capture and never reversed on a refund — docs/05-cost-model.md."
@@ -118,7 +118,7 @@ export function SummaryCards({
                 </span>
               </>
             ) : (
-              'kept from cancellations + no-shows'
+              'kept from the cancellation ladder'
             )
           }
           action={undefined}
@@ -138,9 +138,23 @@ export function SummaryCards({
           icon={<ShieldIcon size={16} />}
           tint="var(--blue)"
           title="Authorisation headroom"
-          info="Ceiling minus captured, summed across every authorisation still open."
+          info="Ceiling minus captured, summed across every session-complete mandate still open."
           value={<Amount paise={totals.authorizationHeadroomPaise} />}
-          caption="across every still-open authorisation"
+          caption={
+            totals.retiredNoShowHeadroomPaise > 0 ? (
+              <>
+                across every open session-complete mandate ·{' '}
+                <span
+                  className="font-medium text-[var(--warning-text)]"
+                  title="The no-show authorisation leg was removed in migration 0017. A leg opened before that removal can no longer be captured, and the lapse worker no longer sweeps it, so it sits on the rail indefinitely."
+                >
+                  +{formatRupeesFixed(totals.retiredNoShowHeadroomPaise)} frozen on the retired no-show leg
+                </span>
+              </>
+            ) : (
+              'across every open session-complete mandate'
+            )
+          }
         />
       </div>
     </div>
