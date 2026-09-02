@@ -302,4 +302,43 @@ describe('confirm_with_deposit — which legs apply, and the PENDING/retry cycle
     expect(trail.filter((e) => e.type === 'PAYMENT_REQUESTED').length).toBeGreaterThanOrEqual(1)
     expect((await deps.eventStore.loadSnapshot(held.bookingId))?.pendingPaymentLegs).toBeUndefined() // cleared on confirm — stale links stop resolving
   })
+
+  it('a retry that finds the booking already CONFIRMED under a different idempotency key replays CONFIRMED instead of refusing HOLD_EXPIRED', async () => {
+    // Reproduces the live-production shape (dev-logs/031's finalize-from-webhook):
+    // the agent's own confirm_with_deposit call returns PENDING and releases its
+    // claim; before the agent retries, a webhook-driven finalize confirms the
+    // same booking under its own, different idempotency key. The agent's retry —
+    // same key as its first call, now stale — must not see this as "no live hold."
+    const paymentProvider = new FakePaymentProvider()
+    const paymentRail = new FakePaymentRail()
+    const deps = buildDeps({ paymentProvider, paymentRail })
+    const held = await holdFreshSlot(deps, new Date('2026-08-25T10:00:00+05:30'))
+    const agentKey = freshKey()
+    paymentProvider.setScenario(agentKey, 'pending')
+    paymentRail.setScenario(`${agentKey}:session_complete_auth`, 'pending')
+
+    const first = await confirmWithDeposit({ bookingId: held.bookingId, agentId: 'agent_1', acknowledgedPolicyVersion: 1, idempotencyKey: agentKey }, deps)
+    expect(first.status).toBe('PENDING')
+
+    // The webhook's own finalize path, racing ahead of the agent — a different
+    // idempotency key, same booking, both legs now actually paid.
+    paymentProvider.completeDeposit(agentKey)
+    paymentRail.completeAuthorization(`${agentKey}:session_complete_auth`)
+    const webhookKey = `webhook_finalize_${held.bookingId}`
+    const confirmedByWebhook = requireConfirmed(
+      await confirmWithDeposit({ bookingId: held.bookingId, agentId: 'agent_1', acknowledgedPolicyVersion: 1, idempotencyKey: webhookKey }, deps),
+    )
+    expect((await deps.eventStore.loadSnapshot(held.bookingId))?.status).toBe('CONFIRMED')
+
+    // The agent's own retry, same key as its first (now-released) call.
+    const retry = requireConfirmed(await confirmWithDeposit({ bookingId: held.bookingId, agentId: 'agent_1', acknowledgedPolicyVersion: 1, idempotencyKey: agentKey }, deps))
+    expect(retry.status).toBe('CONFIRMED')
+    expect(retry.deposit).toEqual(confirmedByWebhook.deposit)
+    expect(retry.sessionCompleteMandate).toEqual(confirmedByWebhook.sessionCompleteMandate)
+
+    // No duplicate money events from replaying the already-settled outcome.
+    const trail = await deps.eventStore.loadEvents(held.bookingId)
+    expect(trail.filter((e) => e.type === 'DEPOSIT_CAPTURED')).toHaveLength(1)
+    expect(trail.filter((e) => e.type === 'BOOKING_CONFIRMED')).toHaveLength(1)
+  })
 })

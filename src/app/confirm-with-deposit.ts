@@ -5,7 +5,7 @@ import {
   createPolicyAcknowledgedEvent,
   createSessionCompleteAuthorizationHeldEvent,
 } from '../domain/event-factory.js'
-import type { BookingEvent, PaymentRequestedLeg } from '../domain/events.js'
+import type { BookingEvent, DepositCapturedEvent, PaymentRequestedLeg } from '../domain/events.js'
 import { subtractPaise, toPaise, type Paise } from '../domain/money.js'
 import type { Policy } from '../domain/policy.js'
 import { Refusal, type RefusalCode } from '../domain/refusals.js'
@@ -184,6 +184,7 @@ export class BookingNotFoundError extends Error {}
 type GateOutcome =
   | { kind: 'ok'; snapshot: BookingSnapshot; policy: Policy; service: ServiceRecord }
   | { kind: 'refused'; code: RefusalCode; reason: string }
+  | { kind: 'already_confirmed'; snapshot: BookingSnapshot }
   | { kind: 'not_found' }
 
 export async function confirmWithDeposit(cmd: ConfirmWithDepositCommand, deps: AppDeps): Promise<ConfirmWithDepositResult> {
@@ -214,6 +215,46 @@ export async function confirmWithDeposit(cmd: ConfirmWithDepositCommand, deps: A
   } catch (err) {
     await deps.idempotencyStore.release('confirm_with_deposit', cmd.idempotencyKey)
     throw err
+  }
+}
+
+/**
+ * Reconstructs the `CONFIRMED` result for a booking the gate found already
+ * settled out from under this call — see the `already_confirmed` gate
+ * outcome above. `BookingSnapshot` itself only carries the session-complete
+ * mandate's fields (`confirmWithDepositClaimed`'s own finalize projection);
+ * the deposit has no projected field at all, so it's read off the trail's
+ * own `DEPOSIT_CAPTURED` event, the same place `cancel-booking.ts` reads it
+ * from for the same reason.
+ */
+async function buildConfirmedResultFromSettledBooking(snapshot: BookingSnapshot, deps: AppDeps): Promise<ConfirmWithDepositResult> {
+  if (snapshot.policyVersion === undefined) {
+    throw new Error(`confirm_with_deposit: booking ${snapshot.bookingId} is CONFIRMED but has no recorded policyVersion — should be structurally impossible`)
+  }
+
+  const history = await deps.eventStore.loadEvents(snapshot.bookingId)
+  const depositEvent = [...history].reverse().find((e): e is DepositCapturedEvent => e.type === 'DEPOSIT_CAPTURED')
+  if (depositEvent && !depositEvent.authority.razorpayPaymentId) {
+    throw new Error(`confirm_with_deposit: DEPOSIT_CAPTURED for ${snapshot.bookingId} has no razorpayPaymentId — should be structurally impossible`)
+  }
+
+  const hasSessionCompleteMandate =
+    snapshot.sessionCompleteAuthorizationId !== undefined &&
+    snapshot.sessionCompleteAuthorizationAmountPaise !== undefined &&
+    snapshot.sessionCompleteAuthorizationExpiresAt !== undefined
+
+  return {
+    bookingId: snapshot.bookingId,
+    status: 'CONFIRMED',
+    policyVersion: snapshot.policyVersion,
+    deposit: depositEvent ? { paymentId: depositEvent.authority.razorpayPaymentId!, amountPaise: depositEvent.action.amountPaise } : undefined,
+    sessionCompleteMandate: hasSessionCompleteMandate
+      ? {
+          authorizationId: snapshot.sessionCompleteAuthorizationId!,
+          amountPaise: snapshot.sessionCompleteAuthorizationAmountPaise!,
+          expiresAt: snapshot.sessionCompleteAuthorizationExpiresAt!.toISOString(),
+        }
+      : undefined,
   }
 }
 
@@ -249,6 +290,16 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
     const now = deps.clock.now()
     const holdLive = snapshot.status === 'HELD' && snapshot.holdExpiresAt !== undefined && snapshot.holdExpiresAt.getTime() > now.getTime()
     if (!holdLive) {
+      // A webhook-driven finalize (`finalize-from-webhook.ts`, dev-logs/031)
+      // can confirm this exact booking between this call and an earlier one
+      // that returned PENDING for the same idempotencyKey — real money
+      // already moved, under a different idempotency key (the webhook's
+      // own), so the claim cache above never caught it. HOLD_EXPIRED means
+      // "nothing happened, retry or give up"; here something very much did,
+      // so replay the now-settled outcome instead of refusing it.
+      if (snapshot.status === 'CONFIRMED') {
+        return { kind: 'already_confirmed', snapshot }
+      }
       return refuse('HOLD_EXPIRED', `booking ${snapshot.bookingId} has no live, unexpired hold (status=${snapshot.status})`)
     }
 
@@ -310,6 +361,9 @@ async function confirmWithDepositClaimed(cmd: ConfirmWithDepositCommand, deps: A
   }
   if (gateOutcome.kind === 'refused') {
     throw new Refusal(gateOutcome.code, gateOutcome.reason)
+  }
+  if (gateOutcome.kind === 'already_confirmed') {
+    return buildConfirmedResultFromSettledBooking(gateOutcome.snapshot, deps)
   }
 
   const { snapshot, service } = gateOutcome
