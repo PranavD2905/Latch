@@ -1,33 +1,35 @@
 import type { BoundEnforcer } from './types'
 
 /**
- * prompts/slice-6.md item 3 — "the most important design decision in the
- * UI." Three genuinely different strengths, made visually inescapable: a
- * filled-dot strength meter plus escalating color/weight, not a single grey
- * badge with different text. `payment_rail` reads as unmistakably stronger
- * at a glance — heavier border, saturated fill, filled meter — even at
- * video-compression quality on a phone.
+ * The most important design decision in this UI: three genuinely different
+ * strengths made visually inescapable. A filled-dot strength meter plus
+ * escalating colour and border weight, not one grey badge with different
+ * text — `payment_rail` has to read as unmistakably stronger at a glance,
+ * even at video-compression quality on a phone.
  */
-const CONFIG: Record<BoundEnforcer, { label: string; sub: string; className: string; dotClassName: string; strength: number }> = {
+const CONFIG: Record<BoundEnforcer, { label: string; short: string; sub: string; className: string; dot: string; strength: number }> = {
   latch_policy: {
     label: 'LATCH POLICY',
+    short: 'POLICY',
     sub: 'our own code — a bug could defeat it',
-    className: 'border border-[var(--border-strong)] bg-white text-[var(--slate)]',
-    dotClassName: 'bg-[var(--slate)]',
+    className: 'bg-[var(--paper)] text-[var(--slate)] shadow-[inset_0_0_0_1px_var(--line-strong)]',
+    dot: 'var(--tier-policy)',
     strength: 1,
   },
   db_constraint: {
     label: 'DB CONSTRAINT',
+    short: 'DB',
     sub: 'postgres unique index — cannot be raced',
-    className: 'border border-[var(--blue)]/40 bg-[var(--blue-bg)] text-[var(--blue-text)]',
-    dotClassName: 'bg-[var(--blue)]',
+    className: 'bg-[var(--tier-db-bg)] text-[var(--tier-db-text)] shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--tier-db)_35%,transparent)]',
+    dot: 'var(--tier-db)',
     strength: 2,
   },
   payment_rail: {
     label: 'PAYMENT RAIL',
+    short: 'RAIL',
     sub: 'enforced by Razorpay — outside our trust boundary',
-    className: 'border-2 border-[var(--good)] bg-[var(--good-bg)] text-[var(--good-text)]',
-    dotClassName: 'bg-[var(--good)]',
+    className: 'bg-[var(--good-bg)] text-[var(--good-text)] shadow-[inset_0_0_0_2px_var(--good)]',
+    dot: 'var(--tier-rail)',
     strength: 3,
   },
 }
@@ -35,16 +37,23 @@ const CONFIG: Record<BoundEnforcer, { label: string; sub: string; className: str
 export function EnforcedByBadge({ enforcedBy, compact }: { enforcedBy: BoundEnforcer; compact?: boolean }) {
   const cfg = CONFIG[enforcedBy]
   return (
-    <div className={`inline-flex items-center gap-2 rounded-md px-2.5 py-1.5 ${cfg.className}`}>
-      <span className="flex gap-0.5" aria-hidden>
+    <span
+      className={`inline-flex items-center gap-2 whitespace-nowrap rounded-md px-2 py-1 ${cfg.className}`}
+      title={`${cfg.label.toLowerCase()} — ${cfg.sub}`}
+    >
+      <span className="flex gap-[2px]" aria-hidden>
         {[1, 2, 3].map((i) => (
-          <span key={i} className={`h-1.5 w-1.5 rounded-full ${i <= cfg.strength ? cfg.dotClassName : 'bg-black/10'}`} />
+          <span
+            key={i}
+            className="h-[5px] w-[5px] rounded-full"
+            style={{ background: i <= cfg.strength ? cfg.dot : 'currentColor', opacity: i <= cfg.strength ? 1 : 0.18 }}
+          />
         ))}
       </span>
-      <span className="flex flex-col leading-tight">
-        <span className="font-mono text-[10.5px] font-bold tracking-wider">{cfg.label}</span>
+      <span className="flex flex-col leading-[1.25]">
+        <span className="font-mono text-[10px] font-bold tracking-[0.08em]">{compact ? cfg.short : cfg.label}</span>
         {!compact && <span className="font-mono text-[9px] opacity-75">{cfg.sub}</span>}
       </span>
-    </div>
+    </span>
   )
 }

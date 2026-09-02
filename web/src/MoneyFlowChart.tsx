@@ -46,8 +46,9 @@ export function MoneyFlowChart({ series }: { series: readonly RunningPoint[] }) 
 
   if (series.length === 0) {
     return (
-      <div className="flex h-[240px] items-center justify-center rounded-lg border border-dashed border-[var(--border-strong)] font-mono text-xs text-[var(--text-faint)]">
-        no events yet — the chart fills in as the trail streams
+      <div className="flex h-[240px] flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-[var(--line-strong)] text-center">
+        <span className="text-[length:var(--t-sm)] font-medium text-[var(--text-muted)]">Nothing to plot yet</span>
+        <span className="max-w-[42ch] text-[length:var(--t-xs)] text-[var(--text-faint)]">Both lines start at ₹0 and move on the first money event that lands.</span>
       </div>
     )
   }
@@ -76,7 +77,7 @@ export function MoneyFlowChart({ series }: { series: readonly RunningPoint[] }) 
   return (
     <div>
       {/* legend — a line-key + label per series, required at 2+ series */}
-      <div className="mb-2 flex items-center gap-5 font-mono text-[11px] text-[var(--text-muted)]">
+      <div className="mb-3 flex items-center gap-5 text-[length:var(--t-xs)] text-[var(--text-muted)]">
         <span className="flex items-center gap-1.5">
           <span className="inline-block h-[2px] w-4 rounded" style={{ background: 'var(--series-cost)' }} />
           net customer cost
@@ -100,7 +101,7 @@ export function MoneyFlowChart({ series }: { series: readonly RunningPoint[] }) 
           ))}
           {/* y-axis tick labels */}
           {[0, 0.5, 1].map((t) => (
-            <text key={t} x={PAD_L} y={PAD_T + (HEIGHT - PAD_T - PAD_B) * (1 - t) - 4} className="font-mono" fontSize={9} fill="var(--chart-muted)">
+            <text key={t} x={PAD_L} y={PAD_T + (HEIGHT - PAD_T - PAD_B) * (1 - t) - 4} className="font-mono" fontSize={11} fill="var(--chart-muted)">
               ₹{Math.round(yMax * t).toLocaleString('en-IN')}
             </text>
           ))}
@@ -112,13 +113,13 @@ export function MoneyFlowChart({ series }: { series: readonly RunningPoint[] }) 
           <path d={linePath(costPoints)} fill="none" stroke="var(--series-cost)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
 
           {/* end markers + direct labels — mark spec: r>=4, 2px surface ring */}
-          <circle cx={costPoints[costPoints.length - 1]![0]} cy={costPoints[costPoints.length - 1]![1]} r={4} fill="var(--series-cost)" stroke="#fff" strokeWidth={2} />
+          <circle cx={costPoints[costPoints.length - 1]![0]} cy={costPoints[costPoints.length - 1]![1]} r={4} fill="var(--series-cost)" stroke="var(--paper)" strokeWidth={2} />
           <circle
             cx={retentionPoints[retentionPoints.length - 1]![0]}
             cy={retentionPoints[retentionPoints.length - 1]![1]}
             r={4}
             fill="var(--series-retention)"
-            stroke="#fff"
+            stroke="var(--paper)"
             strokeWidth={2}
           />
           <text
@@ -145,13 +146,13 @@ export function MoneyFlowChart({ series }: { series: readonly RunningPoint[] }) 
           {hovered && (
             <>
               <line x1={xScale(hoverIndex!)} x2={xScale(hoverIndex!)} y1={PAD_T} y2={HEIGHT - PAD_B} stroke="var(--chart-baseline)" strokeWidth={1} />
-              <circle cx={xScale(hoverIndex!)} cy={yScale(hovered.netCustomerCostPaise / 100)} r={4} fill="var(--series-cost)" stroke="#fff" strokeWidth={2} />
+              <circle cx={xScale(hoverIndex!)} cy={yScale(hovered.netCustomerCostPaise / 100)} r={4} fill="var(--series-cost)" stroke="var(--paper)" strokeWidth={2} />
               <circle
                 cx={xScale(hoverIndex!)}
                 cy={yScale(hovered.netMerchantRetentionPaise / 100)}
                 r={4}
                 fill="var(--series-retention)"
-                stroke="#fff"
+                stroke="var(--paper)"
                 strokeWidth={2}
               />
             </>
@@ -160,10 +161,10 @@ export function MoneyFlowChart({ series }: { series: readonly RunningPoint[] }) 
 
         {hovered && (
           <div
-            className="pointer-events-none absolute top-1 z-10 min-w-[190px] rounded-lg border border-[var(--border)] bg-white px-3 py-2 shadow-lg"
+            className="pointer-events-none absolute top-1 z-[var(--z-tooltip)] min-w-[190px] rounded-lg bg-[var(--paper)] px-3 py-2 shadow-[var(--lift-pop)] ring-1 ring-[var(--line)]"
             style={{ left: `${(xScale(hoverIndex!) / WIDTH) * 100}%`, transform: hoverIndex! > series.length / 2 ? 'translateX(-105%)' : 'translateX(6%)' }}
           >
-            <div className="font-mono text-[10px] font-semibold uppercase tracking-wide text-[var(--text-faint)]">{hovered.event.type}</div>
+            <div className="font-mono text-[10px] font-semibold tracking-[0.06em] text-[var(--text-faint)]">{hovered.event.type}</div>
             <div className="mt-1 flex items-center justify-between gap-4 font-mono text-xs">
               <span className="flex items-center gap-1.5 text-[var(--text-muted)]">
                 <span className="inline-block h-[2px] w-3 rounded" style={{ background: 'var(--series-cost)' }} />

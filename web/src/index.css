@@ -1,51 +1,391 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
 @import 'tailwindcss';
+
+/* Tailwind's own `font-sans` / `font-mono` utilities resolve to these. */
+@theme {
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+}
+
+/*
+ * Latch viewer — "ink shell, ledger paper".
+ *
+ * The chrome (nav, headline band, page field) is ink: a near-black the
+ * merchant's own dashboard already used for its top bar, extended to the
+ * whole shell. The data — the audit rows, the charts, the policy form —
+ * sits on paper panels inset into that ink. Dense financial rows stay on a
+ * light surface where they're actually scannable; the figures that carry
+ * the demo sit on ink where they read across a room.
+ *
+ * Two text ramps, therefore: --text-* on paper, --on-ink-* on ink. Never
+ * mix them. Every value below is OKLCH so the lightness channel is the
+ * contrast channel — body text sits at L<=0.47 on paper and L>=0.72 on ink,
+ * both comfortably past 4.5:1.
+ */
 
 :root {
   color-scheme: light;
 
-  /* page & surfaces */
-  --bg: #f4f4f6;
-  --surface: #ffffff;
-  --border: #e4e4e9;
-  --border-strong: #d3d3da;
-  --text: #14141a;
-  --text-muted: #6b6b76;
-  --text-faint: #9a9aa4;
+  /* ---- ink: the shell ---- */
+  --ink: oklch(0.158 0.012 268);
+  --ink-raised: oklch(0.205 0.014 268);
+  --ink-line: oklch(0.275 0.014 268);
+  --ink-line-soft: oklch(0.235 0.013 268);
+  --on-ink: oklch(0.975 0.003 268);
+  --on-ink-muted: oklch(0.775 0.009 268);
+  --on-ink-faint: oklch(0.635 0.011 268);
 
-  /* accent (dataviz categorical slot 1) */
-  --blue: #2a78d6;
-  --blue-bg: #eaf1fc;
-  --blue-text: #1d5aa8;
+  /* ---- paper: the data ---- */
+  --paper: oklch(1 0 0);
+  --paper-sunk: oklch(0.975 0.002 268);
+  --paper-deep: oklch(0.955 0.003 268);
+  --line: oklch(0.925 0.004 268);
+  --line-strong: oklch(0.875 0.005 268);
+  --text: oklch(0.225 0.013 268);
+  --text-muted: oklch(0.475 0.011 268);
+  --text-faint: oklch(0.525 0.011 268);
 
-  /* status pills — tinted bg + darkened text-on-tint for contrast, base hues borrowed from the dataviz skill's status palette */
-  --good: #0ca30c;
-  --good-bg: #e6f6ea;
-  --good-text: #0a7d2e;
-  --warning: #fab219;
-  --warning-bg: #fdf1d9;
-  --warning-text: #8a5b0a;
-  --critical: #d03b3b;
-  --critical-bg: #fbe9ea;
-  --critical-text: #b02a3a;
-  --slate: #55555f;
-  --slate-bg: #f0f0f3;
+  /* ---- accent: interaction only (links, focus, selection, primary action) ---- */
+  --accent: oklch(0.545 0.168 256);
+  --accent-bg: oklch(0.958 0.028 256);
+  --accent-text: oklch(0.455 0.155 256);
+  --accent-on-ink: oklch(0.745 0.125 256);
 
-  /* chart-only series (validated: scripts/validate_palette.js "#2a78d6,#1baf7a" --mode light --surface #ffffff) */
-  --series-cost: #2a78d6;
-  --series-retention: #1baf7a;
-  --chart-grid: #e1e0d9;
-  --chart-baseline: #c3c2b7;
-  --chart-muted: #898781;
+  /* ---- status ---- */
+  --good: oklch(0.615 0.155 152);
+  --good-bg: oklch(0.958 0.038 152);
+  --good-text: oklch(0.445 0.125 152);
+  --good-on-ink: oklch(0.785 0.155 152);
 
+  --warning: oklch(0.775 0.145 78);
+  --warning-bg: oklch(0.963 0.048 84);
+  --warning-line: oklch(0.885 0.085 82);
+  --warning-text: oklch(0.485 0.098 70);
+  --warning-on-ink: oklch(0.835 0.135 82);
+
+  --critical: oklch(0.578 0.192 22);
+  --critical-bg: oklch(0.957 0.030 22);
+  --critical-text: oklch(0.472 0.172 22);
+  --critical-on-ink: oklch(0.712 0.170 22);
+
+  --slate: oklch(0.475 0.011 268);
+  --slate-bg: oklch(0.955 0.003 268);
+  --slate-on-ink: oklch(0.735 0.010 268);
+
+  /*
+   * Enforcement tier hues. `db_constraint` is violet rather than the blue it
+   * used to be: blue is now the interface's accent (focus rings, links,
+   * primary actions), and a colour cannot mean "click me" and "enforced by a
+   * postgres index" on the same screen. Badge and breakdown chart still share
+   * one palette — colour follows the entity — they just moved together.
+   */
+  --tier-policy: var(--slate);
+  --tier-db: oklch(0.535 0.185 295);
+  --tier-db-bg: oklch(0.958 0.032 295);
+  --tier-db-text: oklch(0.455 0.175 295);
+  --tier-db-on-ink: oklch(0.745 0.140 295);
+  --tier-rail: var(--good);
+
+  /* ---- chart series (shared y-axis, rupees) ---- */
+  --series-cost: oklch(0.545 0.168 256);
+  --series-retention: oklch(0.615 0.155 152);
+  --chart-grid: oklch(0.930 0.004 268);
+  --chart-baseline: oklch(0.845 0.006 268);
+  --chart-muted: oklch(0.525 0.011 268);
+
+  /* ---- type ---- */
   --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+
+  --t-2xs: 0.6875rem;
+  --t-xs: 0.75rem;
+  --t-sm: 0.8125rem;
+  --t-base: 0.875rem;
+  --t-md: 0.9375rem;
+  --t-lg: 1.0625rem;
+  --t-xl: 1.3125rem;
+  --t-2xl: 1.625rem;
+  --t-figure: 2.5rem;
+  --t-figure-lg: 3.5rem;
+
+  /* ---- elevation: paper lifting off ink ---- */
+  --lift: 0 1px 2px oklch(0 0 0 / 0.28), 0 12px 28px -12px oklch(0 0 0 / 0.45);
+  --lift-sm: 0 1px 2px oklch(0 0 0 / 0.22), 0 6px 16px -10px oklch(0 0 0 / 0.4);
+  --lift-pop: 0 2px 6px oklch(0 0 0 / 0.10), 0 16px 32px -14px oklch(0 0 0 / 0.30);
+
+  /* ---- z-index scale (semantic, never ad-hoc) ---- */
+  --z-sticky: 100;
+  --z-dropdown: 200;
+  --z-overlay: 300;
+  --z-modal: 400;
+  --z-toast: 500;
+  --z-tooltip: 600;
+
+  /* ---- motion ---- */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 130ms;
+  --dur: 190ms;
+  --dur-slow: 260ms;
+}
+
+* {
+  box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  background: var(--bg);
+  background: var(--ink);
   color: var(--text);
   font-family: var(--sans);
+  font-size: var(--t-base);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* One focus treatment for the whole app; the ink variant only swaps the ring colour. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.on-ink :focus-visible,
+.on-ink:focus-visible {
+  outline-color: var(--accent-on-ink);
+}
+
+/* ---------- primitives ---------- */
+
+@layer components {
+  /* A paper panel inset into the ink field. The only container shape in the app. */
+  .panel {
+    background: var(--paper);
+    border-radius: 14px;
+    box-shadow: var(--lift);
+    overflow: clip;
+  }
+  .panel-quiet {
+    background: var(--paper);
+    border-radius: 12px;
+    box-shadow: var(--lift-sm);
+  }
+
+  /*
+   * Ledger table: hairline rules, no boxes, figures on the tabular grid.
+   * The header is deliberately not sticky — the table lives inside a
+   * horizontally scrollable wrapper, which would capture `position: sticky`
+   * and pin the header to a box that never scrolls vertically. Pages cap at
+   * 100 rows; a half-working sticky header is worse than none.
+   */
+  .ledger {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    text-align: left;
+  }
+  .ledger thead th {
+    background: var(--paper-sunk);
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line-strong);
+    padding: 0.625rem 0.75rem;
+    font-size: var(--t-2xs);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    white-space: nowrap;
+  }
+  .ledger tbody td {
+    border-bottom: 1px solid var(--line);
+    padding: 0.6875rem 0.75rem;
+    vertical-align: middle;
+  }
+  .ledger tbody tr:last-child td {
+    border-bottom: 0;
+  }
+  .ledger .cell-edge-l {
+    padding-left: 1.25rem;
+  }
+  .ledger .cell-edge-r {
+    padding-right: 1.25rem;
+  }
+  .ledger tbody tr.row-hoverable:hover {
+    background: var(--paper-sunk);
+  }
+  .ledger tbody tr.row-open {
+    background: var(--paper-sunk);
+  }
+
+  /* Field controls share one shape across the whole app — audit surface and policy form alike. */
+  .control {
+    width: 100%;
+    border: 1px solid var(--line-strong);
+    background: var(--paper);
+    border-radius: 8px;
+    padding: 0.5rem 0.625rem;
+    font-size: var(--t-sm);
+    color: var(--text);
+    font-family: inherit;
+    transition: border-color var(--dur) var(--ease-out-quart), box-shadow var(--dur) var(--ease-out-quart);
+  }
+  .control:hover:not(:disabled) {
+    border-color: var(--text-faint);
+  }
+  .control:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-bg);
+  }
+  .control:disabled {
+    background: var(--paper-deep);
+    color: var(--text-faint);
+    cursor: not-allowed;
+  }
+  .control::placeholder {
+    color: var(--text-faint);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    border-radius: 8px;
+    padding: 0.5rem 0.875rem;
+    font-size: var(--t-sm);
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: background-color var(--dur) var(--ease-out-quart), border-color var(--dur) var(--ease-out-quart),
+      color var(--dur) var(--ease-out-quart), transform var(--dur-fast) var(--ease-out-quart);
+  }
+  .btn:active:not(:disabled) {
+    transform: translateY(0.5px);
+  }
+  .btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.42;
+  }
+  .btn-primary {
+    background: var(--text);
+    color: var(--paper);
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: oklch(0.145 0.013 268);
+  }
+  .btn-secondary {
+    background: var(--paper);
+    border-color: var(--line-strong);
+    color: var(--text);
+  }
+  .btn-secondary:hover:not(:disabled) {
+    background: var(--paper-sunk);
+    border-color: var(--text-faint);
+  }
+  .btn-danger {
+    background: var(--critical-text);
+    color: #fff;
+  }
+  .btn-danger:hover:not(:disabled) {
+    background: oklch(0.42 0.172 22);
+  }
+  .btn-ghost {
+    background: transparent;
+    color: var(--text-muted);
+  }
+  .btn-ghost:hover:not(:disabled) {
+    background: var(--paper-deep);
+    color: var(--text);
+  }
+}
+
+/* ---------- motion ---------- */
+
+/*
+ * A row arriving on the live SSE feed washes once in its category tint and
+ * settles. This is the only "decorative-looking" motion in the app and it
+ * isn't decorative: it's the answer to "did that just come in, or was it
+ * already there?" during a live demo.
+ */
+@keyframes row-arrive {
+  0% {
+    background-color: var(--arrive-tint, var(--accent-bg));
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.row-arrive {
+  animation: row-arrive 1100ms var(--ease-out-quart) both;
+}
+
+@keyframes detail-open {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.detail-open {
+  animation: detail-open var(--dur-slow) var(--ease-out-expo) both;
+}
+
+@keyframes live-pulse {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 var(--pulse-color, var(--good-on-ink));
+  }
+  50% {
+    opacity: 0.65;
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+.live-pulse {
+  animation: live-pulse 2.4s var(--ease-out-quart) infinite;
+}
+
+@keyframes figure-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.figure-in {
+  animation: figure-in var(--dur-slow) var(--ease-out-expo) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row-arrive,
+  .detail-open,
+  .figure-in {
+    animation: none;
+  }
+  .live-pulse {
+    animation: none;
+    opacity: 1;
+  }
+  *,
+  *::before,
+  *::after {
+    transition-duration: 1ms !important;
+  }
 }

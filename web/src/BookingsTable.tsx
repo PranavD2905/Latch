@@ -1,6 +1,5 @@
 import { useMemo } from 'react'
 import { paginate, Pagination } from './Pagination'
-import { StatusIcon } from './StatusIcon'
 import { computeTotals } from './totals'
 import type { BookingEvent } from './types'
 import { bookingStatusLabel, formatRupees, shortId } from './types'
@@ -9,12 +8,12 @@ function timeLabel(iso: string): string {
   return new Date(iso).toLocaleString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
-const TONE_CLASS: Record<string, string> = {
-  good: 'bg-[var(--good-bg)] text-[var(--good-text)]',
-  warning: 'bg-[var(--warning-bg)] text-[var(--warning-text)]',
-  critical: 'bg-[var(--critical-bg)] text-[var(--critical-text)]',
-  neutral: 'bg-[var(--slate-bg)] text-[var(--slate)]',
-  blue: 'bg-[var(--blue-bg)] text-[var(--blue-text)]',
+const TONE: Record<string, { bg: string; text: string; dot: string }> = {
+  good: { bg: 'var(--good-bg)', text: 'var(--good-text)', dot: 'var(--good)' },
+  warning: { bg: 'var(--warning-bg)', text: 'var(--warning-text)', dot: 'var(--warning)' },
+  critical: { bg: 'var(--critical-bg)', text: 'var(--critical-text)', dot: 'var(--critical)' },
+  neutral: { bg: 'var(--slate-bg)', text: 'var(--slate)', dot: 'var(--text-faint)' },
+  blue: { bg: 'var(--accent-bg)', text: 'var(--accent-text)', dot: 'var(--accent)' },
 }
 
 interface BookingRow {
@@ -68,48 +67,74 @@ export function BookingsTable({
 }) {
   const rows = useMemo(() => groupByBooking(events), [events])
   const pageRows = paginate(rows, page, pageSize)
+  const busiest = Math.max(1, ...rows.map((r) => r.eventCount))
+
+  if (rows.length === 0) {
+    return (
+      <div className="px-6 py-20 text-center">
+        <div className="text-[length:var(--t-base)] font-medium text-[var(--text)]">No bookings in this window</div>
+        <div className="mt-1 text-[length:var(--t-sm)] text-[var(--text-muted)]">A booking appears here as soon as its first event lands on the trail.</div>
+      </div>
+    )
+  }
 
   return (
     <div>
       <div className="overflow-x-auto">
-        <div className="px-6 pb-3 pt-4 text-[13px] text-[var(--text-muted)]">
-          Showing {rows.length} booking{rows.length === 1 ? '' : 's'}
-        </div>
-        <table className="w-full border-collapse text-left text-[13px]">
+        <table className="ledger">
           <thead>
-            <tr className="border-b border-[var(--border)] text-[12px] text-[var(--text-muted)]">
-              <th className="px-6 py-2.5 font-medium">Booking ID</th>
-              <th className="px-3 py-2.5 font-medium">Practitioner / service</th>
-              <th className="px-3 py-2.5 font-medium">Events</th>
-              <th className="px-3 py-2.5 font-medium">Started</th>
-              <th className="px-3 py-2.5 font-medium">Last activity</th>
-              <th className="px-3 py-2.5 font-medium">Net customer cost</th>
-              <th className="px-6 py-2.5 font-medium">Status</th>
+            <tr>
+              <th className="cell-edge-l">Booking</th>
+              <th>Practitioner / service</th>
+              <th>Events</th>
+              <th>Started</th>
+              <th>Last activity</th>
+              <th className="text-right">Net customer cost</th>
+              <th className="cell-edge-r">Status</th>
             </tr>
           </thead>
           <tbody>
-            {pageRows.map((row) => (
-              <tr key={row.bookingId} className="border-b border-[var(--border)] hover:bg-[var(--bg)]">
-                <td className="px-6 py-3 font-mono font-semibold text-[var(--text)]">{shortId(row.bookingId)}</td>
-                <td className="px-3 py-3 font-mono text-[var(--text-muted)]">
-                  {shortId(row.practitionerId)} · {shortId(row.serviceId)}
-                </td>
-                <td className="px-3 py-3 tabular-nums text-[var(--text-muted)]">{row.eventCount}</td>
-                <td className="px-3 py-3 whitespace-nowrap font-mono text-[var(--text-muted)]">{timeLabel(row.startedAt)}</td>
-                <td className="px-3 py-3 whitespace-nowrap font-mono text-[var(--text-muted)]">{timeLabel(row.lastActivityAt)}</td>
-                <td className="px-3 py-3 font-mono font-semibold text-[var(--text)]">{formatRupees(row.netCustomerCostPaise)}</td>
-                <td className="px-6 py-3">
-                  <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold ${TONE_CLASS[row.status.tone]}`}>
-                    <StatusIcon />
-                    {row.status.label}
-                  </span>
-                </td>
-              </tr>
-            ))}
+            {pageRows.map((row) => {
+              const tone = TONE[row.status.tone]!
+              return (
+                <tr key={row.bookingId} className="row-hoverable">
+                  <td className="cell-edge-l font-mono text-[length:var(--t-sm)] font-semibold text-[var(--text)]">{shortId(row.bookingId)}</td>
+                  <td className="font-mono text-[length:var(--t-xs)] text-[var(--text-muted)]">
+                    {shortId(row.practitionerId)} · {shortId(row.serviceId)}
+                  </td>
+                  <td>
+                    {/* the count plus how it compares to the busiest booking — a long trail on one booking usually means a reschedule or a refusal */}
+                    <span className="flex items-center gap-2">
+                      <span className="font-mono text-[length:var(--t-sm)] tabular-nums text-[var(--text-muted)]">{row.eventCount}</span>
+                      <span className="h-1 w-10 overflow-hidden rounded-full bg-[var(--paper-deep)]" aria-hidden>
+                        <span className="block h-full rounded-full bg-[var(--line-strong)]" style={{ width: `${(row.eventCount / busiest) * 100}%` }} />
+                      </span>
+                    </span>
+                  </td>
+                  <td className="whitespace-nowrap font-mono text-[length:var(--t-xs)] text-[var(--text-muted)]">{timeLabel(row.startedAt)}</td>
+                  <td className="whitespace-nowrap font-mono text-[length:var(--t-xs)] text-[var(--text-muted)]">{timeLabel(row.lastActivityAt)}</td>
+                  <td
+                    className="whitespace-nowrap text-right font-mono text-[length:var(--t-sm)] font-semibold tabular-nums"
+                    style={{ color: row.netCustomerCostPaise === 0 ? 'var(--good-text)' : 'var(--text)' }}
+                  >
+                    {formatRupees(row.netCustomerCostPaise)}
+                  </td>
+                  <td className="cell-edge-r">
+                    <span
+                      className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-[length:var(--t-xs)] font-semibold"
+                      style={{ background: tone.bg, color: tone.text }}
+                    >
+                      <span className="h-1.5 w-1.5 rounded-full" style={{ background: tone.dot }} aria-hidden />
+                      {row.status.label}
+                    </span>
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
-      <Pagination page={page} pageSize={pageSize} totalCount={rows.length} onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} />
+      <Pagination page={page} pageSize={pageSize} totalCount={rows.length} onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} label="bookings" />
     </div>
   )
 }
