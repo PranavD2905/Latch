@@ -37,6 +37,7 @@
     "web:dev": "npm --prefix web run dev",
     "demo:ceiling-refusal": "tsx src/adapters/demo/ceiling-refusal.ts",
     "demo:ceiling-refusal:razorpay": "PAYMENT_PROVIDER=razorpay tsx src/adapters/demo/ceiling-refusal.ts",
+    "demo:ceiling-refusal:live": "tsx src/adapters/demo/ceiling-refusal-live.ts",
     "load-test": "tsx src/adapters/load-test.ts",
     "start:mcp": "node dist/adapters/mcp/http.js",
     "start:merchant-api": "node dist/adapters/merchant-api/http.js",
